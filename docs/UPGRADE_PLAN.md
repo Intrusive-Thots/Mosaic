@@ -110,7 +110,7 @@ Aspect ratio is stored and used for cropping. It is not a score term.
 
 - `allowTileRepetition = false`: each tile is used at most once.
 - `allowTileRepetition = true`: a tile may repeat, but not inside Chebyshev radius `maxRepetitionDistance` (default 3).
-- Usage penalty among the legal candidates: `usageCount * usageBalanceWeight * 0.02`.
+- Usage penalty among the legal candidates: `usageCount * usageBalanceWeight * 0.0005`. The unit is small on purpose: a hard repetition radius still applies when the user sets one, but the default radius is 0 so color fidelity is not traded away for spreading.
 - Ties break with a deterministic hash of `(seed, column, row, tileId)`.
 - If no legal tile exists in the candidate search, the cell is filled with its mean color. The fallback does **not** place `tiles[0]` inside the exclusion zone.
 

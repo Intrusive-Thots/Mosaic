@@ -11,7 +11,7 @@ data class MosaicConfig(
     val linkAspectToGrid: Boolean = true,
     val colorMatchWeight: Float = 0.65f,
     val allowTileRepetition: Boolean = true,
-    val maxRepetitionDistance: Int = 3,
+    val maxRepetitionDistance: Int = 0,
     val extractSubjectsWithAi: Boolean = false,
     val mosaicStyle: MosaicStyle = MosaicStyle.GRID,
     val qualityPreset: QualityPreset = QualityPreset.BALANCED,
@@ -20,7 +20,7 @@ data class MosaicConfig(
     val tileFit: TileFit = TileFit.CENTER_CROP,
     val descriptorMaxEdge: Int = 24,
     val candidateCount: Int = 16,
-    val usageBalanceWeight: Float = 0.60f,
+    val usageBalanceWeight: Float = 0f,
     val randomSeed: Int = 1,
     val scoreWeights: ScoreWeights = ScoreWeights(),
     val previewCellPixels: Int = 8,
@@ -69,11 +69,11 @@ enum class QualityPreset(val label: String) {
 }
 
 data class ScoreWeights(
-    val color: Float = 0.40f,
-    val luminance: Float = 0.15f,
-    val histogram: Float = 0.15f,
-    val spatial: Float = 0.20f,
-    val edge: Float = 0.10f
+    val color: Float = 0.78f,
+    val luminance: Float = 0.12f,
+    val histogram: Float = 0.04f,
+    val spatial: Float = 0.04f,
+    val edge: Float = 0.02f
 ) {
     fun sanitized(): ScoreWeights {
         val safe = ScoreWeights(

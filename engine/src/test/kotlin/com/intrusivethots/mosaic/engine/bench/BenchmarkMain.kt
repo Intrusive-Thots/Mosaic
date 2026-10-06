@@ -1,20 +1,20 @@
 package com.intrusivethots.mosaic.engine.bench
 
-import com.intrusivethots.mosaic.engine.color.argb
+import com.intrusivethots.mosaic.engine.COMPARISON_COLUMNS
+import com.intrusivethots.mosaic.engine.COMPARISON_ROWS
+import com.intrusivethots.mosaic.engine.COMPARISON_SEED
+import com.intrusivethots.mosaic.engine.compareMatchers
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.RenderMode
-import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
 import com.intrusivethots.mosaic.engine.gradient
 import com.intrusivethots.mosaic.engine.hueTile
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.index.TileIndex
-import com.intrusivethots.mosaic.engine.legacy.LegacyRgbMatcher
 import com.intrusivethots.mosaic.engine.match.TileMatcher
 import com.intrusivethots.mosaic.engine.render.MosaicRenderer
 import com.intrusivethots.mosaic.engine.render.RowSink
-import com.intrusivethots.mosaic.engine.render.StreamingPngWriter
-import com.intrusivethots.mosaic.engine.scene
 import com.intrusivethots.mosaic.engine.tile.MemoryTileSource
+import com.intrusivethots.mosaic.engine.writeSideBySide
 import com.intrusivethots.mosaic.engine.tile.TileAnalyzer
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
 import com.intrusivethots.mosaic.engine.tile.toKey
@@ -177,67 +177,31 @@ private fun renderReport(results: List<BenchResult>): String = buildString {
 }
 
 private suspend fun writeComparison() {
-    val target = scene(80, 80)
-    val images = (0 until 24).map { hueTile(it, 24, size = 20) }
-    val legacy = LegacyRgbMatcher.render(
-        target,
-        images.map { LegacyRgbMatcher.analyze(it) },
-        columns = 20,
-        rows = 20,
-        blend = 0.8f
+    val comparison = compareMatchers()
+    writeSideBySide(
+        comparison.legacy,
+        comparison.modern,
+        listOf(
+            File("docs/images/matching-comparison.png"),
+            File("/opt/cursor/artifacts/matching-comparison.png")
+        )
     )
-    val modern = GenerationCoordinator().generate(
-        target = target,
-        tiles = images.mapIndexed { index, image -> MemoryTileSource(image, "compare-$index") },
-        config = MosaicConfig(
-            gridColumns = 20,
-            gridRows = 20,
-            linkAspectToGrid = false,
-            candidateCount = 12,
-            descriptorMaxEdge = 20,
-            maxRepetitionDistance = 2,
-            renderMode = RenderMode.COLOR_CORRECTED,
-            colorMatchWeight = 0.7f,
-            randomSeed = 5,
-            previewCellPixels = 4
-        ),
-        preview = true
-    ).image ?: error("Comparison render failed")
-    val gap = 8
-    val width = legacy.width + gap + modern.width
-    val height = maxOf(legacy.height, modern.height)
-    val pixels = IntArray(width * height) { argb(20, 16, 28) }
-    val combined = PixelImage(width, height, pixels)
-    blit(combined, legacy, 0, 0)
-    blit(combined, modern, legacy.width + gap, 0)
-    listOf(
-        File("docs/images/matching-comparison.png"),
-        File("/opt/cursor/artifacts/matching-comparison.png")
-    ).forEach { file ->
-        file.parentFile?.mkdirs()
-        file.outputStream().use { stream ->
-            StreamingPngWriter(stream, combined.width, combined.height).use { writer ->
-                val row = IntArray(combined.width)
-                for (y in 0 until combined.height) {
-                    for (x in 0 until combined.width) row[x] = combined.pixel(x, y)
-                    writer.writeRow(y, row)
-                }
-            }
-        }
+    val note = buildString {
+        appendLine("## Matching quality")
+        appendLine()
+        appendLine("Portrait scene, 120 photo-like tiles, ${COMPARISON_COLUMNS}×${COMPARISON_ROWS} grid, seed $COMPARISON_SEED.")
+        appendLine("Both sides use the original tile pixels and the same renderer. Left is average-RGB selection. Right is the default OKLab matcher.")
+        appendLine()
+        appendLine("| Matcher | Mean OKLab ΔE | Luminance SSIM |")
+        appendLine("| --- | ---: | ---: |")
+        append("| Average RGB | ${"%.4f".format(comparison.legacyDeltaE)} | ${"%.4f".format(comparison.legacySsim)} |")
+        appendLine()
+        append("| OKLab default | ${"%.4f".format(comparison.modernDeltaE)} | ${"%.4f".format(comparison.modernSsim)} |")
+        appendLine()
     }
-}
-
-private fun blit(destination: PixelImage, source: PixelImage, originX: Int, originY: Int) {
-    for (y in 0 until source.height) {
-        val destY = originY + y
-        if (destY !in 0 until destination.height) continue
-        val row = destY * destination.width
-        for (x in 0 until source.width) {
-            val destX = originX + x
-            if (destX !in 0 until destination.width) continue
-            destination.pixels[row + destX] = source.pixel(x, y)
-        }
-    }
+    File("docs/benchmarks/results.md").appendText("\n$note")
+    File("engine/build/reports/benchmarks/results.md").appendText("\n$note")
+    println(note)
 }
 
 private fun Long.ms(): Double = this / 1_000_000.0

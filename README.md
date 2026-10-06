@@ -37,7 +37,7 @@ The cache key is the URI, pixel size, byte size, modified time, and algorithm ve
 
 Tiles are placed in an 8×8×8 OKLab bin index. For each target cell the matcher asks for a small candidate set: nearby bins first, then a luminance window, skipping bins that cannot beat the current best. Repetition radius and a per-cell probe budget bound the search. A 5,000-tile library does not compare every tile with every cell.
 
-The score is a weighted sum of color, luminance, histogram, spatial, and edge distance, plus a soft usage penalty. Equal scores break with a deterministic seed. If every legal tile is excluded by the repetition radius, the cell is left as the target color. The matcher does not fall back to a tile inside the exclusion zone.
+The default score is mostly OKLab color (0.78), with smaller luminance, histogram, spatial, and edge terms. A usage penalty exists, but its unit is `0.0005` per previous use and the default weight is 0, so it does not override a better color. The repetition radius defaults to 0 for the same reason: a radius of 2 or 3 on a flat region forces a worse tile and the mosaic turns speckled. Set a radius when you want hard spacing. If every legal tile is excluded by that radius, the cell is left as the target color. The matcher does not fall back to a tile inside the exclusion zone. Equal scores break with a deterministic seed.
 
 ## Tile preparation
 
@@ -56,7 +56,7 @@ Advanced controls stay available. Choosing a preset fills them in:
 
 Output modes are Standard, High, and Ultra. Render modes are Original, Color corrected, and Blended. Color correction shifts each tile toward the cell in OKLab. Blending mixes that correction with the original tile. The old flat translucent rectangle is gone.
 
-A few hundred distinct photos is enough for a balanced grid. More than about a thousand helps Maximum grids and repetition. Very small libraries will repeat, which the radius then spreads out.
+Draft and Balanced leave the usage penalty at 0. High Quality and Maximum add a light penalty (0.15 and 0.30) so repeated near-matches rotate a little. A few hundred distinct photos is enough for a balanced grid. More than about a thousand helps Maximum grids. Very small libraries will repeat until you raise the repetition radius.
 
 ## Performance
 
@@ -64,18 +64,23 @@ Measured with `./gradlew :engine:benchmark` on this machine (OpenJDK 21, synthet
 
 | Tiles | Grid | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full scan | Heap MB |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100 | 40×40 | 9.6 | 0.3 | 75.0 | 60.8 | 146.9 | 84,182 | 160,000 | 0.6 |
-| 500 | 60×60 | 11.2 | 0.5 | 38.0 | 101.3 | 153.3 | 233,398 | 1,800,000 | 1.8 |
-| 1,000 | 80×80 | 23.2 | 0.9 | 67.3 | 199.8 | 295.3 | 416,000 | 6,400,000 | 3.9 |
-| 5,000 | 120×120 | 110.8 | 2.8 | 154.6 | 427.0 | 709.0 | 936,000 | 72,000,000 | 13.0 |
+| 100 | 40×40 | 9.7 | 0.3 | 63.7 | 54.1 | 129.0 | 84,135 | 160,000 | 0.6 |
+| 500 | 60×60 | 12.9 | 0.7 | 40.5 | 100.6 | 157.0 | 233,676 | 1,800,000 | 1.8 |
+| 1,000 | 80×80 | 22.7 | 0.7 | 62.6 | 179.7 | 269.7 | 415,996 | 6,400,000 | 3.9 |
+| 5,000 | 120×120 | 112.5 | 4.1 | 131.1 | 406.4 | 669.1 | 936,000 | 72,000,000 | 13.1 |
 
-"Full scan" is cells × tiles, which is what the 1.x matcher did. At 5,000 tiles the index probes about 1.3% of that. Matching 14,400 cells against 5,000 tiles took 155 ms in this run.
+"Full scan" is cells × tiles, which is what the 1.x matcher did. At 5,000 tiles the index probes about 1.3% of that. Matching 14,400 cells against 5,000 tiles took 131 ms in this run.
 
-The same scene rendered with the 1.x average-RGB matcher (left) and the OKLab matcher (right):
+Quality is measured on a separate portrait: a face, a gradient background, and a hard-edged flower, with 120 varied tiles, a 32×42 grid, and seed 7. Both sides are the original tile pixels through the same renderer, so neither side is helped by a color wash. Lower OKLab ΔE is closer color. Higher luminance SSIM is closer structure. `MatchingQualityTest` fails if the OKLab side stops beating average-RGB on either number.
 
-![Average-RGB mosaic beside the OKLab mosaic](docs/images/matching-comparison.png)
+| Matcher | Mean cell OKLab ΔE | Luminance SSIM |
+| --- | ---: | ---: |
+| Average RGB | 0.0453 | 0.5506 |
+| OKLab default | 0.0436 | 0.6559 |
 
-The left image repeats the same tiles in blocks. The right image spreads tiles and follows the scene color more closely.
+![Average-RGB selection on the left, OKLab selection on the right](docs/images/matching-comparison.png)
+
+The picture is 656×420. The right side keeps the face, the background gradient, and the red flower. The left side breaks those regions into blockier, less accurate tiles. An earlier comparison looked worse on the OKLab side because a repetition radius of 3 and a large usage penalty were discarding the best color.
 
 ## AI segmentation
 
@@ -126,7 +131,7 @@ Do not commit that file or the keystore.
 
 ## Testing
 
-JVM tests cover OKLab conversion, histograms, cropping, descriptors, candidate indexing, repetition, usage balance, grid planning, empty libraries, small and large images, transparent images, cancellation, atomic writes, and a golden image. The golden digest is SHA-256 `3393612eae7c7cef5cdeb54f04c12f47ebff9ea9e22c882feb1f905268b1c34c`.
+JVM tests cover OKLab conversion, histograms, cropping, descriptors, candidate indexing, repetition, usage balance, grid planning, empty libraries, small and large images, transparent images, cancellation, atomic writes, and a golden image. The golden digest is SHA-256 `0745027b47ef5ffb4aad0ea56cad0d5fa123d41795e750931914bd37af2194ba`.
 
 ```bash
 ./gradlew :engine:test :engine:detekt :app:detekt :app:lintDebug

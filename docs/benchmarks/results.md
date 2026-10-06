@@ -6,10 +6,20 @@ Heap is the change in `totalMemory - freeMemory` around the case and is only an 
 
 | Tiles | Grid | Load ms | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full-library comparisons | Heap MB |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100 | 40×40 | 1.1 | 9.6 | 0.3 | 75.0 | 60.8 | 146.9 | 84182 | 160000 | 0.6 |
-| 500 | 60×60 | 2.4 | 11.2 | 0.5 | 38.0 | 101.3 | 153.3 | 233398 | 1800000 | 1.8 |
-| 1000 | 80×80 | 4.1 | 23.2 | 0.9 | 67.3 | 199.8 | 295.3 | 416000 | 6400000 | 3.9 |
-| 5000 | 120×120 | 13.8 | 110.8 | 2.8 | 154.6 | 427.0 | 709.0 | 936000 | 72000000 | 13.0 |
+| 100 | 40×40 | 1.2 | 9.7 | 0.3 | 63.7 | 54.1 | 129.0 | 84135 | 160000 | 0.6 |
+| 500 | 60×60 | 2.2 | 12.9 | 0.7 | 40.5 | 100.6 | 157.0 | 233676 | 1800000 | 1.8 |
+| 1000 | 80×80 | 4.1 | 22.7 | 0.7 | 62.6 | 179.7 | 269.7 | 415996 | 6400000 | 3.9 |
+| 5000 | 120×120 | 15.1 | 112.5 | 4.1 | 131.1 | 406.4 | 669.1 | 936000 | 72000000 | 13.1 |
 
 Probes are candidate color checks inside OKLab bins, capped per cell so a large library is not scanned in full.
 The full-library column is cells × tiles, which is what the 1.x matcher did.
+
+## Matching quality
+
+Portrait scene, 120 photo-like tiles, 32×42 grid, seed 7.
+Both sides use the original tile pixels and the same renderer. Left is average-RGB selection. Right is the default OKLab matcher.
+
+| Matcher | Mean OKLab ΔE | Luminance SSIM |
+| --- | ---: | ---: |
+| Average RGB | 0.0453 | 0.5506 |
+| OKLab default | 0.0436 | 0.6559 |

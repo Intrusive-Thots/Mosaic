@@ -11,7 +11,7 @@ fun QualityPreset.applyTo(base: MosaicConfig): MosaicConfig {
             output = OutputMode.STANDARD,
             render = RenderMode.BLENDED,
             strength = 0.45f,
-            balance = 0.25f
+            balance = 0f
         )
         QualityPreset.BALANCED -> PresetValues(
             columns = 40,
@@ -21,7 +21,7 @@ fun QualityPreset.applyTo(base: MosaicConfig): MosaicConfig {
             output = OutputMode.STANDARD,
             render = RenderMode.COLOR_CORRECTED,
             strength = 0.65f,
-            balance = 0.60f
+            balance = 0f
         )
         QualityPreset.HIGH_QUALITY -> PresetValues(
             columns = 64,
@@ -31,7 +31,7 @@ fun QualityPreset.applyTo(base: MosaicConfig): MosaicConfig {
             output = OutputMode.HIGH,
             render = RenderMode.COLOR_CORRECTED,
             strength = 0.75f,
-            balance = 1.0f
+            balance = 0.15f
         )
         QualityPreset.MAXIMUM -> PresetValues(
             columns = 100,
@@ -41,7 +41,7 @@ fun QualityPreset.applyTo(base: MosaicConfig): MosaicConfig {
             output = OutputMode.ULTRA,
             render = RenderMode.COLOR_CORRECTED,
             strength = 0.85f,
-            balance = 1.4f
+            balance = 0.30f
         )
         QualityPreset.CUSTOM -> error("Custom has no preset values.")
     }

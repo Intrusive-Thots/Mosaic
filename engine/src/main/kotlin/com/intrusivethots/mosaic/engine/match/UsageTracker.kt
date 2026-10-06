@@ -50,6 +50,10 @@ class UsageTracker(
     fun usageCount(tile: Int): Int = counts[tile]
 
     companion object {
-        const val USAGE_UNIT = 0.02f
+        /**
+         * Score added per previous use when [balanceWeight] is 1.
+         * Kept far below a just-noticeable OKLab step so balancing only swaps near-equal tiles.
+         */
+        const val USAGE_UNIT = 0.0005f
     }
 }
