@@ -5,7 +5,9 @@ import com.intrusivethots.mosaic.engine.match.CutoutPlacement
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 class PieceDraw(
@@ -64,8 +66,9 @@ fun pieceDraw(
 }
 
 /**
- * Inverse-rotates an output pixel into the cutout and returns a feathered sample.
- * Pixels outside the piece are transparent, which is what antialiases a hard mask.
+ * Inverse-rotates an output pixel into the cutout.
+ * Filtering is premultiplied, so a transparent texel contributes no color and the silhouette
+ * feathers without a halo. The bounding box is not feathered.
  */
 fun sampleCutout(source: PixelImage, descriptor: TileDescriptor, draw: PieceDraw, x: Int, y: Int): Int {
     val localX = x + 0.5f - draw.centerX
@@ -77,37 +80,52 @@ fun sampleCutout(source: PixelImage, descriptor: TileDescriptor, draw: PieceDraw
     if (u < 0f || v < 0f || u > 1f || v > 1f) return 0
     val sx = (descriptor.contentLeft + u * (descriptor.contentRight - descriptor.contentLeft)) * source.width - 0.5f
     val sy = (descriptor.contentTop + v * (descriptor.contentBottom - descriptor.contentTop)) * source.height - 0.5f
-    val sampled = sampleTransparent(source, sx, sy)
-    if (sampled == 0) return 0
-    val edge = minOf(u, v, 1f - u, 1f - v) * min(draw.drawWidth, draw.drawHeight)
-    val feather = (edge / 0.85f).coerceIn(0f, 1f)
-    if (feather >= 0.999f) return sampled
-    val alpha = (((sampled ushr 24) and 0xFF) * feather).toInt().coerceIn(0, 255)
-    return (sampled and 0x00FFFFFF) or (alpha shl 24)
+    return sampleTransparent(source, sx, sy)
 }
 
 fun sampleTransparent(image: PixelImage, x: Float, y: Float): Int {
     if (x < -0.5f || y < -0.5f || x > image.width - 0.5f || y > image.height - 0.5f) return 0
-    val clampedX = x.coerceIn(0f, (image.width - 1).toFloat())
-    val clampedY = y.coerceIn(0f, (image.height - 1).toFloat())
-    val x0 = clampedX.toInt()
-    val y0 = clampedY.toInt()
-    val x1 = (x0 + 1).coerceAtMost(image.width - 1)
-    val y1 = (y0 + 1).coerceAtMost(image.height - 1)
-    val tx = clampedX - x0
-    val ty = clampedY - y0
-    val top = lerpChannel(image.pixels[y0 * image.width + x0], image.pixels[y0 * image.width + x1], tx)
-    val bottom = lerpChannel(image.pixels[y1 * image.width + x0], image.pixels[y1 * image.width + x1], tx)
-    return lerpChannel(top, bottom, ty)
+    val x0 = floor(x).toInt()
+    val y0 = floor(y).toInt()
+    val tx = x - x0
+    val ty = y - y0
+    val w00 = (1f - tx) * (1f - ty)
+    val w10 = tx * (1f - ty)
+    val w01 = (1f - tx) * ty
+    val w11 = tx * ty
+    var red = 0f
+    var green = 0f
+    var blue = 0f
+    var alpha = 0f
+    blendPremul(image, x0, y0, w00) { r, g, b, a -> red += r; green += g; blue += b; alpha += a }
+    blendPremul(image, x0 + 1, y0, w10) { r, g, b, a -> red += r; green += g; blue += b; alpha += a }
+    blendPremul(image, x0, y0 + 1, w01) { r, g, b, a -> red += r; green += g; blue += b; alpha += a }
+    blendPremul(image, x0 + 1, y0 + 1, w11) { r, g, b, a -> red += r; green += g; blue += b; alpha += a }
+    if (alpha <= 1f / 512f) return 0
+    val outA = (alpha * 255f).roundToInt().coerceIn(0, 255)
+    val outR = (red / alpha * 255f).roundToInt().coerceIn(0, 255)
+    val outG = (green / alpha * 255f).roundToInt().coerceIn(0, 255)
+    val outB = (blue / alpha * 255f).roundToInt().coerceIn(0, 255)
+    return (outA shl 24) or (outR shl 16) or (outG shl 8) or outB
 }
 
-private fun lerpChannel(start: Int, end: Int, amount: Float): Int {
-    fun channel(shift: Int): Int {
-        val from = (start ushr shift) and 0xFF
-        val to = (end ushr shift) and 0xFF
-        return (from + (to - from) * amount).toInt().coerceIn(0, 255)
-    }
-    return (channel(24) shl 24) or (channel(16) shl 16) or (channel(8) shl 8) or channel(0)
+private inline fun blendPremul(
+    image: PixelImage,
+    x: Int,
+    y: Int,
+    weight: Float,
+    block: (Float, Float, Float, Float) -> Unit
+) {
+    if (weight <= 0f || x < 0 || y < 0 || x >= image.width || y >= image.height) return
+    val pixel = image.pixels[y * image.width + x]
+    val coverage = ((pixel ushr 24) and 0xFF) / 255f * weight
+    if (coverage <= 0f) return
+    block(
+        ((pixel ushr 16) and 0xFF) / 255f * coverage,
+        ((pixel ushr 8) and 0xFF) / 255f * coverage,
+        (pixel and 0xFF) / 255f * coverage,
+        coverage
+    )
 }
 
 fun srcOver(destination: Int, source: Int): Int {

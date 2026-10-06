@@ -54,14 +54,14 @@ fun CollageControls(
 @Composable
 private fun CollageSliders(settings: CollageSettings, onCollage: (CollageSettings) -> Unit) {
     Text(
-        "Cutouts keep their shape. Large pieces go down first, then smaller ones. Add them in the Stamps tab.",
+        "Cutouts keep landing while they cover more of the picture and lower the error. The background is flat unless you choose the target photo.",
         fontSize = 12.sp,
         color = TextSecondary
     )
-    LabeledSlider("Pieces: ${settings.pieceCount}", settings.pieceCount.toFloat(), 8f, 400f, AccentAmber) {
+    LabeledSlider("Pieces: ${settings.pieceCount}", settings.pieceCount.toFloat(), 8f, 600f, AccentAmber) {
         onCollage(settings.copy(pieceCount = it.roundToInt()))
     }
-    LabeledSlider("Smallest scale: ${(settings.minScale * 100).roundToInt()}%", settings.minScale, 0.04f, 0.4f, AccentAmber) {
+    LabeledSlider("Smallest scale: ${(settings.minScale * 100).roundToInt()}%", settings.minScale, 0.03f, 0.4f, AccentAmber) {
         onCollage(settings.copy(minScale = it))
     }
     LabeledSlider("Largest scale: ${(settings.maxScale * 100).roundToInt()}%", settings.maxScale, 0.12f, 0.7f, AccentAmber) {

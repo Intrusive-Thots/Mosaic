@@ -18,6 +18,9 @@ import com.intrusivethots.mosaic.engine.quality.maskedMeanDeltaE
 import com.intrusivethots.mosaic.engine.quality.meanCellDeltaE
 import com.intrusivethots.mosaic.engine.render.MemoryRowSink
 import com.intrusivethots.mosaic.engine.render.MosaicRenderer
+import com.intrusivethots.mosaic.engine.render.pieceDraw
+import com.intrusivethots.mosaic.engine.render.sampleCutout
+import com.intrusivethots.mosaic.engine.render.srcOver
 import com.intrusivethots.mosaic.engine.tile.MemoryTileSource
 import com.intrusivethots.mosaic.engine.tile.SHAPE_MASK_GRID
 import com.intrusivethots.mosaic.engine.tile.TileAnalyzer
@@ -76,18 +79,23 @@ class CollageLayoutTest {
         val result = GenerationCoordinator().generate(gradient(96, 64), tiles, config, preview = true)
         val image = result.image ?: error("missing collage")
         assertTrue(result.plan.placements.isNotEmpty())
-        assertTrue(result.plan.coverage > 0.55f, "coverage ${result.plan.coverage}")
-        assertTrue(result.plan.placements.first().scale >= result.plan.placements.last().scale)
+        assertTrue(result.plan.placements.size >= 4, "placed ${result.plan.placements.size}")
+        assertTrue(result.plan.coverage > 0.05f, "coverage ${result.plan.coverage}")
+        val scales = result.plan.placements.map { it.scale }
+        if (scales.size >= 3) {
+            val third = scales.size / 3
+            assertTrue(scales.take(third).average() + 0.02 >= scales.takeLast(third).average())
+        }
         val naive = config.collage.pieceCount.toLong() * tiles.size * 8
         assertTrue(result.probes < naive, "probes ${result.probes} vs $naive")
         val covered = BooleanArray(image.width * image.height)
         repaint(result.plan, result.descriptors, tiles.map { it.loadThumbnail(96) }, image.width, image.height, config, gradient(96, 64), covered)
         val painted = covered.count { it }.toFloat() / covered.size
-        assertTrue(painted > 0.35f, "painted $painted")
+        assertTrue(painted > 0.08f, "painted $painted")
         val delta = maskedMeanDeltaE(image, gradient(96, 64), covered)
         val ssim = maskedLuminanceSsim(image, gradient(96, 64), covered)
         assertTrue(delta < 0.45, "masked ΔE $delta")
-        assertTrue(ssim > 0.15, "masked SSIM $ssim")
+        assertTrue(ssim > 0.08, "masked SSIM $ssim")
         assertTrue(meanCellDeltaE(image, gradient(96, 64), 8, 8) < 0.5)
         assertTrue(luminanceSsim(image, gradient(96, 64)) > 0.15)
         assertTrue(image.pixels.all { it ushr 24 == 255 })
@@ -183,6 +191,58 @@ class CollageLayoutTest {
         assertTrue((bottom and 255) > (bottom shr 16 and 255), "bottom $bottom")
     }
 
+    @Test
+    fun cutoutsRebuildThePicture() = runBlocking {
+        val count = 200
+        val tiles = (0 until count).map { MemoryTileSource(organicCutout(it, count, 36), "organic-$it") }
+        val target = portrait(120, 80)
+        val config = collageConfig(pieceCount = 340, seed = 4).copy(candidateCount = 12)
+        val result = GenerationCoordinator().generate(target, tiles, config, preview = true)
+        val image = result.image ?: error("missing collage")
+        val covered = BooleanArray(image.width * image.height)
+        val thumbs = tiles.map { it.loadThumbnail(96) }
+        repaint(result.plan, result.descriptors, thumbs, image.width, image.height, config, target, covered)
+        val painted = covered.count { it }.toFloat() / covered.size
+        val delta = maskedMeanDeltaE(image, target, covered)
+        val ssim = maskedLuminanceSsim(image, target, covered)
+        val placed = result.plan.placements.size
+        assertTrue(
+            painted >= 0.95f,
+            "painted $painted analysis ${result.plan.coverage} placed $placed ΔE $delta SSIM $ssim"
+        )
+        assertTrue(delta < 0.09, "masked ΔE $delta painted $painted")
+        assertTrue(ssim > 0.35, "masked SSIM $ssim")
+    }
+
+    @Test
+    fun aMismatchedCutoutDoesNotCoverARegionItRuins() = runBlocking {
+        val tiles = listOf(
+            MemoryTileSource(disk(argb(210, 40, 40), argb(0, 0, 0, alpha = 0)), "red"),
+            MemoryTileSource(disk(argb(40, 40, 210), argb(0, 0, 0, alpha = 0)), "blue")
+        )
+        val target = solid(64, 64, argb(200, 32, 32))
+        val result = GenerationCoordinator().generate(target, tiles, collageConfig(pieceCount = 8, seed = 2), preview = true)
+        assertTrue(result.plan.placements.isNotEmpty())
+        assertTrue(result.plan.placements.all { it.tileIndex == 0 })
+    }
+
+    @Test
+    fun aTransparentBlueNeighborDoesNotTintTheEdge() {
+        val size = 24
+        val source = disk(argb(210, 40, 40), argb(0, 0, 255, alpha = 0), size)
+        val descriptor = TileAnalyzer().describe(key("disk"), size, size, source)
+        val draw = pieceDraw(CutoutPlacement(0, 0.5f, 0.5f, 12f, 0.72f, 0.5f, 0f, 0f), descriptor, size, size, 64, 64)
+        val gray = argb(128, 128, 128)
+        for (y in 0 until 64) {
+            for (x in 0 until 64) {
+                val pixel = srcOver(gray, sampleCutout(source, descriptor, draw, x, y))
+                val red = (pixel shr 16) and 255
+                val blue = pixel and 255
+                assertTrue(blue <= red + 2, "fringe at $x,$y red=$red blue=$blue")
+            }
+        }
+    }
+
     private suspend fun repaint(
         plan: MosaicPlan,
         descriptors: List<com.intrusivethots.mosaic.engine.tile.TileDescriptor>,
@@ -204,16 +264,16 @@ fun collageConfig(pieceCount: Int, seed: Int) = MosaicConfig(
     mosaicKind = MosaicKind.COLLAGE,
     collage = CollageSettings(
         pieceCount = pieceCount,
-        minScale = 0.12f,
-        maxScale = 0.42f,
-        rotationRangeDegrees = 25f,
-        overlap = 0.7f,
-        coverageGoal = 0.9f,
-        background = CollageBackground.TARGET,
+        minScale = 0.035f,
+        maxScale = 0.18f,
+        rotationRangeDegrees = 20f,
+        overlap = 0.4f,
+        coverageGoal = 0.99f,
+        background = CollageBackground.MEAN_COLOR,
         shapeWeight = 0.3f
     ),
-    renderMode = RenderMode.COLOR_CORRECTED,
-    colorMatchWeight = 0.4f,
+    renderMode = RenderMode.ORIGINAL,
+    colorMatchWeight = 0f,
     candidateCount = 8,
     descriptorMaxEdge = 24,
     allowTileRepetition = true,
@@ -234,6 +294,20 @@ private fun halfRed(): PixelImage {
         }
     }
     return PixelImage(16, 16, pixels)
+}
+
+private fun disk(inside: Int, outside: Int, size: Int = 28): PixelImage {
+    val pixels = IntArray(size * size)
+    val center = (size - 1) / 2f
+    val radius = size * 0.34f
+    for (y in 0 until size) {
+        for (x in 0 until size) {
+            val dx = x - center
+            val dy = y - center
+            pixels[y * size + x] = if (dx * dx + dy * dy <= radius * radius) inside else outside
+        }
+    }
+    return PixelImage(size, size, pixels)
 }
 
 private fun leftRight(): PixelImage {

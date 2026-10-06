@@ -6,6 +6,7 @@ import com.intrusivethots.mosaic.engine.COMPARISON_SEED
 import com.intrusivethots.mosaic.engine.compareMatchers
 import com.intrusivethots.mosaic.engine.collageConfig
 import com.intrusivethots.mosaic.engine.config.CellAspect
+import com.intrusivethots.mosaic.engine.config.CollageBackground
 import com.intrusivethots.mosaic.engine.config.CollageSettings
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.MosaicKind
@@ -19,7 +20,7 @@ import com.intrusivethots.mosaic.engine.quality.luminanceSsim
 import com.intrusivethots.mosaic.engine.quality.maskedLuminanceSsim
 import com.intrusivethots.mosaic.engine.quality.maskedMeanDeltaE
 import com.intrusivethots.mosaic.engine.quality.meanCellDeltaE
-import com.intrusivethots.mosaic.engine.shapedCutout
+import com.intrusivethots.mosaic.engine.organicCutout
 import com.intrusivethots.mosaic.engine.writePng
 import com.intrusivethots.mosaic.engine.gradient
 import com.intrusivethots.mosaic.engine.hueTile
@@ -31,6 +32,7 @@ import com.intrusivethots.mosaic.engine.render.MemoryRowSink
 import com.intrusivethots.mosaic.engine.render.MosaicRenderer
 import com.intrusivethots.mosaic.engine.render.RowSink
 import com.intrusivethots.mosaic.engine.tile.MemoryTileSource
+import com.intrusivethots.mosaic.engine.writeRowOf
 import com.intrusivethots.mosaic.engine.writeSideBySide
 import com.intrusivethots.mosaic.engine.tile.TileAnalyzer
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
@@ -67,8 +69,8 @@ fun main() = runBlocking {
     runCase(cases.first(), report = false)
     val results = cases.map { runCase(it) }
     val shape = runShapeCase()
-    runCollageCase(40, 12)
-    val collage = listOf(200 to 60, 800 to 100).map { (tiles, pieces) -> runCollageCase(tiles, pieces) }
+    runCollageCase(40, 24)
+    val collage = listOf(200 to 160, 600 to 280).map { (tiles, pieces) -> runCollageCase(tiles, pieces) }
     val report = renderReport(results, shape, collage)
     listOf(
         File("engine/build/reports/benchmarks/results.md"),
@@ -239,20 +241,24 @@ private suspend fun runCollageCase(tileCount: Int, pieceCount: Int): BenchResult
     val config = collageConfig(pieceCount, seed = 1).copy(
         collage = CollageSettings(
             pieceCount = pieceCount,
-            minScale = 0.08f,
-            maxScale = 0.3f,
-            rotationRangeDegrees = 20f,
-            overlap = 0.55f,
+            minScale = 0.04f,
+            maxScale = 0.18f,
+            rotationRangeDegrees = 18f,
+            overlap = 0.4f,
+            coverageGoal = 0.99f,
+            background = CollageBackground.MEAN_COLOR,
             shapeWeight = 0.3f
         ),
         descriptorMaxEdge = 16,
         candidateCount = 12,
-        mosaicKind = MosaicKind.COLLAGE
+        mosaicKind = MosaicKind.COLLAGE,
+        renderMode = RenderMode.ORIGINAL,
+        colorMatchWeight = 0f
     )
     val runtime = Runtime.getRuntime()
     System.gc()
     val before = runtime.totalMemory() - runtime.freeMemory()
-    val sources = List(tileCount) { index -> MemoryTileSource(shapedCutout(index, tileCount, 16), "cut-$index") }
+    val sources = List(tileCount) { index -> MemoryTileSource(organicCutout(index, tileCount, 28), "cut-$index") }
     val analyzer = TileAnalyzer()
     val thumbs = ArrayList<PixelImage>(tileCount)
     val descriptors = ArrayList<TileDescriptor>(tileCount)
@@ -266,7 +272,7 @@ private suspend fun runCollageCase(tileCount: Int, pieceCount: Int): BenchResult
     lateinit var index: TileIndex
     val indexMs = measureNanoTime { index = TileIndex.build(descriptors) }.ms()
     val target = gradient(160, 100)
-    val placer = CollagePlacer(analyzer)
+    val placer = CollagePlacer()
     lateinit var matched: Pair<com.intrusivethots.mosaic.engine.match.MosaicPlan, com.intrusivethots.mosaic.engine.match.MatchStats>
     val matchMs = measureNanoTime {
         matched = placer.place(target, descriptors, index, config, descriptors.map { it.key.token() })
@@ -300,12 +306,28 @@ private suspend fun runCollageCase(tileCount: Int, pieceCount: Int): BenchResult
 
 private suspend fun writeCollageSample() {
     val target = portrait(280, 180)
-    val tiles = (0 until 64).map { index -> MemoryTileSource(shapedCutout(index, 64, 28), "sample-$index") }
-    val config = collageConfig(pieceCount = 72, seed = 4)
-    val result = com.intrusivethots.mosaic.engine.coord.GenerationCoordinator().generate(target, tiles, config, preview = false)
+    val count = 240
+    val tiles = (0 until count).map { index -> MemoryTileSource(organicCutout(index, count, 36), "sample-$index") }
+    val config = collageConfig(pieceCount = 320, seed = 4).copy(candidateCount = 12, descriptorMaxEdge = 28)
+    val coordinator = com.intrusivethots.mosaic.engine.coord.GenerationCoordinator()
+    val result = coordinator.generate(target, tiles, config, preview = false)
     val image = result.image ?: error("Sample collage produced no image.")
+    val gridConfig = MosaicConfig(
+        gridColumns = 28,
+        gridRows = 18,
+        linkAspectToGrid = false,
+        renderMode = RenderMode.ORIGINAL,
+        randomSeed = 4,
+        descriptorMaxEdge = 28,
+        candidateCount = 12,
+        customOutputWidth = target.width,
+        customOutputHeight = target.height,
+        lockOutputAspect = true
+    )
+    val grid = coordinator.generate(target, tiles, gridConfig, preview = false)
+    val gridImage = grid.image ?: error("Sample grid produced no image.")
     val files = listOf(File("docs/images/cutout-collage.png"), File("/opt/cursor/artifacts/cutout-collage.png"))
-    writeSideBySide(target, image, files)
+    writeRowOf(listOf(target, image, gridImage), files)
     writePng(image, listOf(File("docs/images/cutout-collage-output.png"), File("/opt/cursor/artifacts/cutout-collage-output.png")))
     val covered = BooleanArray(image.width * image.height)
     val thumbs = tiles.map { it.loadThumbnail(128) }
@@ -326,15 +348,19 @@ private suspend fun writeCollageSample() {
     val painted = covered.count { it }.toFloat() / covered.size.toFloat()
     val note = buildString {
         appendLine()
-        appendLine("Sample collage on the portrait scene, 64 cutouts, 72 placements, seed 4.")
-        appendLine("The target is the left half of docs/images/cutout-collage.png.")
-        appendLine("Whole-image scores include the target underlayer. Masked scores count only pixels a cutout painted.")
+        appendLine("Sample collage on the portrait scene, 240 organic cutouts, 320 requested, seed 4.")
+        appendLine("${result.plan.placements.size} pieces were placed. The background is the target's mean color.")
+        appendLine("docs/images/cutout-collage.png shows the target, the collage, and a grid mosaic of the same library.")
+        appendLine("The previous sample painted 59% of pixels (masked ΔE 0.0989, masked SSIM 0.6873).")
+        appendLine("That run used the target photo as the underlayer and stopped when a coarse grid filled.")
+        appendLine("Masked scores count only pixels a cutout painted. Whole-image scores include the flat background.")
         appendLine()
-        appendLine("| Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Pixels painted | Coarse coverage |")
-        appendLine("| ---: | ---: | ---: | ---: | ---: | ---: |")
-        append("| ${"%.4f".format(delta)} | ${"%.4f".format(ssim)} | ")
+        appendLine("| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Pixels painted |")
+        appendLine("| --- | ---: | ---: | ---: | ---: | ---: |")
+        appendLine("| Previous | 0.0475 | 0.7655 | 0.0989 | 0.6873 | 59% |")
+        append("| This run | ${"%.4f".format(delta)} | ${"%.4f".format(ssim)} | ")
         append("${"%.4f".format(maskedDelta)} | ${"%.4f".format(maskedSsim)} | ")
-        append("${"%.0f".format(painted * 100f)}% | ${"%.0f".format(result.plan.coverage * 100f)}% |")
+        append("${"%.0f".format(painted * 100f)}% |")
         appendLine()
         appendLine()
     }
@@ -385,7 +411,8 @@ private fun renderReport(results: List<BenchResult>, shape: BenchResult, collage
     appendLine()
     appendLine("## Cutout collage")
     appendLine()
-    appendLine("Each placement queries the OKLab index once, then scores that short list at a few angles. Full scan is requested pieces × cutouts × 12 angles.")
+    appendLine("Each placement queries the OKLab index once, then keeps a candidate only when its masked color lowers error")
+    appendLine("without spoiling pixels that are already close. Full scan is requested pieces × cutouts × 12 angles.")
     appendLine()
     appendLine("| Cutouts | Requested | Placed | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full scan | Note |")
     appendLine("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |")

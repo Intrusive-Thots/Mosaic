@@ -101,12 +101,18 @@ fun writePng(image: PixelImage, files: List<File>) {
 }
 
 fun writeSideBySide(left: PixelImage, right: PixelImage, files: List<File>) {
-    val gap = 16
-    val width = left.width + gap + right.width
-    val height = maxOf(left.height, right.height)
+    writeRowOf(listOf(left, right), files)
+}
+
+fun writeRowOf(images: List<PixelImage>, files: List<File>, gap: Int = 16) {
+    val width = images.sumOf { it.width } + gap * (images.size - 1).coerceAtLeast(0)
+    val height = images.maxOf { it.height }
     val pixels = IntArray(width * height) { argb(18, 16, 24) }
-    blit(pixels, width, left, 0, 0)
-    blit(pixels, width, right, left.width + gap, 0)
+    var originX = 0
+    images.forEach { image ->
+        blit(pixels, width, image, originX, 0)
+        originX += image.width + gap
+    }
     files.forEach { file ->
         file.parentFile?.mkdirs()
         file.outputStream().use { stream ->

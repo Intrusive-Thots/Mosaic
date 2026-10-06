@@ -50,7 +50,7 @@ class GenerationCoordinator(
     private val analyzer: TileAnalyzer = TileAnalyzer(),
     private val cache: DescriptorCache = MemoryDescriptorCache(),
     private val matcher: TileMatcher = TileMatcher(analyzer),
-    private val collagePlacer: CollagePlacer = CollagePlacer(analyzer),
+    private val collagePlacer: CollagePlacer = CollagePlacer(),
     private val renderer: MosaicRenderer = MosaicRenderer(),
     private val clock: () -> Long = System::currentTimeMillis
 ) {
