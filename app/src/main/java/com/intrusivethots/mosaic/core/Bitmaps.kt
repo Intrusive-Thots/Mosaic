@@ -68,6 +68,50 @@ fun decodeSampledFile(path: String, maxEdge: Int): Bitmap? {
     }
 }
 
+/** Drops padding around the opaque subject. The original bitmap is unchanged. */
+fun cropToSubject(source: Bitmap, alphaThreshold: Int = 40): Bitmap {
+    if (source.isRecycled) return source
+    val bounds = opaqueBounds(source, alphaThreshold) ?: return source
+    if (bounds[0] == 0 && bounds[1] == 0 && bounds[2] == source.width && bounds[3] == source.height) return source
+    return Bitmap.createBitmap(source, bounds[0], bounds[1], bounds[2], bounds[3])
+}
+
+/** Raises the alpha cutoff and crops to what remains, so a soft halo can be trimmed by hand. */
+fun tightenSubject(source: Bitmap): Bitmap {
+    if (source.isRecycled) return source
+    val pixels = IntArray(source.width * source.height)
+    source.getPixels(pixels, 0, source.width, 0, 0, source.width, source.height)
+    for (index in pixels.indices) {
+        if ((pixels[index] ushr 24) < 96) pixels[index] = 0
+    }
+    val painted = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+    painted.setPixels(pixels, 0, source.width, 0, 0, source.width, source.height)
+    val cropped = cropToSubject(painted, 96)
+    if (cropped !== painted) painted.recycle()
+    return cropped
+}
+
+private fun opaqueBounds(source: Bitmap, alphaThreshold: Int): IntArray? {
+    var minX = source.width
+    var minY = source.height
+    var maxX = -1
+    var maxY = -1
+    val pixels = IntArray(source.width * source.height)
+    source.getPixels(pixels, 0, source.width, 0, 0, source.width, source.height)
+    for (y in 0 until source.height) {
+        val row = y * source.width
+        for (x in 0 until source.width) {
+            if ((pixels[row + x] ushr 24) <= alphaThreshold) continue
+            if (x < minX) minX = x
+            if (y < minY) minY = y
+            if (x > maxX) maxX = x
+            if (y > maxY) maxY = y
+        }
+    }
+    if (maxX < minX || maxY < minY) return null
+    return intArrayOf(minX, minY, maxX - minX + 1, maxY - minY + 1)
+}
+
 fun rotateBitmap(source: Bitmap, quarterTurns: Int): Bitmap {
     val turns = quarterTurns and 3
     if (turns == 0 || source.isRecycled) return source

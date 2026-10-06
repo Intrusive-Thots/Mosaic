@@ -16,7 +16,9 @@ import com.intrusivethots.mosaic.engine.tile.TileDescriptor
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 
-class MosaicRenderer {
+class MosaicRenderer(
+    private val collageRenderer: CollageRenderer = CollageRenderer()
+) {
     suspend fun render(
         plan: MosaicPlan,
         descriptors: List<TileDescriptor>,
@@ -24,8 +26,16 @@ class MosaicRenderer {
         layout: OutputLayout,
         config: MosaicConfig,
         sink: RowSink,
+        target: PixelImage? = null,
+        coverage: BooleanArray? = null,
         onProgress: (Float) -> Unit = {}
     ) {
+        if (plan.placements.isNotEmpty()) {
+            collageRenderer.render(
+                plan, descriptors, thumbnails, layout, config, target, sink, coverage, onProgress
+            )
+            return
+        }
         if (plan.anchors.isNotEmpty()) {
             renderPlaced(plan, descriptors, thumbnails, layout, config, sink, onProgress)
             return

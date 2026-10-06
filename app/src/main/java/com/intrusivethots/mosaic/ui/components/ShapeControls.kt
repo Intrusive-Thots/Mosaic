@@ -27,8 +27,10 @@ import com.intrusivethots.mosaic.engine.config.CellAspect
 import com.intrusivethots.mosaic.engine.config.LayoutMode
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.RotationMode
+import com.intrusivethots.mosaic.engine.config.MosaicKind
 import com.intrusivethots.mosaic.engine.config.customSizeError
 import com.intrusivethots.mosaic.engine.config.outputLimitError
+import com.intrusivethots.mosaic.engine.config.planCollageOutput
 import com.intrusivethots.mosaic.engine.config.planOutput
 import com.intrusivethots.mosaic.ui.theme.AccentPink
 import com.intrusivethots.mosaic.ui.theme.AccentPurple
@@ -160,11 +162,18 @@ private fun OutputHint(config: MosaicConfig, targetWidth: Int, targetHeight: Int
     val scale = config.targetScale.coerceIn(0.25f, 1f)
     val width = ((if (turns and 1 == 1) targetHeight else targetWidth) * scale).roundToInt().coerceAtLeast(1)
     val height = ((if (turns and 1 == 1) targetWidth else targetHeight) * scale).roundToInt().coerceAtLeast(1)
-    val layout = runCatching { planOutput(width, height, config, preview = false) }.getOrNull()
+    val collage = config.mosaicKind == MosaicKind.COLLAGE
+    val layout = runCatching {
+        if (collage) planCollageOutput(width, height, config, preview = false) else planOutput(width, height, config, preview = false)
+    }.getOrNull()
     if (layout == null) return
-    val limit = outputLimitError(layout.width, layout.height, layout.cellWidth, layout.cellHeight)
+    val cellWidth = if (collage) 1 else layout.cellWidth
+    val cellHeight = if (collage) 1 else layout.cellHeight
+    val limit = outputLimitError(layout.width, layout.height, cellWidth, cellHeight)
     if (limit != null) {
         Text(limit, fontSize = 12.sp, color = Color(0xFFFF8A80))
+    } else if (collage) {
+        Text("Full render ${layout.width}×${layout.height} cutout collage.", fontSize = 12.sp, color = TextSecondary)
     } else {
         Text(
             "Full render ${layout.width}×${layout.height}, cells ${layout.cellWidth}×${layout.cellHeight}.",

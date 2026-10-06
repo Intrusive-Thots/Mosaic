@@ -39,6 +39,31 @@ fun hueTile(index: Int, count: Int, size: Int = 24): PixelImage {
     return PixelImage(size, size, pixels)
 }
 
+/** Opaque ellipse on a transparent canvas. The color is a unique hue so collage matching has something to grab. */
+fun shapedCutout(index: Int, count: Int, size: Int = 28): PixelImage {
+    val hue = index.toFloat() / count.toFloat().coerceAtLeast(1f)
+    val (red, green, blue) = hsvToRgb(hue, 0.8f, 0.95f)
+    val pixels = IntArray(size * size)
+    val aspect = 0.55f + (index % 5) * 0.15f
+    val center = (size - 1) / 2f
+    val radiusX = center * (if (index % 2 == 0) 0.85f else 0.55f)
+    val radiusY = radiusX * aspect
+    for (y in 0 until size) {
+        for (x in 0 until size) {
+            val dx = (x - center) / radiusX
+            val dy = (y - center) / radiusY.coerceAtLeast(1f)
+            val inside = dx * dx + dy * dy <= 1f
+            val shade = 0.75f + 0.25f * x / (size - 1).coerceAtLeast(1)
+            pixels[y * size + x] = if (inside) {
+                argb((red * shade).toInt().coerceIn(0, 255), (green * shade).toInt().coerceIn(0, 255), (blue * shade).toInt().coerceIn(0, 255))
+            } else {
+                argb(0, 0, 255, alpha = 0)
+            }
+        }
+    }
+    return PixelImage(size, size, pixels)
+}
+
 fun banded(width: Int, height: Int): PixelImage {
     val pixels = IntArray(width * height)
     for (y in 0 until height) {

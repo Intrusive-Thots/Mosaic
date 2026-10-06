@@ -98,7 +98,10 @@ fun StudioScreen(
             state.tileQuarterTurns,
             onPickTiles,
             shapeEditor.onClearTiles,
-            shapeEditor.onRotateTile
+            shapeEditor.onRotateTile,
+            state.customStamps,
+            shapeEditor.onRemoveStamp,
+            state.config.mosaicKind == com.intrusivethots.mosaic.engine.config.MosaicKind.COLLAGE
         )
         MosaicControlsCard(
             config = state.config,
@@ -121,7 +124,9 @@ fun StudioScreen(
             onLayout = shapeEditor.onLayout,
             onRotation = shapeEditor.onRotation,
             onScale = shapeEditor.onScale,
-            onOutput = shapeEditor.onOutput
+            onOutput = shapeEditor.onOutput,
+            onKind = shapeEditor.onKind,
+            onCollage = shapeEditor.onCollage
         )
         GenerationProgress(state.generation, onCancel)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {

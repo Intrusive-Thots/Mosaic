@@ -11,6 +11,7 @@ import com.intrusivethots.mosaic.core.SubjectSegmenterHelper
 import com.intrusivethots.mosaic.core.bitmapIdentity
 import com.intrusivethots.mosaic.core.rotateBitmap
 import com.intrusivethots.mosaic.core.scaleToLongEdge
+import com.intrusivethots.mosaic.core.tightenSubject
 import com.intrusivethots.mosaic.core.toBitmap
 import com.intrusivethots.mosaic.core.toPixelImage
 import com.intrusivethots.mosaic.data.ProjectRepository
@@ -20,8 +21,11 @@ import com.intrusivethots.mosaic.engine.EmptyLibraryException
 import com.intrusivethots.mosaic.engine.InsufficientStorageException
 import com.intrusivethots.mosaic.engine.config.AspectRatioPreset
 import com.intrusivethots.mosaic.engine.config.CellAspect
+import com.intrusivethots.mosaic.engine.config.CollageBackground
+import com.intrusivethots.mosaic.engine.config.CollageSettings
 import com.intrusivethots.mosaic.engine.config.LayoutMode
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
+import com.intrusivethots.mosaic.engine.config.MosaicKind
 import com.intrusivethots.mosaic.engine.config.RotationMode
 import com.intrusivethots.mosaic.engine.config.MosaicStyle
 import com.intrusivethots.mosaic.engine.config.OutputMode
@@ -223,6 +227,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updateLayoutMode(mode: LayoutMode) = updateConfig { it.copy(layoutMode = mode, qualityPreset = QualityPreset.CUSTOM) }
+
+    fun updateMosaicKind(kind: MosaicKind) = updateConfig { it.copy(mosaicKind = kind) }
+
+    fun updateCollage(settings: CollageSettings) = updateConfig { it.copy(collage = settings) }
+
+    fun tightenStamp(index: Int) {
+        _state.update { state ->
+            val stamp = state.customStamps.getOrNull(index) ?: return@update state
+            val tightened = tightenSubject(stamp)
+            if (tightened === stamp) return@update state
+            val stamps = state.customStamps.toMutableList()
+            stamps[index] = tightened
+            if (!stamp.isRecycled) stamp.recycle()
+            state.copy(customStamps = stamps)
+        }
+    }
 
     fun updateRotationMode(mode: RotationMode) = updateConfig { it.copy(rotationMode = mode, qualityPreset = QualityPreset.CUSTOM) }
 
@@ -428,26 +448,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         onLoad: (String, Float) -> Unit
     ): List<TileSource> {
         val sources = mutableListOf<TileSource>()
-        val edge = snapshot.config.descriptorMaxEdge.coerceAtLeast(96)
-        snapshot.tileUris.forEachIndexed { index, uri ->
-            coroutineContext.ensureActive()
-            onLoad("Loading images", index.toFloat() / snapshot.tileUris.size.coerceAtLeast(1))
-            val cached = bitmapCache.get(uri.toString())
-            val bitmap = cached ?: repository.loadBitmapFromUri(uri, edge)?.also { bitmapCache.put(uri.toString(), it) }
-            if (bitmap == null) return@forEachIndexed
-            val turns = snapshot.tileQuarterTurns.getOrElse(index) { 0 } and 3
-            val oriented = if (turns == 0) bitmap else rotateBitmap(bitmap, turns).also { owned += it }
-            val token = if (turns == 0) uri.toString() else "${uri}#q$turns"
-            sources += BitmapTileSource(
-                identity = com.intrusivethots.mosaic.engine.tile.TileIdentity(
-                    uri = token,
-                    width = oriented.width,
-                    height = oriented.height,
-                    byteSize = repository.contentSize(uri),
-                    modifiedTimeMs = repository.contentModified(uri)
-                ),
-                bitmap = oriented
-            )
+        val collage = snapshot.config.mosaicKind == MosaicKind.COLLAGE
+        if (!collage || snapshot.config.collage.includeSourcePhotos) {
+            appendLibraryPhotos(snapshot, sources, owned, onLoad)
         }
         snapshot.customStamps.forEachIndexed { index, stamp ->
             sources += BitmapTileSource(bitmapIdentity(stamp, "stamp-$index"), stamp)
@@ -475,9 +478,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         if (sources.isEmpty() && snapshot.tileUris.isNotEmpty()) {
+            appendLibraryPhotos(snapshot, sources, owned, onLoad)
+        }
+        if (sources.isEmpty() && snapshot.tileUris.isNotEmpty()) {
             _events.tryEmit(UiEvent.Message("Some images could not be read and were skipped."))
         }
         return sources
+    }
+
+    private suspend fun appendLibraryPhotos(
+        snapshot: MosaicUiState,
+        sources: MutableList<TileSource>,
+        owned: MutableList<Bitmap>,
+        onLoad: (String, Float) -> Unit
+    ) {
+        val edge = snapshot.config.descriptorMaxEdge.coerceAtLeast(96)
+        snapshot.tileUris.forEachIndexed { index, uri ->
+            coroutineContext.ensureActive()
+            onLoad("Loading images", index.toFloat() / snapshot.tileUris.size.coerceAtLeast(1))
+            val cached = bitmapCache.get(uri.toString())
+            val bitmap = cached ?: repository.loadBitmapFromUri(uri, edge)?.also { bitmapCache.put(uri.toString(), it) }
+            if (bitmap == null) return@forEachIndexed
+            val turns = snapshot.tileQuarterTurns.getOrElse(index) { 0 } and 3
+            val oriented = if (turns == 0) bitmap else rotateBitmap(bitmap, turns).also { owned += it }
+            val token = if (turns == 0) uri.toString() else "${uri}#q$turns"
+            sources += BitmapTileSource(
+                identity = com.intrusivethots.mosaic.engine.tile.TileIdentity(
+                    uri = token,
+                    width = oriented.width,
+                    height = oriented.height,
+                    byteSize = repository.contentSize(uri),
+                    modifiedTimeMs = repository.contentModified(uri)
+                ),
+                bitmap = oriented
+            )
+        }
     }
 
     private fun estimateBytes(width: Int, height: Int, config: MosaicConfig): Long {
@@ -538,6 +573,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             customOutputWidth = preferences.getInt("outW", 0),
             customOutputHeight = preferences.getInt("outH", 0),
             lockOutputAspect = preferences.getBoolean("outLock", true),
+            mosaicKind = preferences.getString("kind", MosaicKind.GRID.name)
+                ?.let { runCatching { MosaicKind.valueOf(it) }.getOrNull() } ?: MosaicKind.GRID,
+            collage = readCollage(base.collage),
             segmentation = base.segmentation.copy(
                 maxExtractedSubjects = preferences.getInt("aiMax", base.segmentation.maxExtractedSubjects),
                 minSubjectSizePx = preferences.getInt("aiMin", base.segmentation.minSubjectSizePx),
@@ -570,6 +608,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putInt("outW", config.customOutputWidth)
             .putInt("outH", config.customOutputHeight)
             .putBoolean("outLock", config.lockOutputAspect)
+            .putString("kind", config.mosaicKind.name)
+            .putInt("pieces", config.collage.pieceCount)
+            .putFloat("smin", config.collage.minScale)
+            .putFloat("smax", config.collage.maxScale)
+            .putFloat("rdeg", config.collage.rotationRangeDegrees)
+            .putFloat("overlap", config.collage.overlap)
+            .putString("cbg", config.collage.background.name)
+            .putFloat("shapeW", config.collage.shapeWeight)
+            .putBoolean("collagePhotos", config.collage.includeSourcePhotos)
             .putInt("aiMax", config.segmentation.maxExtractedSubjects)
             .putInt("aiMin", config.segmentation.minSubjectSizePx)
             .putString("shapes", config.segmentation.allowedShapes.joinToString(",") { it.name })
@@ -598,6 +645,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putString(TILE_TURNS, encodeTileRotations(state.tileUris.map { it.toString() }, state.tileQuarterTurns))
             .apply()
     }
+
+    private fun readCollage(base: CollageSettings): CollageSettings = base.copy(
+        pieceCount = preferences.getInt("pieces", base.pieceCount),
+        minScale = preferences.getFloat("smin", base.minScale),
+        maxScale = preferences.getFloat("smax", base.maxScale),
+        rotationRangeDegrees = preferences.getFloat("rdeg", base.rotationRangeDegrees),
+        overlap = preferences.getFloat("overlap", base.overlap),
+        background = preferences.getString("cbg", base.background.name)
+            ?.let { runCatching { CollageBackground.valueOf(it) }.getOrNull() } ?: base.background,
+        shapeWeight = preferences.getFloat("shapeW", base.shapeWeight),
+        includeSourcePhotos = preferences.getBoolean("collagePhotos", base.includeSourcePhotos)
+    )
 
     private fun readShapes(): Set<SubjectShape> {
         val raw = preferences.getString("shapes", null) ?: return setOf(SubjectShape.TALL, SubjectShape.WIDE, SubjectShape.COMPACT)

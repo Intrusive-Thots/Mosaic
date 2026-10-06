@@ -52,7 +52,8 @@ fun StampsScreen(
     extracting: Boolean,
     onPick: () -> Unit,
     onRemove: (Int) -> Unit,
-    onClear: () -> Unit
+    onClear: () -> Unit,
+    onTighten: (Int) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = SurfaceDark), modifier = Modifier.fillMaxWidth()) {
@@ -64,7 +65,8 @@ fun StampsScreen(
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    "Pick a photo. On-device ML Kit isolates each subject into its own stamp. Tiny and duplicate cutouts are dropped.",
+                    "Pick a photo. On-device ML Kit isolates each subject. " +
+                        "Tiny and duplicate cutouts are dropped. Trim crops to the subject.",
                     fontSize = 13.sp,
                     color = TextSecondary
                 )
@@ -111,12 +113,19 @@ fun StampsScreen(
                         modifier = Modifier.fillMaxWidth().height(110.dp)
                     ) {
                         Box(modifier = Modifier.fillMaxSize()) {
+                            Checkerboard(Modifier.fillMaxSize())
                             Image(
                                 bitmap = stamps[index].asImageBitmap(),
                                 contentDescription = "Stamp $index",
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier.fillMaxSize().padding(6.dp)
                             )
+                            TextButton(
+                                onClick = { onTighten(index) },
+                                modifier = Modifier.align(Alignment.BottomStart)
+                            ) {
+                                Text("Trim", fontSize = 11.sp, color = AccentAmber)
+                            }
                             IconButton(
                                 onClick = { onRemove(index) },
                                 modifier = Modifier

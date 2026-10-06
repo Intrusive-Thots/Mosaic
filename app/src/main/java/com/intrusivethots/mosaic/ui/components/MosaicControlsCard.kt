@@ -25,8 +25,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.intrusivethots.mosaic.engine.config.AspectRatioPreset
 import com.intrusivethots.mosaic.engine.config.CellAspect
+import com.intrusivethots.mosaic.engine.config.CollageSettings
 import com.intrusivethots.mosaic.engine.config.LayoutMode
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
+import com.intrusivethots.mosaic.engine.config.MosaicKind
 import com.intrusivethots.mosaic.engine.config.RotationMode
 import com.intrusivethots.mosaic.engine.config.MosaicStyle
 import com.intrusivethots.mosaic.engine.config.OutputMode
@@ -64,7 +66,9 @@ fun MosaicControlsCard(
     onLayout: (LayoutMode) -> Unit,
     onRotation: (RotationMode) -> Unit,
     onScale: (Float) -> Unit,
-    onOutput: (Int, Int, Boolean) -> Unit
+    onOutput: (Int, Int, Boolean) -> Unit,
+    onKind: (MosaicKind) -> Unit,
+    onCollage: (CollageSettings) -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(20.dp),
@@ -123,6 +127,8 @@ fun MosaicControlsCard(
                     )
                 }
             }
+            HorizontalDivider(color = SurfaceVariantDark)
+            CollageControls(config, onKind, onCollage)
             HorizontalDivider(color = SurfaceVariantDark)
             GridControls(config, onColumns, onRows, onLink, onRepetition)
             HorizontalDivider(color = SurfaceVariantDark)

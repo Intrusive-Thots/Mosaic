@@ -85,6 +85,21 @@ fun comparisonConfig(): MosaicConfig = MosaicConfig(
     previewCellPixels = COMPARISON_CELL
 )
 
+fun writePng(image: PixelImage, files: List<File>) {
+    files.forEach { file ->
+        file.parentFile?.mkdirs()
+        file.outputStream().use { stream ->
+            StreamingPngWriter(stream, image.width, image.height).use { writer ->
+                val row = IntArray(image.width)
+                for (y in 0 until image.height) {
+                    System.arraycopy(image.pixels, y * image.width, row, 0, image.width)
+                    writer.writeRow(y, row)
+                }
+            }
+        }
+    }
+}
+
 fun writeSideBySide(left: PixelImage, right: PixelImage, files: List<File>) {
     val gap = 16
     val width = left.width + gap + right.width

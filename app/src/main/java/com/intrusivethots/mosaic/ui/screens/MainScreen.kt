@@ -212,7 +212,8 @@ fun MainScreen(viewModel: MainViewModel) {
                     extracting = extracting,
                     onPick = { stampPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     onRemove = viewModel::removeCustomStamp,
-                    onClear = viewModel::clearStamps
+                    onClear = viewModel::clearStamps,
+                    onTighten = viewModel::tightenStamp
                 )
                 2 -> ProjectLibraryScreen(state.projects, viewModel::deleteProject, viewModel::exportProjectToGallery)
                 else -> SettingsDialog(state.apiKey, state.keystoreAvailable, viewModel::saveApiKey)
@@ -229,5 +230,8 @@ private fun shapeEditor(viewModel: MainViewModel) = ShapeEditor(
     onLayout = viewModel::updateLayoutMode,
     onRotation = viewModel::updateRotationMode,
     onScale = viewModel::updateTargetScale,
-    onOutput = viewModel::updateCustomOutput
+    onOutput = viewModel::updateCustomOutput,
+    onKind = viewModel::updateMosaicKind,
+    onCollage = viewModel::updateCollage,
+    onRemoveStamp = viewModel::removeCustomStamp
 )

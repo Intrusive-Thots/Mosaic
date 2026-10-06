@@ -11,7 +11,9 @@ class MosaicPlan(
     val orientations: ByteArray = ByteArray(0),
     val anchors: IntArray = IntArray(0),
     val spanX: ByteArray = ByteArray(0),
-    val spanY: ByteArray = ByteArray(0)
+    val spanY: ByteArray = ByteArray(0),
+    val placements: List<CutoutPlacement> = emptyList(),
+    val coverage: Float = 0f
 ) {
     val cellCount: Int get() = columns * rows
 

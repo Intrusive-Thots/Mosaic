@@ -94,6 +94,64 @@ fun cellRect(layout: GridLayout, targetWidth: Int, targetHeight: Int, column: In
     return CellRect(originX, y0, width, height, wrapX = staggered)
 }
 
+fun planCollageOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig, preview: Boolean): OutputLayout {
+    val validated = config.validated()
+    val custom = !preview && (validated.customOutputWidth > 0 || validated.customOutputHeight > 0)
+    if (custom) {
+        val sized = fittedSize(
+            targetWidth,
+            targetHeight,
+            validated.customOutputWidth,
+            validated.customOutputHeight,
+            validated.lockOutputAspect
+        )
+        return OutputLayout(1, 1, sized.first, sized.second, false)
+    }
+    if (preview) {
+        val edge = (validated.previewCellPixels * 20).coerceIn(48, 240)
+        val longEdge = maxOf(targetWidth, targetHeight).coerceAtLeast(1)
+        val scale = if (longEdge <= edge) 1f else edge.toFloat() / longEdge.toFloat()
+        val width = (targetWidth * scale).roundToInt().coerceAtLeast(1)
+        val height = (targetHeight * scale).roundToInt().coerceAtLeast(1)
+        return OutputLayout(1, 1, width, height, false)
+    }
+    var width = targetWidth.coerceAtLeast(1)
+    var height = targetHeight.coerceAtLeast(1)
+    val pixels = width.toLong() * height.toLong()
+    if (pixels > MAX_OUTPUT_PIXELS) {
+        val scale = kotlin.math.sqrt(MAX_OUTPUT_PIXELS.toDouble() / pixels.toDouble())
+        width = (width * scale).roundToInt().coerceAtLeast(1)
+        height = (height * scale).roundToInt().coerceAtLeast(1)
+    }
+    return OutputLayout(1, 1, width, height, false)
+}
+
+private fun fittedSize(
+    targetWidth: Int,
+    targetHeight: Int,
+    requestedWidth: Int,
+    requestedHeight: Int,
+    lockAspect: Boolean
+): Pair<Int, Int> {
+    val aspect = (targetWidth.toFloat() / targetHeight.toFloat()).coerceAtLeast(1e-4f)
+    var width = requestedWidth
+    var height = requestedHeight
+    if (lockAspect) {
+        if (width > 0 && height > 0) {
+            val box = width.toFloat() / height.toFloat()
+            if (box > aspect) width = (height * aspect).roundToInt() else height = (width / aspect).roundToInt()
+        } else if (width > 0) {
+            height = (width / aspect).roundToInt()
+        } else {
+            width = (height * aspect).roundToInt()
+        }
+    } else {
+        if (width <= 0) width = (height * aspect).roundToInt()
+        if (height <= 0) height = (width / aspect).roundToInt()
+    }
+    return width.coerceAtLeast(1) to height.coerceAtLeast(1)
+}
+
 fun planOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig, preview: Boolean): OutputLayout {
     val validated = config.validated()
     val grid = planGrid(targetWidth, targetHeight, validated)

@@ -32,7 +32,9 @@ data class MosaicConfig(
     val targetScale: Float = 1f,
     val customOutputWidth: Int = 0,
     val customOutputHeight: Int = 0,
-    val lockOutputAspect: Boolean = true
+    val lockOutputAspect: Boolean = true,
+    val mosaicKind: MosaicKind = MosaicKind.GRID,
+    val collage: CollageSettings = CollageSettings()
 )
 
 enum class AspectRatioPreset(val label: String, val widthRatio: Float, val heightRatio: Float) {
@@ -163,7 +165,8 @@ fun MosaicConfig.validated(): MosaicConfig = copy(
     scoreWeights = scoreWeights.sanitized(),
     segmentation = segmentation.sanitized(),
     targetQuarterTurns = targetQuarterTurns and 3,
-    targetScale = if (targetScale.isNaN()) 1f else targetScale.coerceIn(0.25f, 1f)
+    targetScale = if (targetScale.isNaN()) 1f else targetScale.coerceIn(0.25f, 1f),
+    collage = collage.sanitized()
 )
 
 fun MosaicConfig.customSizeError(): String? {
@@ -216,6 +219,17 @@ fun MosaicConfig.matchFingerprint(targetWidth: Int, targetHeight: Int, tileToken
         append("|rot").append(rotationMode.name)
         append("|tq").append(targetQuarterTurns and 3)
         append("|scale").append((targetScale.coerceIn(0.25f, 1f) * 1000f).toInt())
+        append("|kind").append(mosaicKind.name)
+        val pieces = collage.sanitized()
+        append("|pieces").append(pieces.pieceCount)
+        append("|smin").append((pieces.minScale * 1000f).toInt())
+        append("|smax").append((pieces.maxScale * 1000f).toInt())
+        append("|rdeg").append(pieces.rotationRangeDegrees.toInt())
+        append("|ov").append((pieces.overlap * 100f).toInt())
+        append("|goal").append((pieces.coverageGoal * 100f).toInt())
+        append("|bg").append(pieces.background.name)
+        append("|sw").append((pieces.shapeWeight * 100f).toInt())
+        append("|photos").append(pieces.includeSourcePhotos)
         append("|w")
         append(weights.color).append(',')
         append(weights.luminance).append(',')

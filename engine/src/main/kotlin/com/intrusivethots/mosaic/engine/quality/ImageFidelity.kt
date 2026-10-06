@@ -27,6 +27,51 @@ fun meanCellDeltaE(rendered: PixelImage, reference: PixelImage, columns: Int, ro
  * Mean structural similarity on OKLab luminance. The reference is area-averaged to the
  * rendered size first. Windowed SSIM penalizes speckle that a single average color would hide.
  */
+/**
+ * Mean OKLab ΔE on pixels a cutout actually painted. Uncovered background is left out so a
+ * photo underlayer cannot hide a poor piece choice.
+ */
+fun maskedMeanDeltaE(rendered: PixelImage, reference: PixelImage, covered: BooleanArray): Double {
+    val aligned = align(reference, rendered.width, rendered.height)
+    var sum = 0.0
+    var count = 0
+    val limit = minOf(rendered.pixels.size, aligned.pixels.size, covered.size)
+    for (index in 0 until limit) {
+        if (!covered[index]) continue
+        sum += OkLab.distance(OkLab.fromArgb(rendered.pixels[index]), OkLab.fromArgb(aligned.pixels[index])).toDouble()
+        count++
+    }
+    return if (count == 0) 0.0 else sum / count
+}
+
+/** Luminance SSIM averaged over windows that are at least half covered by cutouts. */
+fun maskedLuminanceSsim(rendered: PixelImage, reference: PixelImage, covered: BooleanArray): Double {
+    val aligned = align(reference, rendered.width, rendered.height)
+    val width = rendered.width
+    val height = rendered.height
+    val left = luminance(rendered)
+    val right = luminance(aligned)
+    val window = 8
+    if (width < window || height < window || covered.size < width * height) {
+        return globalSsim(left, right)
+    }
+    var total = 0.0
+    var windows = 0
+    var y = 0
+    while (y + window <= height) {
+        var x = 0
+        while (x + window <= width) {
+            if (windowCoverage(covered, width, x, y, window) >= 0.5f) {
+                total += windowSsim(left, right, width, x, y, window)
+                windows++
+            }
+            x += 4
+        }
+        y += 4
+    }
+    return if (windows == 0) globalSsim(left, right) else total / windows
+}
+
 fun luminanceSsim(rendered: PixelImage, reference: PixelImage): Double {
     val aligned = if (reference.width == rendered.width && reference.height == rendered.height) {
         reference
@@ -76,6 +121,22 @@ private fun averageLab(image: PixelImage, column: Int, row: Int, columns: Int, r
     }
     val n = count.coerceAtLeast(1).toFloat()
     return OkLab.Lab((l / n).toFloat(), (a / n).toFloat(), (b / n).toFloat())
+}
+
+private fun align(reference: PixelImage, width: Int, height: Int): PixelImage {
+    if (reference.width == width && reference.height == height) return reference
+    return reference.resizeAreaAverage(width, height)
+}
+
+private fun windowCoverage(covered: BooleanArray, stride: Int, originX: Int, originY: Int, window: Int): Float {
+    var hits = 0
+    for (y in 0 until window) {
+        val row = (originY + y) * stride + originX
+        for (x in 0 until window) {
+            if (covered[row + x]) hits++
+        }
+    }
+    return hits.toFloat() / (window * window).toFloat()
 }
 
 private fun luminance(image: PixelImage): FloatArray {
