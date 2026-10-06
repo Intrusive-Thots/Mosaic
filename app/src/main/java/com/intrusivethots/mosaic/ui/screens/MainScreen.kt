@@ -37,6 +37,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import com.intrusivethots.mosaic.core.AspectRatioPreset
+import com.intrusivethots.mosaic.core.MosaicStyle
 import com.intrusivethots.mosaic.data.MosaicProject
 import com.intrusivethots.mosaic.ui.theme.*
 import java.io.File
@@ -338,23 +340,122 @@ fun StudioTab(
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "3. Settings & Quality",
+                    text = "3. Aspect Ratio & Shape Presets",
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 16.sp,
                     color = TextPrimary
                 )
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Text("Grid Columns: ${config.gridColumns}", fontSize = 13.sp, color = TextSecondary)
+                // Aspect Ratio Horizontal Chips
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(AspectRatioPreset.values().toList()) { preset ->
+                        FilterChip(
+                            selected = config.aspectRatio == preset,
+                            onClick = { viewModel.updateAspectRatio(preset) },
+                            label = { Text(preset.label, fontSize = 12.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = AccentPurple,
+                                selectedLabelColor = Color.White,
+                                containerColor = SurfaceVariantDark,
+                                labelColor = TextSecondary
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = SurfaceVariantDark)
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // AI Subject Segmentation Switch
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("AI Subject Segmentation", fontWeight = FontWeight.Medium, fontSize = 14.sp, color = TextPrimary)
+                        }
+                        Text("Extract individual people, pets & objects from photos to form varied tile shapes", fontSize = 12.sp, color = TextSecondary)
+                    }
+                    Switch(
+                        checked = config.extractSubjectsWithAi,
+                        onCheckedChange = { viewModel.toggleAiSegmentation(it) },
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AccentAmber)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = SurfaceVariantDark)
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Mosaic Layout Style
+                Text("Mosaic Pattern Layout", fontSize = 13.sp, color = TextSecondary)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MosaicStyle.values().forEach { style ->
+                        FilterChip(
+                            selected = config.mosaicStyle == style,
+                            onClick = { viewModel.updateMosaicStyle(style) },
+                            label = { Text(style.label, fontSize = 12.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = AccentPink,
+                                selectedLabelColor = Color.White,
+                                containerColor = SurfaceVariantDark,
+                                labelColor = TextSecondary
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                HorizontalDivider(color = SurfaceVariantDark)
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Columns Slider
+                Text("Columns: ${config.gridColumns}", fontSize = 13.sp, color = TextSecondary)
                 Slider(
                     value = config.gridColumns.toFloat(),
                     onValueChange = { viewModel.updateGridColumns(it.toInt()) },
-                    valueRange = 20f..80f,
-                    steps = 12,
+                    valueRange = 15f..100f,
+                    steps = 16,
                     colors = SliderDefaults.colors(thumbColor = AccentPurple, activeTrackColor = AccentPurple)
                 )
 
-                Spacer(modifier = Modifier.height(4.dp))
+                // Row Linking Toggle & Row Slider
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Auto-link Rows to Aspect Ratio", fontSize = 13.sp, color = TextSecondary)
+                    Switch(
+                        checked = config.linkAspectToGrid,
+                        onCheckedChange = { viewModel.toggleLinkAspect(it) },
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AccentPurple)
+                    )
+                }
+
+                if (!config.linkAspectToGrid) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("Custom Rows: ${config.gridRows}", fontSize = 13.sp, color = TextSecondary)
+                    Slider(
+                        value = config.gridRows.toFloat(),
+                        onValueChange = { viewModel.updateGridRows(it.toInt()) },
+                        valueRange = 15f..100f,
+                        steps = 16,
+                        colors = SliderDefaults.colors(thumbColor = AccentPurple, activeTrackColor = AccentPurple)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
                 Text("Color Blending Tint: ${(config.colorMatchWeight * 100).toInt()}%", fontSize = 13.sp, color = TextSecondary)
                 Slider(
                     value = config.colorMatchWeight,
@@ -367,6 +468,11 @@ fun StudioTab(
 
         // Progress indicator
         when (genState) {
+            is GenerationState.SegmentingSubjects -> {
+                val state = genState as GenerationState.SegmentingSubjects
+                val p = state.current.toFloat() / state.total.toFloat()
+                ProgressBanner("AI Segmenting image ${state.current} of ${state.total}...", p)
+            }
             is GenerationState.AnalyzingTiles -> {
                 val p = (genState as GenerationState.AnalyzingTiles).progress
                 ProgressBanner("Analyzing tile color profiles...", p)

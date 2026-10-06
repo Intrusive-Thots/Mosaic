@@ -7,13 +7,35 @@ import android.graphics.Paint
 import android.graphics.Rect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
+enum class AspectRatioPreset(val label: String, val widthRatio: Float, val heightRatio: Float) {
+    ORIGINAL("Original", 0f, 0f),
+    SQUARE_1_1("1:1", 1f, 1f),
+    PHOTO_4_3("4:3", 4f, 3f),
+    PORTRAIT_3_4("3:4", 3f, 4f),
+    WIDESCREEN_16_9("16:9", 16f, 9f),
+    STORY_9_16("9:16", 9f, 16f),
+    CLASSIC_3_2("3:2", 3f, 2f),
+    PORTRAIT_4_5("4:5", 4f, 5f)
+}
+
+enum class MosaicStyle(val label: String) {
+    GRID("Standard Grid"),
+    STAGGERED_BRICK("Staggered Bricks")
+}
+
 data class MosaicConfig(
+    val aspectRatio: AspectRatioPreset = AspectRatioPreset.ORIGINAL,
     val gridColumns: Int = 40,
-    val colorMatchWeight: Float = 0.85f, // 0..1 balance between tile image and color blending
+    val gridRows: Int = 40,
+    val linkAspectToGrid: Boolean = true,
+    val colorMatchWeight: Float = 0.80f,
     val allowTileRepetition: Boolean = true,
-    val maxRepetitionDistance: Int = 3
+    val maxRepetitionDistance: Int = 3,
+    val extractSubjectsWithAi: Boolean = false,
+    val mosaicStyle: MosaicStyle = MosaicStyle.GRID
 )
 
 data class TileAnalysis(
@@ -32,6 +54,7 @@ class MosaicEngine {
 
     /**
      * Pre-computes average colors and normalized thumbnails for a set of tile images.
+     * Takes transparency/alpha into consideration so AI cutouts only compute color of visible pixels.
      */
     suspend fun analyzeTileImages(
         bitmaps: List<Bitmap>,
@@ -50,12 +73,33 @@ class MosaicEngine {
     }
 
     /**
+     * Crops or adjusts target image to specified aspect ratio preset if not ORIGINAL.
+     */
+    fun cropToAspectRatio(source: Bitmap, preset: AspectRatioPreset): Bitmap {
+        if (preset == AspectRatioPreset.ORIGINAL || preset.widthRatio <= 0f) return source
+
+        val targetRatio = preset.widthRatio / preset.heightRatio
+        val srcRatio = source.width.toFloat() / source.height.toFloat()
+
+        var cropWidth = source.width
+        var cropHeight = source.height
+
+        if (srcRatio > targetRatio) {
+            // Source is wider than target ratio: crop sides
+            cropWidth = (source.height * targetRatio).roundToInt().coerceAtMost(source.width)
+        } else {
+            // Source is taller than target ratio: crop top/bottom
+            cropHeight = (source.width / targetRatio).roundToInt().coerceAtMost(source.height)
+        }
+
+        val startX = ((source.width - cropWidth) / 2).coerceAtLeast(0)
+        val startY = ((source.height - cropHeight) / 2).coerceAtLeast(0)
+
+        return Bitmap.createBitmap(source, startX, startY, cropWidth, cropHeight)
+    }
+
+    /**
      * Generates a preview or full mosaic.
-     * @param targetImage The main base image to recreate.
-     * @param tiles Analyzed small images to compose the mosaic.
-     * @param isPreview If true, computes at a lightweight lower resolution to save memory and battery.
-     * @param config Grid and blending settings.
-     * @param onProgress Callback providing percent done from 0.0 to 1.0.
      */
     suspend fun generateMosaic(
         targetImage: Bitmap,
@@ -66,38 +110,57 @@ class MosaicEngine {
     ): Bitmap = withContext(Dispatchers.Default) {
         if (tiles.isEmpty()) return@withContext targetImage
 
-        val cols = if (isPreview) (config.gridColumns / 2).coerceAtLeast(10) else config.gridColumns
-        val tileWidth = targetImage.width / cols
-        if (tileWidth <= 0) return@withContext targetImage
+        val croppedTarget = cropToAspectRatio(targetImage, config.aspectRatio)
 
-        val rows = (targetImage.height / tileWidth).coerceAtLeast(1)
-        val renderWidth = cols * tileWidth
-        val renderHeight = rows * tileWidth
+        val cols = if (isPreview) (config.gridColumns / 2).coerceAtLeast(10) else config.gridColumns
+        val rows = if (config.linkAspectToGrid) {
+            // Proportional square tile calculation
+            val tileW = (croppedTarget.width / cols).coerceAtLeast(1)
+            (croppedTarget.height / tileW).coerceAtLeast(1)
+        } else {
+            if (isPreview) (config.gridRows / 2).coerceAtLeast(10) else config.gridRows
+        }
+
+        val cellWidth = croppedTarget.width / cols
+        val cellHeight = croppedTarget.height / rows
+        if (cellWidth <= 0 || cellHeight <= 0) return@withContext croppedTarget
+
+        val renderWidth = cols * cellWidth
+        val renderHeight = rows * cellHeight
 
         val outputBitmap = Bitmap.createBitmap(renderWidth, renderHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(outputBitmap)
         val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
         val tintPaint = Paint()
 
-        val recentUsages = mutableMapOf<Int, Pair<Int, Int>>() // tileIndex -> (col, row)
+        val recentUsages = mutableMapOf<Int, Pair<Int, Int>>()
         val totalCells = (cols * rows).toFloat()
         var processed = 0
 
-        for (row in 0 until rows) {
-            for (col in 0 until cols) {
-                val startX = col * tileWidth
-                val startY = row * tileWidth
+        val isStaggered = config.mosaicStyle == MosaicStyle.STAGGERED_BRICK
 
-                // Sample average color of target cell
+        for (row in 0 until rows) {
+            val rowOffset = if (isStaggered && (row % 2 != 0)) (cellWidth / 2) else 0
+            for (col in 0 until cols) {
+                var startX = col * cellWidth + rowOffset
+                val startY = row * cellHeight
+
+                // Wrap or clamp staggered edges cleanly
+                if (startX >= renderWidth) {
+                    startX -= renderWidth
+                }
+
+                val actualW = cellWidth.coerceAtMost(croppedTarget.width - startX)
+                val actualH = cellHeight.coerceAtMost(croppedTarget.height - startY)
+
                 val (tRed, tGreen, tBlue) = sampleRegionAverage(
-                    targetImage,
+                    croppedTarget,
                     startX,
                     startY,
-                    tileWidth,
-                    tileWidth
+                    actualW,
+                    actualH
                 )
 
-                // Find closest matching tile
                 val bestTile = findBestTile(
                     tRed, tGreen, tBlue,
                     tiles,
@@ -108,11 +171,9 @@ class MosaicEngine {
 
                 recentUsages[bestTile.originalIndex] = Pair(col, row)
 
-                // Draw tile scaled into the destination cell
-                val destRect = Rect(startX, startY, startX + tileWidth, startY + tileWidth)
+                val destRect = Rect(startX, startY, (startX + cellWidth).coerceAtMost(renderWidth), (startY + cellHeight).coerceAtMost(renderHeight))
                 canvas.drawBitmap(bestTile.thumbnail, null, destRect, paint)
 
-                // Overlay color tint blending if specified
                 if (config.colorMatchWeight > 0f) {
                     val alpha = (config.colorMatchWeight * 160).toInt().coerceIn(0, 255)
                     tintPaint.color = Color.argb(alpha, tRed, tGreen, tBlue)
@@ -143,7 +204,6 @@ class MosaicEngine {
         var best = tiles[0]
 
         for (tile in tiles) {
-            // Check spatial distance penalty if repetition reduction is enabled
             if (!config.allowTileRepetition) {
                 val lastPos = recentUsages[tile.originalIndex]
                 if (lastPos != null) {
@@ -152,13 +212,11 @@ class MosaicEngine {
                          (row - lastPos.second) * (row - lastPos.second)).toDouble()
                     )
                     if (dist < config.maxRepetitionDistance) {
-                        continue // skip closely repeated tile
+                        continue
                     }
                 }
             }
 
-            // Perceptually weighted Euclidean RGB color distance
-            // 2*ΔR² + 4*ΔG² + 3*ΔB² (standard human eye sensitivity approximation)
             val dR = targetR - tile.avgRed
             val dG = targetG - tile.avgGreen
             val dB = targetB - tile.avgBlue
@@ -182,14 +240,19 @@ class MosaicEngine {
         var totalR = 0L
         var totalG = 0L
         var totalB = 0L
-        val count = pixels.size
+        var count = 0
 
         for (pixel in pixels) {
-            totalR += Color.red(pixel)
-            totalG += Color.green(pixel)
-            totalB += Color.blue(pixel)
+            val alpha = Color.alpha(pixel)
+            if (alpha > 40) { // Ignore transparent pixels from AI cutouts
+                totalR += Color.red(pixel)
+                totalG += Color.green(pixel)
+                totalB += Color.blue(pixel)
+                count++
+            }
         }
 
+        if (count == 0) return Triple(128, 128, 128)
         return Triple(
             (totalR / count).toInt(),
             (totalG / count).toInt(),
@@ -208,7 +271,6 @@ class MosaicEngine {
         val actualH = h.coerceAtMost(bitmap.height - startY)
         if (actualW <= 0 || actualH <= 0) return Triple(0, 0, 0)
 
-        // Step sampling to stay extremely fast without copying huge pixel arrays
         val step = (actualW / 8).coerceAtLeast(1)
         var totalR = 0L
         var totalG = 0L
