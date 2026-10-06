@@ -35,7 +35,7 @@ class MosaicRenderer(
     ) {
         val stack = config.validated().effectiveStack()
         if (stack == HybridStack.GRID_UNDER || stack == HybridStack.COLLAGE_UNDER) {
-            renderHybrid(plan, descriptors, thumbnails, layout, config, sink, target, stack, onProgress)
+            renderHybrid(plan, descriptors, thumbnails, layout, config, sink, target, stack, coverage, onProgress)
             return
         }
         if (plan.placements.isNotEmpty() && stack.usesCollage()) {
@@ -227,6 +227,7 @@ class MosaicRenderer(
         sink: RowSink,
         target: PixelImage?,
         stack: HybridStack,
+        coverage: BooleanArray?,
         onProgress: (Float) -> Unit
     ) {
         val collageOnTop = stack == HybridStack.GRID_UNDER
@@ -241,12 +242,12 @@ class MosaicRenderer(
             if (y % 8 == 0) coroutineContext.ensureActive()
             if (collageOnTop) {
                 fillUniformRow(plan, descriptors, thumbnails, layout, config, y, row)
-                paintCutouts(row, y, sprites, config, layout.width)
+                paintCutouts(row, y, sprites, config, layout.width, coverage)
             } else {
                 collageRenderer.paintBackground(row, y, layout.width, layout.height, target, useTarget, mean)
-                paintCutouts(row, y, sprites, config, layout.width)
+                paintCutouts(row, y, sprites, config, layout.width, coverage)
                 fillUniformRow(plan, descriptors, thumbnails, layout, config, y, gridRow)
-                overlayGrid(row, gridRow, y, layout, grout)
+                overlayGrid(row, gridRow, y, layout, grout, coverage)
             }
             sink.writeRow(y, row)
             val percent = ((y + 1) * 100) / layout.height
@@ -262,21 +263,30 @@ class MosaicRenderer(
         y: Int,
         sprites: List<CollageRenderer.Sprite>,
         config: MosaicConfig,
-        width: Int
+        width: Int,
+        coverage: BooleanArray?
     ) {
         for (sprite in sprites) {
             if (config.collage.separatePieces) collageRenderer.paintShadow(row, y, sprite, width)
             if (y < sprite.draw.top || y > sprite.draw.bottom) continue
-            collageRenderer.paintSprite(row, y, sprite, config, null, width)
+            collageRenderer.paintSprite(row, y, sprite, config, coverage, width)
         }
     }
 
-    private fun overlayGrid(row: IntArray, gridRow: IntArray, y: Int, layout: OutputLayout, grout: Int) {
+    private fun overlayGrid(
+        row: IntArray,
+        gridRow: IntArray,
+        y: Int,
+        layout: OutputLayout,
+        grout: Int,
+        coverage: BooleanArray?
+    ) {
         val dy = y % layout.cellHeight
         if (dy < grout) return
         for (x in row.indices) {
             if (x % layout.cellWidth < grout) continue
             row[x] = gridRow[x]
+            if (coverage != null) coverage[y * layout.width + x] = false
         }
     }
 

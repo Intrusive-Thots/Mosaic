@@ -9,6 +9,7 @@ import com.intrusivethots.mosaic.engine.config.OutputMode
 import com.intrusivethots.mosaic.engine.config.QualityPreset
 import com.intrusivethots.mosaic.engine.config.RenderMode
 import com.intrusivethots.mosaic.engine.config.applyTo
+import com.intrusivethots.mosaic.engine.config.restyle
 import com.intrusivethots.mosaic.engine.config.collageLongEdge
 import com.intrusivethots.mosaic.engine.config.outputLimitError
 import com.intrusivethots.mosaic.engine.config.planCollageOutput

@@ -8,6 +8,7 @@ import com.intrusivethots.mosaic.engine.collageConfig
 import com.intrusivethots.mosaic.engine.config.CellAspect
 import com.intrusivethots.mosaic.engine.config.CollageBackground
 import com.intrusivethots.mosaic.engine.config.CollageSettings
+import com.intrusivethots.mosaic.engine.config.HybridStack
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.MosaicKind
 import com.intrusivethots.mosaic.engine.config.RenderMode
@@ -72,8 +73,9 @@ fun main() = runBlocking {
     val results = cases.map { runCase(it) }
     val shape = runShapeCase()
     runCollageCase(40, 24)
-    val collage = listOf(200 to 160, 600 to 280).map { (tiles, pieces) -> runCollageCase(tiles, pieces) }
-    val report = renderReport(results, shape, collage)
+    val collage = listOf(200 to 160, 600 to 280, 400 to 900).map { (tiles, pieces) -> runCollageCase(tiles, pieces) }
+    val hybrid = runHybridCase()
+    val report = renderReport(results, shape, collage, hybrid)
     listOf(
         File("engine/build/reports/benchmarks/results.md"),
         File("docs/benchmarks/results.md")
@@ -84,6 +86,7 @@ fun main() = runBlocking {
     println(report)
     writeComparison()
     writeCollageSample()
+    writeFeatureImages()
 }
 
 private suspend fun runCase(
@@ -309,7 +312,7 @@ private suspend fun runCollageCase(tileCount: Int, pieceCount: Int): BenchResult
 private suspend fun writeCollageSample() {
     val target = portrait(280, 180)
     val count = 240
-    val config = collageConfig(pieceCount = 320, seed = 4).copy(candidateCount = 12, descriptorMaxEdge = 28)
+    val config = fixedCanvas(320, target.width, target.height)
     val coordinator = com.intrusivethots.mosaic.engine.coord.GenerationCoordinator()
     val organic = (0 until count).map { index -> MemoryTileSource(organicCutout(index, count, 36), "sample-$index") }
     val result = coordinator.generate(target, organic, config, preview = false)
@@ -325,7 +328,14 @@ private suspend fun writeCollageSample() {
     val scores = paintedScores(image, target, result, organic.map { it.loadThumbnail(128) }, config)
     val photoScores = paintedScores(photoImage, target, photo, photos.map { it.loadThumbnail(128) }, config)
     val previousScores = scoreImage(previous, target, coverageAgainstMean(previous, target))
-    val note = sampleNote(result.plan.placements.size, photo.plan.placements.size, scores, previousScores, photoScores)
+    val note = sampleNote(
+        result.plan.placements.size,
+        photo.plan.placements.size,
+        scores,
+        previousScores,
+        photoScores,
+        faceNote(previous, image, target)
+    )
     File("docs/benchmarks/results.md").appendText(note)
     File("engine/build/reports/benchmarks/results.md").appendText(note)
     println(note)
@@ -369,7 +379,8 @@ private fun sampleNote(
     photoPlaced: Int,
     organic: SampleScores,
     previous: SampleScores,
-    photo: SampleScores
+    photo: SampleScores,
+    faces: String
 ): String = buildString {
     appendLine()
     appendLine("Sample collage on the portrait scene, 240 cutouts, 320 requested, seed 4, mean-color background.")
@@ -378,6 +389,7 @@ private fun sampleNote(
     appendLine("The photo textures are generated in this repository. They are not third-party photographs.")
     appendLine("The previous collage is the committed output from the residual placer before the detail pass.")
     appendLine("Its edge score uses pixels that differ from the target mean color, because that file has no coverage mask.")
+    appendLine("Output is locked to 280×180 so this row lines up with the previous residual file.")
     appendLine("Masked scores count only pixels a cutout painted. Edge ΔE is the top quarter of reference luminance gradients.")
     appendLine()
     appendLine("| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Pixels painted |")
@@ -393,6 +405,7 @@ private fun sampleNote(
     append("${fmt(photo.maskedDelta)} | ${fmt(photo.maskedSsim)} | ${fmt(photo.edgeDelta)} | ")
     appendLine("${pct(photo.painted)} |")
     appendLine()
+    append(faces)
 }
 
 private fun fmt(value: Double) = "%.4f".format(value)
@@ -439,7 +452,12 @@ private fun coverageAgainstMean(image: PixelImage, target: PixelImage): BooleanA
     }
 }
 
-private fun renderReport(results: List<BenchResult>, shape: BenchResult, collage: List<BenchResult>): String = buildString {
+private fun renderReport(
+    results: List<BenchResult>,
+    shape: BenchResult,
+    collage: List<BenchResult>,
+    hybrid: BenchResult
+): String = buildString {
     appendLine("# Engine benchmarks")
     appendLine()
     appendLine("JVM run with synthetic tiles (unique hues, 16 px thumbnails, 12 px render cells).")
@@ -483,7 +501,9 @@ private fun renderReport(results: List<BenchResult>, shape: BenchResult, collage
     appendLine()
     appendLine("Each placement queries the OKLab index once. Large pieces land first. A finer pass adds small pieces")
     appendLine("on edges, including over a pixel that is already covered when that lowers the error.")
+    appendLine("Shape agreement re-ranks that short list. It does not scan the library again.")
     appendLine("Full scan is requested pieces × cutouts × 12 angles.")
+    appendLine("The 900-piece row uses the same scale range as the rows above, so the extra time is the larger budget.")
     appendLine()
     appendLine("| Cutouts | Requested | Placed | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full scan | Note |")
     appendLine("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |")
@@ -498,6 +518,17 @@ private fun renderReport(results: List<BenchResult>, shape: BenchResult, collage
         append("${result.probes} | $naiveScan | ${result.note} |")
         appendLine()
     }
+    appendLine()
+    appendLine("## Hybrid stack")
+    appendLine()
+    appendLine("Grid under collage on a 160×100 gradient, 200 cutouts, 160 pieces, 20×12 grid, custom 160×100 output.")
+    appendLine("Time includes grid matching, collage placement, and the stacked render.")
+    appendLine()
+    appendLine("| Cutouts | Requested | Placed | Total ms | Probes | Note |")
+    appendLine("| ---: | ---: | ---: | ---: | ---: | --- |")
+    append("| ${hybrid.tiles} | ${hybrid.columns} | ${hybrid.rows} | ")
+    append("%.1f".format(hybrid.totalMs)).append(" | ${hybrid.probes} | ${hybrid.note} |")
+    appendLine()
 }
 
 private suspend fun writeComparison() {
@@ -529,3 +560,213 @@ private suspend fun writeComparison() {
 }
 
 private fun Long.ms(): Double = this / 1_000_000.0
+
+private fun fixedCanvas(pieces: Int, width: Int, height: Int) = collageConfig(pieceCount = pieces, seed = 4).copy(
+    candidateCount = 12,
+    descriptorMaxEdge = 28,
+    customOutputWidth = width,
+    customOutputHeight = height,
+    lockOutputAspect = true
+)
+
+private data class TimedRender(
+    val image: PixelImage,
+    val result: com.intrusivethots.mosaic.engine.coord.GenerationResult,
+    val ms: Double
+)
+
+private suspend fun generateTimed(
+    coordinator: com.intrusivethots.mosaic.engine.coord.GenerationCoordinator,
+    target: PixelImage,
+    sources: List<MemoryTileSource>,
+    config: MosaicConfig
+): TimedRender {
+    lateinit var result: com.intrusivethots.mosaic.engine.coord.GenerationResult
+    val ms = measureNanoTime {
+        result = coordinator.generate(target, sources, config, preview = false)
+    }.ms()
+    return TimedRender(result.image ?: error("Collage produced no image."), result, ms)
+}
+
+private suspend fun runHybridCase(): BenchResult {
+    val tileCount = 200
+    val pieceCount = 160
+    val config = collageConfig(pieceCount, seed = 1).copy(
+        collage = CollageSettings(
+            pieceCount = pieceCount,
+            minScale = 0.04f,
+            maxScale = 0.18f,
+            rotationRangeDegrees = 18f,
+            overlap = 0.4f,
+            coverageGoal = 0.99f,
+            background = CollageBackground.MEAN_COLOR,
+            shapeWeight = 0.3f,
+            stack = HybridStack.GRID_UNDER
+        ),
+        descriptorMaxEdge = 16,
+        candidateCount = 12,
+        mosaicKind = MosaicKind.COLLAGE,
+        renderMode = RenderMode.ORIGINAL,
+        colorMatchWeight = 0f,
+        gridColumns = 20,
+        gridRows = 12,
+        customOutputWidth = 160,
+        customOutputHeight = 100
+    )
+    val sources = List(tileCount) { index -> MemoryTileSource(organicCutout(index, tileCount, 28), "hybrid-$index") }
+    val coordinator = com.intrusivethots.mosaic.engine.coord.GenerationCoordinator()
+    lateinit var generated: com.intrusivethots.mosaic.engine.coord.GenerationResult
+    val totalMs = measureNanoTime {
+        generated = coordinator.generate(gradient(160, 100), sources, config, preview = false)
+    }.ms()
+    println("hybrid $tileCount / $pieceCount: total ${"%.1f".format(totalMs)} ms, probes ${generated.probes}")
+    return BenchResult(
+        tiles = tileCount,
+        columns = pieceCount,
+        rows = generated.plan.placements.size,
+        loadMs = 0.0,
+        analyzeMs = 0.0,
+        indexMs = 0.0,
+        matchMs = totalMs,
+        renderMs = 0.0,
+        totalMs = totalMs,
+        probes = generated.probes,
+        comparisons = generated.comparisons,
+        heapMb = 0.0,
+        note = "grid under collage"
+    )
+}
+
+private suspend fun writeFeatureImages() {
+    val target = portrait(280, 180)
+    val count = 240
+    val organic = (0 until count).map { index -> MemoryTileSource(organicCutout(index, count, 36), "feature-$index") }
+    val thumbs = organic.map { it.loadThumbnail(128) }
+    val coordinator = com.intrusivethots.mosaic.engine.coord.GenerationCoordinator()
+    val fair = fixedCanvas(320, target.width, target.height)
+    val colorConfig = fair.copy(collage = fair.collage.copy(shapeWeight = 0f))
+    val shapedConfig = fair.copy(collage = fair.collage.copy(shapeWeight = 0.9f))
+    val colorOnly = generateTimed(coordinator, target, organic, colorConfig)
+    val shaped = generateTimed(coordinator, target, organic, shapedConfig)
+    writeRowOf(
+        listOf(target, colorOnly.image, shaped.image),
+        listOf(File("docs/images/cutout-shape-compare.png"), File("/opt/cursor/artifacts/cutout-shape-compare.png"))
+    )
+    val denseConfig = fair.copy(
+        collage = fair.collage.copy(pieceCount = 1200, minScale = 0.02f, maxScale = 0.11f, refineSteps = 14),
+        customOutputWidth = 560,
+        customOutputHeight = 360
+    )
+    val dense = generateTimed(coordinator, target, organic, denseConfig)
+    writePng(
+        dense.image,
+        listOf(File("docs/images/cutout-collage-dense.png"), File("/opt/cursor/artifacts/cutout-collage-dense.png"))
+    )
+    val grid = fair.copy(gridColumns = 20, gridRows = 13)
+    val underConfig = grid.copy(collage = grid.collage.copy(stack = HybridStack.GRID_UNDER))
+    val overConfig = grid.copy(collage = grid.collage.copy(stack = HybridStack.COLLAGE_UNDER))
+    val cutouts = generateTimed(coordinator, target, organic, grid)
+    val under = generateTimed(coordinator, target, organic, underConfig)
+    val over = generateTimed(coordinator, target, organic, overConfig)
+    writeRowOf(
+        listOf(cutouts.image, under.image, over.image),
+        listOf(File("docs/images/cutout-hybrid.png"), File("/opt/cursor/artifacts/cutout-hybrid.png"))
+    )
+    writeStudioMock(listOf(File("docs/images/studio-phone-mock.png"), File("/opt/cursor/artifacts/studio-phone-mock.png")))
+    val note = featureNote(
+        thumbs, target, colorOnly, colorConfig, shaped, shapedConfig, dense, denseConfig, under, underConfig, over, overConfig
+    )
+    appendBench(note)
+}
+
+private suspend fun featureNote(
+    thumbs: List<PixelImage>,
+    target: PixelImage,
+    colorOnly: TimedRender,
+    colorConfig: MosaicConfig,
+    shaped: TimedRender,
+    shapedConfig: MosaicConfig,
+    dense: TimedRender,
+    denseConfig: MosaicConfig,
+    under: TimedRender,
+    underConfig: MosaicConfig,
+    over: TimedRender,
+    overConfig: MosaicConfig
+): String {
+    val colorScores = paintedScores(colorOnly.image, target, colorOnly.result, thumbs, colorConfig)
+    val shapeScores = paintedScores(shaped.image, target, shaped.result, thumbs, shapedConfig)
+    val denseScores = paintedScores(dense.image, target, dense.result, thumbs, denseConfig)
+    val underScores = paintedScores(under.image, target, under.result, thumbs, underConfig)
+    val overScores = paintedScores(over.image, target, over.result, thumbs, overConfig)
+    return buildString {
+        appendLine()
+        appendLine("## Shape, density, and hybrid")
+        appendLine()
+        appendLine("Same portrait and 240 organic cutouts, seed 4, correction off, mean-color background.")
+        appendLine("Color-only sets shape weight to 0. Shape-aware sets it to 0.9. Both stay at 280×180 and 320 pieces.")
+        appendLine("docs/images/cutout-shape-compare.png is the target, color-only, then shape-aware.")
+        appendLine("Dense coverage asks for 1,200 pieces at the High Quality scale range (2–11%) on a 560×360 canvas.")
+        appendLine("docs/images/cutout-hybrid.png is cutouts only, grid under collage, then collage under grid, all 280×180.")
+        appendLine("docs/images/studio-phone-mock.png is a labeled layout mock of the phone Studio. It is not a device screenshot.")
+        appendLine()
+        appendLine("| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Generate ms |")
+        appendLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+        appendScore("Color only", colorScores, colorOnly.ms)
+        appendScore("Shape-aware", shapeScores, shaped.ms)
+        appendScore("Dense 1200", denseScores, dense.ms)
+        appendScore("Grid under collage", underScores, under.ms)
+        appendScore("Collage under grid", overScores, over.ms)
+        appendLine()
+    }
+}
+
+private fun StringBuilder.appendScore(label: String, scores: SampleScores, ms: Double) {
+    append("| $label | ${fmt(scores.wholeDelta)} | ${fmt(scores.wholeSsim)} | ")
+    append("${fmt(scores.maskedDelta)} | ${fmt(scores.maskedSsim)} | ${fmt(scores.edgeDelta)} | ")
+    appendLine("${pct(scores.painted)} | ${"%.0f".format(ms)} |")
+}
+
+private fun faceNote(previous: PixelImage, current: PixelImage, target: PixelImage): String {
+    val windows = listOf(
+        "Left eye" to intArrayOf(108, 64, 125, 75),
+        "Right eye" to intArrayOf(144, 64, 161, 75),
+        "Mouth" to intArrayOf(120, 82, 148, 92),
+        "Cheek" to intArrayOf(148, 76, 168, 88)
+    )
+    return buildString {
+        appendLine("Mean absolute RGB error in face windows on the 280×180 canvas, previous residual versus this run.")
+        windows.forEach { (name, box) ->
+            val before = regionMae(previous, target, box)
+            val after = regionMae(current, target, box)
+            appendLine("- $name: ${"%.1f".format(before)} → ${"%.1f".format(after)}")
+        }
+        appendLine()
+    }
+}
+
+private fun regionMae(image: PixelImage, target: PixelImage, box: IntArray): Double {
+    var sum = 0.0
+    var count = 0
+    for (y in box[1]..box[3]) {
+        if (y !in 0 until image.height || y !in 0 until target.height) continue
+        for (x in box[0]..box[2]) {
+            if (x !in 0 until image.width || x !in 0 until target.width) continue
+            val rendered = image.pixels[y * image.width + x]
+            val reference = target.pixels[y * target.width + x]
+            sum += channelGap(rendered, reference, 16)
+            sum += channelGap(rendered, reference, 8)
+            sum += channelGap(rendered, reference, 0)
+            count++
+        }
+    }
+    return if (count == 0) 0.0 else sum / (count * 3.0)
+}
+
+private fun channelGap(left: Int, right: Int, shift: Int): Int =
+    kotlin.math.abs(((left ushr shift) and 255) - ((right ushr shift) and 255))
+
+private fun appendBench(note: String) {
+    File("docs/benchmarks/results.md").appendText(note)
+    File("engine/build/reports/benchmarks/results.md").appendText(note)
+    println(note)
+}
