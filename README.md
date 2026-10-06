@@ -57,7 +57,11 @@ Uniform cells that follow the grid are still the default, and center-crop and fi
 
 Grid mosaics are still the default. Cutout collage is a separate mode. A tile in that mode is an arbitrary shape with a transparent background: a person, a flower, an object, not a rectangle. Pieces may overlap. Large pieces go down first. Edges and later pieces are smaller, so a face is not covered by one blob.
 
-The engine does not search every cutout at every pixel. It keeps a low-resolution residual of OKLab error against the target, starting from a flat mean-color background. Each placement picks the cell that is still most wrong, asks the existing OKLab index for a short candidate list, and scores only those candidates. A candidate is kept only when its masked colors reduce that error, including the damage it would do to pixels that are already close, and only when it covers some pixels that are still open. Each candidate is tried at a bounded set of angles inside the rotation range (15° steps up to ±90°, 20° steps beyond that, at most about a dozen angles). Scale follows the local edge strength and how far the run has progressed, then shrinks further if that cell keeps rejecting pieces. Placement stops when the painted coverage goal is met and the error stops falling, or when the piece budget is used. It does not stop because a coarse grid filled up. The seed makes the order deterministic, so preview and the full render share a plan. Output size is not part of that plan.
+The engine does not search every cutout at every pixel. It keeps a low-resolution residual of OKLab error against the target, starting from a flat mean-color background. Each placement picks the cell that is still most wrong, asks the existing OKLab index for a short candidate list, and scores only those candidates. A candidate is kept only when its masked colors reduce that error, including the damage it would do to pixels that are already close, and only when it covers some pixels that are still open. Each candidate is tried at a bounded set of angles inside the rotation range (15° steps up to ±90°, 20° steps beyond that, at most about a dozen angles). The detail pass also tries the local edge direction. Scale follows the local edge strength and how far the run has progressed, then shrinks further if that cell keeps rejecting pieces.
+
+About a fifth of the budget is a second pass on a finer residual (long edge 200). Those pieces are smaller and may cover a pixel that is already painted when that lowers the error. A short final pass, about 8% of the budget and only when the budget is large enough, ranks cells by their worst pixel and matches that peak color with a smaller piece, so an eye is not averaged into the surrounding skin. After placement, up to a few of the worst pieces are nudged or rotated in place, and the new pose is kept only when the whole residual drops. The same tile stays, so repetition counts do not change. The seed makes the order deterministic, so preview and the full render share a plan. Output size is not part of that plan. Placement does not stop because a coarse grid filled up.
+
+While pieces land, the coordinator renders a small preview twice: after the large pieces, and again after the fine pass. The progress label changes with the stage. Cancel still stops the loop. The full export is the same chunked scanline renderer as before.
 
 What a descriptor stores for a cutout, in addition to the usual OKLab color, histogram, and spatial grid:
 
@@ -67,22 +71,22 @@ What a descriptor stores for a cutout, in addition to the usual OKLab color, his
 
 Rotation of a candidate remaps that mask. It does not rotate the bitmap until the renderer samples it. Repetition and the usage penalty count the source cutout, not each angle.
 
-Rendering writes scanlines. The default background is the target's mean color, not the target photo. The target photo is still available as an explicit background if you want it under the gaps. Cutouts are alpha-composited in order. Sampling is bilinear in premultiplied alpha, so a transparent texel adds no color and the silhouette feathers without a halo. Color correction, when it is on, shifts the piece toward the target region it covers and keeps the piece's alpha. The published sample leaves correction off, so the cutouts' own colors have to rebuild the picture. The same 24-megapixel and 2.5-megapixel in-memory limits apply. There is no `android:largeHeap`.
+Rendering writes scanlines. The default background is the target's mean color, not the target photo. The target photo is still available as an explicit background if you want it under the gaps. Cutouts are alpha-composited in order, large pieces first, so later detail sits on top. Sampling is bilinear in premultiplied alpha, so a transparent texel adds no color and the silhouette feathers without a halo. Color correction, when it is on, shifts chroma toward the covered target and moves luminance only part of the way, so the cutout's own shading stays. Strength 0 leaves the pixel unchanged. An optional Separate pieces switch draws a short dark offset under each cutout. It is off by default and does not change which piece is chosen. The published sample leaves correction off, so the cutouts' own colors have to rebuild the picture. The same 24-megapixel and 2.5-megapixel in-memory limits apply. There is no `android:largeHeap`.
 
-Limits: 4 to 1,200 placements, scale from 3% to 90% of the target's short side, rotation from 0° to ±180°. The default asks for 320 pieces, from 4% to 18% of the short side, and keeps going until about 99% of the analysis picture is painted. Collage mode uses the Stamps tab and automatic extraction. Full photos are included only when you turn that on, or when no cutout could be loaded. On the stamp itself, Trim raises the alpha cutoff and crops to the remaining subject. Removing a stamp drops it from the pool. ML Kit still has no person or object labels, and it still needs the on-device model.
+Limits: 4 to 1,200 placements, scale from 3% to 90% of the target's short side, rotation from 0° to ±180°. The default asks for 320 pieces, from 4% to 18% of the short side, and keeps going until about 99% of the analysis picture is painted. Quality presets set the collage budget, scale range, adjustment steps, and correction strength along with the grid knobs. Advanced sliders stay. Collage mode uses the Stamps tab and automatic extraction. Full photos are included only when you turn that on, or when no cutout could be loaded. After a mask is cropped, alpha below 24 is dropped and holes that do not touch the border are filled from the nearest opaque color. On the stamp itself, Trim raises the alpha cutoff, runs that cleanup, and crops to the remaining subject. Removing a stamp drops it from the pool. You can also add a cutout by hand from the Stamps tab. ML Kit still has no person or object labels, and it still needs the on-device model.
 
 ## Quality presets
 
 Advanced controls stay available. Choosing a preset fills them in:
 
-| Preset | Grid | Descriptor edge | Candidates | Output | Render |
-| --- | ---: | ---: | ---: | --- | --- |
-| Draft | 24×24 | 16 px | 8 | Standard (24 px cells) | Blended |
-| Balanced | 40×40 | 24 px | 16 | Standard | Color corrected |
-| High Quality | 64×64 | 32 px | 32 | High (40 px cells) | Color corrected |
-| Maximum | 100×100 | 48 px | 48 | Ultra (64 px cells) | Color corrected |
+| Preset | Grid | Descriptor edge | Candidates | Output | Render | Collage pieces | Collage scale | Adjustments |
+| --- | ---: | ---: | ---: | --- | --- | ---: | --- | ---: |
+| Draft | 24×24 | 16 px | 8 | Standard (24 px cells) | Blended | 120 | 6–24% | 0 |
+| Balanced | 40×40 | 24 px | 16 | Standard | Color corrected | 320 | 4–18% | 8 |
+| High Quality | 64×64 | 32 px | 32 | High (40 px cells) | Color corrected | 520 | 3.5–16% | 12 |
+| Maximum | 100×100 | 48 px | 48 | Ultra (64 px cells) | Color corrected | 800 | 3–14% | 16 |
 
-Output modes are Standard, High, and Ultra. Render modes are Original, Color corrected, and Blended. Color correction shifts each tile toward the cell in OKLab. Blending mixes that correction with the original tile. The old flat translucent rectangle is gone.
+Output modes are Standard, High, and Ultra. Render modes are Original, Color corrected, and Blended. Grid color correction shifts each tile toward the cell in OKLab. Collage correction shifts chroma and keeps most of the cutout's luminance variation. Blending uses a weaker chroma shift. The old flat translucent rectangle is gone. Correction strength is 0.45, 0.65, 0.75, and 0.85 for the four presets.
 
 Draft and Balanced leave the usage penalty at 0. High Quality and Maximum add a light penalty (0.15 and 0.30) so repeated near-matches rotate a little. A few hundred distinct photos is enough for a balanced grid. More than about a thousand helps Maximum grids. Very small libraries will repeat until you raise the repetition radius.
 
@@ -92,32 +96,36 @@ Measured with `./gradlew :engine:benchmark` on this machine (OpenJDK 21, synthet
 
 | Tiles | Grid | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full scan | Heap MB |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100 | 40×40 | 10.2 | 0.3 | 61.9 | 45.1 | 118.5 | 84,135 | 160,000 | 0.6 |
-| 500 | 60×60 | 12.7 | 0.4 | 37.7 | 109.0 | 162.3 | 233,676 | 1,800,000 | 1.9 |
-| 1,000 | 80×80 | 22.4 | 0.6 | 65.6 | 192.9 | 285.6 | 415,996 | 6,400,000 | 4.0 |
-| 5,000 | 120×120 | 112.3 | 2.4 | 136.0 | 434.9 | 698.1 | 936,000 | 72,000,000 | 13.6 |
+| 100 | 40×40 | 10.0 | 0.3 | 62.4 | 53.3 | 127.1 | 84,135 | 160,000 | 0.6 |
+| 500 | 60×60 | 12.5 | 0.5 | 38.5 | 108.6 | 162.3 | 233,676 | 1,800,000 | 1.9 |
+| 1,000 | 80×80 | 22.2 | 0.6 | 66.0 | 192.4 | 285.2 | 415,996 | 6,400,000 | 4.1 |
+| 5,000 | 120×120 | 113.0 | 2.2 | 140.8 | 432.4 | 701.5 | 936,000 | 72,000,000 | 13.6 |
 
-"Full scan" is cells × tiles, which is what the 1.x matcher did. At 5,000 tiles the index probes about 1.3% of that. Matching 14,400 cells against 5,000 tiles took 136 ms in this run.
+"Full scan" is cells × tiles, which is what the 1.x matcher did. At 5,000 tiles the index probes about 1.3% of that. Matching 14,400 cells against 5,000 tiles took 141 ms in this run. Probe counts match the previous grid run.
 
-A separate 500-tile case uses 16:9 cells and orientation matching (250 landscape tiles, 250 portrait). The grid is 40×40. Match took 64.9 ms and 103,890 probes against a full scan of 800,000. Total time was 179.7 ms. Probes stay on the source photos; rotated copies are scored from the cached spatial grid.
+A separate 500-tile case uses 16:9 cells and orientation matching (250 landscape tiles, 250 portrait). The grid is 40×40. Match took 41.5 ms and 103,890 probes against a full scan of 800,000. Total time was 152.7 ms. Probes stay on the source photos; rotated copies are scored from the cached spatial grid.
 
-Cutout collage, after a discarded warmup, on a 160×100 gradient. Every requested piece was placed. The previous run stopped at 46 of 60 and 57 of 100 once a coarse grid filled.
+Cutout collage, after a discarded warmup, on a 160×100 gradient. Every requested piece was placed. The fine residual and the adjustment pass make matching slower than the coarse-only placer. Probes stay far below a full scan.
 
 | Cutouts | Requested | Placed | Match ms | Render ms | Total ms | Probes | Full scan | Painted |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 200 | 160 | 160 | 19.7 | 2.0 | 25.2 | 6,079 | 384,000 | 47% |
-| 600 | 280 | 280 | 26.4 | 2.5 | 38.9 | 13,596 | 2,016,000 | 74% |
+| 200 | 160 | 160 | 54.2 | 2.0 | 59.5 | 5,798 | 384,000 | 46% |
+| 600 | 280 | 280 | 49.2 | 2.6 | 61.5 | 13,283 | 2,016,000 | 72% |
 
-Full scan is requested pieces × cutouts × 12 angles. Painted coverage on this gradient is below the portrait sample because these piece budgets are smaller than the default. The portrait sample uses 240 organic cutouts and up to 320 pieces, seed 4, on a flat mean-color background. 315 pieces were placed.
+Full scan is requested pieces × cutouts × 12 angles. Painted coverage on this gradient is below the portrait sample because these piece budgets are smaller than the default. The portrait sample uses 240 cutouts and up to 320 pieces, seed 4, on a flat mean-color background. All 320 pieces were placed. Correction is off.
 
-| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Pixels painted |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Previous sample | 0.0475 | 0.7655 | 0.0989 | 0.6873 | 59% |
-| This sample | 0.0334 | 0.6746 | 0.0477 | 0.6779 | 96% |
+| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Pixels painted |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Underlayer sample | 0.0475 | 0.7655 | 0.0989 | 0.6873 | — | 59% |
+| Previous residual | 0.0334 | 0.6746 | 0.0477 | 0.6779 | 0.0563 | 96% |
+| This sample | 0.0325 | 0.6803 | 0.0467 | 0.6813 | 0.0554 | 95% |
+| Photo textures | 0.0354 | 0.6876 | 0.0508 | 0.6877 | 0.0516 | 95% |
 
-The previous whole-image scores were helped by the target photo showing through the gaps. Masked scores count only pixels a cutout painted. The picture below is the target, the collage, and a grid mosaic of the same library.
+Masked scores count only pixels a cutout painted. Edge ΔE is the mean OKLab distance on the covered pixels whose reference luminance gradient is in the top quarter. The underlayer sample looked better on whole-image scores because the target photo showed through the gaps. The picture is the target, the previous residual collage, this collage, and the same target built from photographic textures inside organic silhouettes. Those textures are generated in this repository. They are not third-party photographs, and the JVM tests do not run ML Kit.
 
-![Target, cutout collage, and grid mosaic](docs/images/cutout-collage.png)
+On the face, against the previous residual collage: the right-eye window's mean RGB error fell from 58.7 to 38.2, and the cheek from 39.3 to 19.0. The left eye and the mouth window did not improve. A 4×4 color sample still cannot paint a mouth that is only a few pixels tall a different hue from the cheek unless a small piece of that hue lands on it. The photo-texture run did place a left eye at (21, 30, 53) against the target's (25, 30, 40).
+
+![Target, previous collage, new collage, and a photo-texture collage](docs/images/cutout-collage.png)
 
 Quality is measured on a separate portrait: a face, a gradient background, and a hard-edged flower, with 120 varied tiles, a 32×42 grid, and seed 7. Both sides are the original tile pixels through the same renderer, so neither side is helped by a color wash. Lower OKLab ΔE is closer color. Higher luminance SSIM is closer structure. `MatchingQualityTest` fails if the OKLab side stops beating average-RGB on either number.
 
@@ -140,7 +148,7 @@ Subject extraction uses on-device ML Kit. It does not upload photos. Automatic e
 - deduplication
 - a cap so cutouts stay a fraction of the normal library
 
-The Stamps tab still extracts subjects from a picked photo into their own pool, with the same size and duplicate filters and a higher cap.
+The Stamps tab still extracts subjects from a picked photo into their own pool, with the same size and duplicate filters and a higher cap. Each kept mask is cleaned before it is shown: a faint halo is removed and enclosed holes are filled. Trim does that again at a higher alpha cutoff. If the segmenter misses a shape, add or delete stamps by hand.
 
 ## Privacy and API keys
 
@@ -179,7 +187,7 @@ Do not commit that file or the keystore.
 
 ## Testing
 
-JVM tests cover OKLab conversion, histograms, cropping, descriptors, candidate indexing, repetition, usage balance, grid planning, non-square cells, cutout masks, collage placement, cancellation, atomic writes, and golden images. The grid golden digest is SHA-256 `0745027b47ef5ffb4aad0ea56cad0d5fa123d41795e750931914bd37af2194ba`. The cutout-collage golden digest is SHA-256 `efeb834c450fc38a6d24b6158ad1aef4a6d1af78564256b7f53723a8c817f200`.
+JVM tests cover OKLab conversion, histograms, cropping, descriptors, candidate indexing, repetition, usage balance, grid planning, non-square cells, cutout masks, collage placement, cancellation, atomic writes, and golden images. The grid golden digest is SHA-256 `0745027b47ef5ffb4aad0ea56cad0d5fa123d41795e750931914bd37af2194ba`. The cutout-collage golden digest is SHA-256 `7d842346fd45ebdb07a675b1e9b7df281e56aa392621317a1820412dbab9d1e8`. The collage regression requires at least 96% of the preview painted, masked OKLab ΔE under 0.055, masked luminance SSIM above 0.60, and edge ΔE under 0.065.
 
 ```bash
 ./gradlew :engine:test :engine:detekt :app:detekt :app:lintDebug

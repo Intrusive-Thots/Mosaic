@@ -1,5 +1,7 @@
 package com.intrusivethots.mosaic.engine.progress
 
+import com.intrusivethots.mosaic.engine.image.PixelImage
+
 enum class GenerationStage {
     LOADING,
     ANALYZING,
@@ -13,7 +15,8 @@ enum class GenerationStage {
 data class GenerationProgress(
     val stage: GenerationStage,
     val fraction: Float,
-    val message: String
+    val message: String,
+    val preview: PixelImage? = null
 )
 
 class ThrottledProgress(
@@ -23,10 +26,16 @@ class ThrottledProgress(
 ) {
     private var lastEmitMs: Long = Long.MIN_VALUE
 
-    fun report(stage: GenerationStage, fraction: Float, message: String, force: Boolean = false) {
+    fun report(
+        stage: GenerationStage,
+        fraction: Float,
+        message: String,
+        force: Boolean = false,
+        preview: PixelImage? = null
+    ) {
         val now = clock()
-        if (!force && now - lastEmitMs < intervalMs) return
+        if (!force && preview == null && now - lastEmitMs < intervalMs) return
         lastEmitMs = now
-        emit(GenerationProgress(stage, fraction.coerceIn(0f, 1f), message))
+        emit(GenerationProgress(stage, fraction.coerceIn(0f, 1f), message, preview))
     }
 }

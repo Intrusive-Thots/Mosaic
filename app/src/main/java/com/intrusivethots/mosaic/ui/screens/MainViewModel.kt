@@ -386,7 +386,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             StreamingPngWriter(stream!!, width, height).also { png = it }
                         }
                     },
-                    onProgress = { progress -> publish(progress.stage, progress.fraction, progress.message) }
+                    onProgress = { progress ->
+                        publish(progress.stage, progress.fraction, progress.message, progress.preview?.toBitmap())
+                    }
                 )
                 lastPlan = result.plan
                 if (preview) {
@@ -524,8 +526,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return (cells * pixelsPerCell * pixelsPerCell).coerceAtLeast(width.toLong() * height / 4)
     }
 
-    private fun publish(stage: GenerationStage, fraction: Float, label: String) {
-        _state.update { it.copy(generation = GenerationUiState.Running(stage, fraction, label)) }
+    private fun publish(stage: GenerationStage, fraction: Float, label: String, preview: Bitmap? = null) {
+        _state.update { state ->
+            state.copy(
+                generation = GenerationUiState.Running(stage, fraction, label),
+                previewBitmap = preview ?: state.previewBitmap,
+                displayBitmap = if (preview != null) null else state.displayBitmap,
+                hasFullRender = if (preview != null) false else state.hasFullRender
+            )
+        }
     }
 
     private fun updateConfig(transform: (MosaicConfig) -> MosaicConfig) {
@@ -617,6 +626,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putString("cbg", config.collage.background.name)
             .putFloat("shapeW", config.collage.shapeWeight)
             .putBoolean("collagePhotos", config.collage.includeSourcePhotos)
+            .putBoolean("separate", config.collage.separatePieces)
             .putInt("aiMax", config.segmentation.maxExtractedSubjects)
             .putInt("aiMin", config.segmentation.minSubjectSizePx)
             .putString("shapes", config.segmentation.allowedShapes.joinToString(",") { it.name })
@@ -655,7 +665,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         background = preferences.getString("cbg", base.background.name)
             ?.let { runCatching { CollageBackground.valueOf(it) }.getOrNull() } ?: base.background,
         shapeWeight = preferences.getFloat("shapeW", base.shapeWeight),
-        includeSourcePhotos = preferences.getBoolean("collagePhotos", base.includeSourcePhotos)
+        includeSourcePhotos = preferences.getBoolean("collagePhotos", base.includeSourcePhotos),
+        separatePieces = preferences.getBoolean("separate", base.separatePieces)
     )
 
     private fun readShapes(): Set<SubjectShape> {

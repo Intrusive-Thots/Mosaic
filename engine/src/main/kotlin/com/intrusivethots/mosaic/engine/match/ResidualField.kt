@@ -9,6 +9,7 @@ import com.intrusivethots.mosaic.engine.tile.SHAPE_MASK_GRID
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
 import com.intrusivethots.mosaic.engine.tile.maskByte
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -82,15 +83,25 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
 
     fun meanError(): Float = (errorSum / (width * height).toDouble()).toFloat()
 
-    /** Highest remaining error, skipping cells that have already rejected a few pieces. */
-    fun worstCell(seed: Int, salt: Int): Int {
+    /**
+     * Highest remaining error, skipping cells that have already rejected a few pieces.
+     * [peaks] ranks by the worst pixel instead of the cell sum, so a small feature
+     * outranks a broad region that is only slightly off.
+     */
+    fun worstCell(seed: Int, salt: Int, peaks: Boolean = false): Int {
         var best = -1
         var bestScore = 0f
         for (cell in cellError.indices) {
             if (fails[cell] != 0 || tries[cell] > MAX_TRIES) continue
-            if (cellOpen[cell] == 0 && cellError[cell] < SETTLED_ERROR) continue
             val jitter = (mix(seed, salt, cell) and 255) / 65536f
-            val score = cellOpen[cell] * OPEN_WEIGHT + cellError[cell] + jitter
+            val score = if (peaks) {
+                val peak = maxError(cell)
+                if (peak < SETTLED_ERROR) continue
+                peak + jitter
+            } else {
+                if (cellOpen[cell] == 0 && cellError[cell] < SETTLED_ERROR) continue
+                cellOpen[cell] * OPEN_WEIGHT + cellError[cell] + jitter
+            }
             if (score > bestScore) {
                 bestScore = score
                 best = cell
@@ -112,6 +123,47 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
     }
 
     fun edgeAt(cell: Int): Float = if (cell in cellEdge.indices) cellEdge[cell] else 0f
+
+    /** Color of the worst pixels in the cell, so a small feature is not averaged away. */
+    fun peakLab(cell: Int): OkLab.Lab {
+        val bounds = cellBounds(cell)
+        val count = (bounds.bottom - bounds.top) * (bounds.right - bounds.left)
+        if (count <= 0) return regionLab(cell)
+        val values = FloatArray(count)
+        var cursor = 0
+        for (y in bounds.top until bounds.bottom) {
+            var index = y * width + bounds.left
+            val end = y * width + bounds.right
+            while (index < end) {
+                values[cursor] = error[index]
+                cursor++
+                index++
+            }
+        }
+        values.sort()
+        val cutoff = values[((count - 1) * 3) / 4]
+        var l = 0.0
+        var a = 0.0
+        var b = 0.0
+        var weight = 0.0
+        for (y in bounds.top until bounds.bottom) {
+            var index = y * width + bounds.left
+            val end = y * width + bounds.right
+            while (index < end) {
+                if (error[index] + 1e-6f >= cutoff) {
+                    val sample = (error[index] + LAB_FLOOR).toDouble()
+                    l += targetL[index] * sample
+                    a += targetA[index] * sample
+                    b += targetB[index] * sample
+                    weight += sample
+                }
+                index++
+            }
+        }
+        if (weight < 1e-4) return regionLab(cell)
+        val n = weight.toFloat()
+        return OkLab.Lab((l / n).toFloat(), (a / n).toFloat(), (b / n).toFloat())
+    }
 
     fun regionLab(cell: Int): OkLab.Lab {
         val bounds = cellBounds(cell)
@@ -140,13 +192,20 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
      * [Fit.benefit] is the mean drop in OKLab error. Negative means the piece
      * would replace pixels that are already closer. [Fit.harm] is only the worsening.
      */
-    fun fit(descriptor: TileDescriptor, angle: Float, cell: Int, scale: Float): Fit {
+    fun fit(
+        descriptor: TileDescriptor,
+        angle: Float,
+        cell: Int,
+        scale: Float,
+        anchorX: Float = Float.NaN,
+        anchorY: Float = Float.NaN
+    ): Fit {
         var delta = 0.0
         var absolute = 0.0
         var harm = 0.0
         var fresh = 0.0
         var weight = 0.0
-        visit(descriptor, angle, cell, scale) { index, mask, piece ->
+        visit(descriptor, angle, cell, scale, anchorX, anchorY) { index, mask, piece ->
             val next = distance(piece.l, piece.a, piece.b, targetL[index], targetA[index], targetB[index])
             val drop = error[index] - next
             delta += drop.toDouble() * mask
@@ -165,8 +224,15 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
         )
     }
 
-    fun stamp(descriptor: TileDescriptor, angle: Float, cell: Int, scale: Float) {
-        visit(descriptor, angle, cell, scale) { index, mask, piece ->
+    fun stamp(
+        descriptor: TileDescriptor,
+        angle: Float,
+        cell: Int,
+        scale: Float,
+        anchorX: Float = Float.NaN,
+        anchorY: Float = Float.NaN
+    ) {
+        visit(descriptor, angle, cell, scale, anchorX, anchorY) { index, mask, piece ->
             if (mask < 0.45f) return@visit
             val next = distance(piece.l, piece.a, piece.b, targetL[index], targetA[index], targetB[index])
             val cellIndex = pixelCell(index % width, index / width)
@@ -223,14 +289,43 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
         return (sx / weight / width).toFloat() to (sy / weight / height).toFloat()
     }
 
+    /** Tangent of the local luminance edge, folded into ±[range] degrees. */
+    fun edgeAngle(cell: Int, range: Float): Float {
+        val center = centerOf(cell)
+        val x = (center.first * width).toInt().coerceIn(1, width - 2)
+        val y = (center.second * height).toInt().coerceIn(1, height - 2)
+        val gx = targetL[y * width + x + 1] - targetL[y * width + x - 1]
+        val gy = targetL[(y + 1) * width + x] - targetL[(y - 1) * width + x]
+        if (abs(gx) + abs(gy) < 0.02f) return 0f
+        var degrees = Math.toDegrees(atan2(gy.toDouble(), gx.toDouble())).toFloat() + 90f
+        if (degrees > 180f) degrees -= 360f
+        if (degrees < -180f) degrees += 360f
+        val span = range.coerceIn(0f, 180f)
+        return degrees.coerceIn(-span, span)
+    }
+
+    fun errorAt(x: Float, y: Float): Float {
+        val px = (x * width).toInt().coerceIn(0, width - 1)
+        val py = (y * height).toInt().coerceIn(0, height - 1)
+        return error[py * width + px]
+    }
+
+    fun cellAt(x: Float, y: Float): Int {
+        val px = (x * width).toInt().coerceIn(0, width - 1)
+        val py = (y * height).toInt().coerceIn(0, height - 1)
+        return pixelCell(px, py)
+    }
+
     private fun visit(
         descriptor: TileDescriptor,
         angle: Float,
         cell: Int,
         scale: Float,
+        anchorX: Float,
+        anchorY: Float,
         block: (index: Int, mask: Double, piece: OkLab.Lab) -> Unit
     ) {
-        val bounds = footprint(descriptor, cell, scale, angle) ?: return
+        val bounds = footprint(descriptor, cell, scale, angle, anchorX, anchorY) ?: return
         val radians = Math.toRadians(-angle.toDouble())
         val cos = cos(radians).toFloat()
         val sin = sin(radians).toFloat()
@@ -250,7 +345,14 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
         }
     }
 
-    private fun footprint(descriptor: TileDescriptor, cell: Int, scale: Float, angle: Float): Footprint? {
+    private fun footprint(
+        descriptor: TileDescriptor,
+        cell: Int,
+        scale: Float,
+        angle: Float,
+        anchorX: Float,
+        anchorY: Float
+    ): Footprint? {
         val short = min(width, height).toFloat()
         val longEdge = (scale * short).coerceAtLeast(2f)
         val contentW = (descriptor.contentRight - descriptor.contentLeft).coerceIn(0.05f, 1f)
@@ -258,7 +360,7 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
         val aspect = contentW / contentH
         val drawWidth = if (aspect >= 1f) longEdge else longEdge * aspect
         val drawHeight = if (aspect >= 1f) longEdge / aspect else longEdge
-        val center = centerOf(cell)
+        val center = if (anchorX.isNaN()) centerOf(cell) else anchorX to anchorY
         val centerX = center.first * width
         val centerY = center.second * height
         val radians = Math.toRadians(-angle.toDouble())
@@ -306,6 +408,20 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
         for (cell in accum.indices) cellEdge[cell] = (accum[cell] / peak).coerceIn(0f, 1f)
     }
 
+    private fun maxError(cell: Int): Float {
+        val bounds = cellBounds(cell)
+        var max = 0f
+        for (y in bounds.top until bounds.bottom) {
+            var index = y * width + bounds.left
+            val end = y * width + bounds.right
+            while (index < end) {
+                if (error[index] > max) max = error[index]
+                index++
+            }
+        }
+        return max
+    }
+
     private fun pixelCell(x: Int, y: Int): Int {
         val column = (x * columns / width).coerceIn(0, columns - 1)
         val row = (y * rows / height).coerceIn(0, rows - 1)
@@ -335,6 +451,7 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
 
     companion object {
         const val ANALYSIS_EDGE = 96
+        const val DETAIL_EDGE = 200
         private const val COLUMNS = 28
         private const val OPEN_WEIGHT = 0.08f
         private const val SETTLED_ERROR = 0.05f
@@ -367,8 +484,13 @@ private fun spatialAt(descriptor: TileDescriptor, u: Float, v: Float): OkLab.Lab
 }
 
 class Fit(val benefit: Float, val absolute: Float, val harm: Float, val fresh: Float) {
-    fun acceptable(): Boolean {
-        if (harm >= MAX_HARM || fresh < MIN_FRESH) return false
+    fun acceptable(replacing: Boolean = false): Boolean {
+        if (harm >= MAX_HARM) return false
+        if (replacing) {
+            if (benefit <= MIN_BENEFIT) return false
+            return fresh >= DETAIL_FRESH || benefit > REPLACE_BENEFIT
+        }
+        if (fresh < MIN_FRESH) return false
         return benefit > MIN_BENEFIT || absolute < MAX_ABSOLUTE
     }
 
@@ -377,6 +499,8 @@ class Fit(val benefit: Float, val absolute: Float, val harm: Float, val fresh: F
         private const val MAX_ABSOLUTE = 0.08f
         private const val MAX_HARM = 0.025f
         private const val MIN_FRESH = 0.08f
+        private const val DETAIL_FRESH = 0.02f
+        private const val REPLACE_BENEFIT = 0.012f
     }
 }
 

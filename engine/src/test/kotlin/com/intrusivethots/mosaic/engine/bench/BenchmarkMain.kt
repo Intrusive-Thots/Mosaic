@@ -17,10 +17,12 @@ import com.intrusivethots.mosaic.engine.config.planGrid
 import com.intrusivethots.mosaic.engine.match.CollagePlacer
 import com.intrusivethots.mosaic.engine.portrait
 import com.intrusivethots.mosaic.engine.quality.luminanceSsim
+import com.intrusivethots.mosaic.engine.quality.maskedEdgeDeltaE
 import com.intrusivethots.mosaic.engine.quality.maskedLuminanceSsim
 import com.intrusivethots.mosaic.engine.quality.maskedMeanDeltaE
 import com.intrusivethots.mosaic.engine.quality.meanCellDeltaE
 import com.intrusivethots.mosaic.engine.organicCutout
+import com.intrusivethots.mosaic.engine.photoCutout
 import com.intrusivethots.mosaic.engine.writePng
 import com.intrusivethots.mosaic.engine.gradient
 import com.intrusivethots.mosaic.engine.hueTile
@@ -307,30 +309,36 @@ private suspend fun runCollageCase(tileCount: Int, pieceCount: Int): BenchResult
 private suspend fun writeCollageSample() {
     val target = portrait(280, 180)
     val count = 240
-    val tiles = (0 until count).map { index -> MemoryTileSource(organicCutout(index, count, 36), "sample-$index") }
     val config = collageConfig(pieceCount = 320, seed = 4).copy(candidateCount = 12, descriptorMaxEdge = 28)
     val coordinator = com.intrusivethots.mosaic.engine.coord.GenerationCoordinator()
-    val result = coordinator.generate(target, tiles, config, preview = false)
+    val organic = (0 until count).map { index -> MemoryTileSource(organicCutout(index, count, 36), "sample-$index") }
+    val result = coordinator.generate(target, organic, config, preview = false)
     val image = result.image ?: error("Sample collage produced no image.")
-    val gridConfig = MosaicConfig(
-        gridColumns = 28,
-        gridRows = 18,
-        linkAspectToGrid = false,
-        renderMode = RenderMode.ORIGINAL,
-        randomSeed = 4,
-        descriptorMaxEdge = 28,
-        candidateCount = 12,
-        customOutputWidth = target.width,
-        customOutputHeight = target.height,
-        lockOutputAspect = true
-    )
-    val grid = coordinator.generate(target, tiles, gridConfig, preview = false)
-    val gridImage = grid.image ?: error("Sample grid produced no image.")
+    val photos = (0 until count).map { index -> MemoryTileSource(photoCutout(index, count, 36), "photo-$index") }
+    val photo = coordinator.generate(target, photos, config, preview = false)
+    val photoImage = photo.image ?: error("Photo collage produced no image.")
+    val previous = readPng(File("docs/images/cutout-collage-previous.png"))
     val files = listOf(File("docs/images/cutout-collage.png"), File("/opt/cursor/artifacts/cutout-collage.png"))
-    writeRowOf(listOf(target, image, gridImage), files)
+    writeRowOf(listOf(target, previous, image, photoImage), files)
     writePng(image, listOf(File("docs/images/cutout-collage-output.png"), File("/opt/cursor/artifacts/cutout-collage-output.png")))
+    writePng(photoImage, listOf(File("docs/images/cutout-collage-photo.png"), File("/opt/cursor/artifacts/cutout-collage-photo.png")))
+    val scores = paintedScores(image, target, result, organic.map { it.loadThumbnail(128) }, config)
+    val photoScores = paintedScores(photoImage, target, photo, photos.map { it.loadThumbnail(128) }, config)
+    val previousScores = scoreImage(previous, target, coverageAgainstMean(previous, target))
+    val note = sampleNote(result.plan.placements.size, photo.plan.placements.size, scores, previousScores, photoScores)
+    File("docs/benchmarks/results.md").appendText(note)
+    File("engine/build/reports/benchmarks/results.md").appendText(note)
+    println(note)
+}
+
+private suspend fun paintedScores(
+    image: PixelImage,
+    target: PixelImage,
+    result: com.intrusivethots.mosaic.engine.coord.GenerationResult,
+    thumbs: List<PixelImage>,
+    config: MosaicConfig
+): SampleScores {
     val covered = BooleanArray(image.width * image.height)
-    val thumbs = tiles.map { it.loadThumbnail(128) }
     MosaicRenderer().render(
         result.plan,
         result.descriptors,
@@ -341,32 +349,94 @@ private suspend fun writeCollageSample() {
         target,
         covered
     )
-    val delta = meanCellDeltaE(image, target, 14, 9)
-    val ssim = luminanceSsim(image, target)
-    val maskedDelta = maskedMeanDeltaE(image, target, covered)
-    val maskedSsim = maskedLuminanceSsim(image, target, covered)
+    return scoreImage(image, target, covered)
+}
+
+private fun scoreImage(image: PixelImage, target: PixelImage, covered: BooleanArray): SampleScores {
     val painted = covered.count { it }.toFloat() / covered.size.toFloat()
-    val note = buildString {
-        appendLine()
-        appendLine("Sample collage on the portrait scene, 240 organic cutouts, 320 requested, seed 4.")
-        appendLine("${result.plan.placements.size} pieces were placed. The background is the target's mean color.")
-        appendLine("docs/images/cutout-collage.png shows the target, the collage, and a grid mosaic of the same library.")
-        appendLine("The previous sample painted 59% of pixels (masked ΔE 0.0989, masked SSIM 0.6873).")
-        appendLine("That run used the target photo as the underlayer and stopped when a coarse grid filled.")
-        appendLine("Masked scores count only pixels a cutout painted. Whole-image scores include the flat background.")
-        appendLine()
-        appendLine("| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Pixels painted |")
-        appendLine("| --- | ---: | ---: | ---: | ---: | ---: |")
-        appendLine("| Previous | 0.0475 | 0.7655 | 0.0989 | 0.6873 | 59% |")
-        append("| This run | ${"%.4f".format(delta)} | ${"%.4f".format(ssim)} | ")
-        append("${"%.4f".format(maskedDelta)} | ${"%.4f".format(maskedSsim)} | ")
-        append("${"%.0f".format(painted * 100f)}% |")
-        appendLine()
-        appendLine()
+    return SampleScores(
+        wholeDelta = meanCellDeltaE(image, target, 14, 9),
+        wholeSsim = luminanceSsim(image, target),
+        maskedDelta = maskedMeanDeltaE(image, target, covered),
+        maskedSsim = maskedLuminanceSsim(image, target, covered),
+        edgeDelta = maskedEdgeDeltaE(image, target, covered),
+        painted = painted
+    )
+}
+
+private fun sampleNote(
+    organicPlaced: Int,
+    photoPlaced: Int,
+    organic: SampleScores,
+    previous: SampleScores,
+    photo: SampleScores
+): String = buildString {
+    appendLine()
+    appendLine("Sample collage on the portrait scene, 240 cutouts, 320 requested, seed 4, mean-color background.")
+    appendLine("Organic run placed $organicPlaced pieces. Photo-texture run placed $photoPlaced pieces.")
+    appendLine("docs/images/cutout-collage.png is the target, the previous collage, this collage, and a photo-texture collage.")
+    appendLine("The photo textures are generated in this repository. They are not third-party photographs.")
+    appendLine("The previous collage is the committed output from the residual placer before the detail pass.")
+    appendLine("Its edge score uses pixels that differ from the target mean color, because that file has no coverage mask.")
+    appendLine("Masked scores count only pixels a cutout painted. Edge ΔE is the top quarter of reference luminance gradients.")
+    appendLine()
+    appendLine("| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Pixels painted |")
+    appendLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
+    appendLine("| Underlayer sample | 0.0475 | 0.7655 | 0.0989 | 0.6873 | — | 59% |")
+    append("| Previous residual | ${fmt(previous.wholeDelta)} | ${fmt(previous.wholeSsim)} | ")
+    append("${fmt(previous.maskedDelta)} | ${fmt(previous.maskedSsim)} | ${fmt(previous.edgeDelta)} | ")
+    appendLine("${pct(previous.painted)} |")
+    append("| This run | ${fmt(organic.wholeDelta)} | ${fmt(organic.wholeSsim)} | ")
+    append("${fmt(organic.maskedDelta)} | ${fmt(organic.maskedSsim)} | ${fmt(organic.edgeDelta)} | ")
+    appendLine("${pct(organic.painted)} |")
+    append("| Photo textures | ${fmt(photo.wholeDelta)} | ${fmt(photo.wholeSsim)} | ")
+    append("${fmt(photo.maskedDelta)} | ${fmt(photo.maskedSsim)} | ${fmt(photo.edgeDelta)} | ")
+    appendLine("${pct(photo.painted)} |")
+    appendLine()
+}
+
+private fun fmt(value: Double) = "%.4f".format(value)
+
+private fun pct(value: Float) = "%.0f%%".format(value * 100f)
+
+private data class SampleScores(
+    val wholeDelta: Double,
+    val wholeSsim: Double,
+    val maskedDelta: Double,
+    val maskedSsim: Double,
+    val edgeDelta: Double,
+    val painted: Float
+)
+
+private fun readPng(file: File): PixelImage {
+    val buffered = javax.imageio.ImageIO.read(file)
+    val pixels = IntArray(buffered.width * buffered.height)
+    for (y in 0 until buffered.height) {
+        for (x in 0 until buffered.width) pixels[y * buffered.width + x] = buffered.getRGB(x, y)
     }
-    File("docs/benchmarks/results.md").appendText(note)
-    File("engine/build/reports/benchmarks/results.md").appendText(note)
-    println(note)
+    return PixelImage(buffered.width, buffered.height, pixels)
+}
+
+private fun coverageAgainstMean(image: PixelImage, target: PixelImage): BooleanArray {
+    var red = 0L
+    var green = 0L
+    var blue = 0L
+    for (pixel in target.pixels) {
+        red += (pixel ushr 16) and 255
+        green += (pixel ushr 8) and 255
+        blue += pixel and 255
+    }
+    val count = target.pixels.size.coerceAtLeast(1)
+    val meanR = (red / count).toInt()
+    val meanG = (green / count).toInt()
+    val meanB = (blue / count).toInt()
+    return BooleanArray(image.pixels.size) { index ->
+        val pixel = image.pixels[index]
+        val dr = kotlin.math.abs(((pixel ushr 16) and 255) - meanR)
+        val dg = kotlin.math.abs(((pixel ushr 8) and 255) - meanG)
+        val db = kotlin.math.abs((pixel and 255) - meanB)
+        dr > 3 || dg > 3 || db > 3
+    }
 }
 
 private fun renderReport(results: List<BenchResult>, shape: BenchResult, collage: List<BenchResult>): String = buildString {
@@ -411,8 +481,9 @@ private fun renderReport(results: List<BenchResult>, shape: BenchResult, collage
     appendLine()
     appendLine("## Cutout collage")
     appendLine()
-    appendLine("Each placement queries the OKLab index once, then keeps a candidate only when its masked color lowers error")
-    appendLine("without spoiling pixels that are already close. Full scan is requested pieces × cutouts × 12 angles.")
+    appendLine("Each placement queries the OKLab index once. Large pieces land first. A finer pass adds small pieces")
+    appendLine("on edges, including over a pixel that is already covered when that lowers the error.")
+    appendLine("Full scan is requested pieces × cutouts × 12 angles.")
     appendLine()
     appendLine("| Cutouts | Requested | Placed | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full scan | Note |")
     appendLine("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |")

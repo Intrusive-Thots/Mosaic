@@ -3,6 +3,7 @@ package com.intrusivethots.mosaic.engine.quality
 import com.intrusivethots.mosaic.engine.color.OkLab
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
+import kotlin.math.abs
 import kotlin.math.pow
 
 /**
@@ -72,6 +73,43 @@ fun maskedLuminanceSsim(rendered: PixelImage, reference: PixelImage, covered: Bo
     return if (windows == 0) globalSsim(left, right) else total / windows
 }
 
+/**
+ * Mean OKLab ΔE on covered pixels whose reference luminance gradient is in the top quarter.
+ * Flat regions are left out so a good skin tone cannot hide a missed eye or mouth.
+ */
+fun maskedEdgeDeltaE(rendered: PixelImage, reference: PixelImage, covered: BooleanArray): Double {
+    val aligned = align(reference, rendered.width, rendered.height)
+    val width = rendered.width
+    val height = rendered.height
+    val limit = minOf(rendered.pixels.size, aligned.pixels.size, covered.size)
+    if (limit == 0) return 0.0
+    val lum = FloatArray(aligned.pixels.size)
+    for (index in aligned.pixels.indices) lum[index] = OkLab.fromArgb(aligned.pixels[index]).l
+    val gradient = FloatArray(limit)
+    var coveredCount = 0
+    for (index in 0 until limit) {
+        if (!covered[index]) continue
+        gradient[coveredCount] = gradientAt(lum, width, height, index)
+        coveredCount++
+    }
+    if (coveredCount == 0) return 0.0
+    val ranked = gradient.copyOf(coveredCount)
+    ranked.sort()
+    val cutoff = ranked[(coveredCount * 3) / 4]
+    var sum = 0.0
+    var count = 0
+    var cursor = 0
+    for (index in 0 until limit) {
+        if (!covered[index]) continue
+        val magnitude = gradient[cursor]
+        cursor++
+        if (magnitude < cutoff) continue
+        sum += OkLab.distance(OkLab.fromArgb(rendered.pixels[index]), OkLab.fromArgb(aligned.pixels[index])).toDouble()
+        count++
+    }
+    return if (count == 0) 0.0 else sum / count
+}
+
 fun luminanceSsim(rendered: PixelImage, reference: PixelImage): Double {
     val aligned = if (reference.width == rendered.width && reference.height == rendered.height) {
         reference
@@ -137,6 +175,14 @@ private fun windowCoverage(covered: BooleanArray, stride: Int, originX: Int, ori
         }
     }
     return hits.toFloat() / (window * window).toFloat()
+}
+
+private fun gradientAt(luminance: FloatArray, width: Int, height: Int, index: Int): Float {
+    val x = index % width
+    val y = index / width
+    val right = if (x + 1 < width && index + 1 < luminance.size) abs(luminance[index] - luminance[index + 1]) else 0f
+    val down = if (y + 1 < height && index + width < luminance.size) abs(luminance[index] - luminance[index + width]) else 0f
+    return right + down
 }
 
 private fun luminance(image: PixelImage): FloatArray {

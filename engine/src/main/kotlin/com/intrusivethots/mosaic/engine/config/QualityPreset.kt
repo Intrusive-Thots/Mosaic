@@ -11,7 +11,11 @@ fun QualityPreset.applyTo(base: MosaicConfig): MosaicConfig {
             output = OutputMode.STANDARD,
             render = RenderMode.BLENDED,
             strength = 0.45f,
-            balance = 0f
+            balance = 0f,
+            pieces = 120,
+            minScale = 0.06f,
+            maxScale = 0.24f,
+            refineSteps = 0
         )
         QualityPreset.BALANCED -> PresetValues(
             columns = 40,
@@ -21,7 +25,11 @@ fun QualityPreset.applyTo(base: MosaicConfig): MosaicConfig {
             output = OutputMode.STANDARD,
             render = RenderMode.COLOR_CORRECTED,
             strength = 0.65f,
-            balance = 0f
+            balance = 0f,
+            pieces = 320,
+            minScale = 0.04f,
+            maxScale = 0.18f,
+            refineSteps = 8
         )
         QualityPreset.HIGH_QUALITY -> PresetValues(
             columns = 64,
@@ -31,7 +39,11 @@ fun QualityPreset.applyTo(base: MosaicConfig): MosaicConfig {
             output = OutputMode.HIGH,
             render = RenderMode.COLOR_CORRECTED,
             strength = 0.75f,
-            balance = 0.15f
+            balance = 0.15f,
+            pieces = 520,
+            minScale = 0.035f,
+            maxScale = 0.16f,
+            refineSteps = 12
         )
         QualityPreset.MAXIMUM -> PresetValues(
             columns = 100,
@@ -41,7 +53,11 @@ fun QualityPreset.applyTo(base: MosaicConfig): MosaicConfig {
             output = OutputMode.ULTRA,
             render = RenderMode.COLOR_CORRECTED,
             strength = 0.85f,
-            balance = 0.30f
+            balance = 0.30f,
+            pieces = 800,
+            minScale = 0.03f,
+            maxScale = 0.14f,
+            refineSteps = 16
         )
         QualityPreset.CUSTOM -> error("Custom has no preset values.")
     }
@@ -54,7 +70,13 @@ fun QualityPreset.applyTo(base: MosaicConfig): MosaicConfig {
         outputMode = tuned.output,
         renderMode = tuned.render,
         colorMatchWeight = tuned.strength,
-        usageBalanceWeight = tuned.balance
+        usageBalanceWeight = tuned.balance,
+        collage = base.collage.copy(
+            pieceCount = tuned.pieces,
+            minScale = tuned.minScale,
+            maxScale = tuned.maxScale,
+            refineSteps = tuned.refineSteps
+        )
     )
 }
 
@@ -66,5 +88,9 @@ private data class PresetValues(
     val output: OutputMode,
     val render: RenderMode,
     val strength: Float,
-    val balance: Float
+    val balance: Float,
+    val pieces: Int,
+    val minScale: Float,
+    val maxScale: Float,
+    val refineSteps: Int
 )

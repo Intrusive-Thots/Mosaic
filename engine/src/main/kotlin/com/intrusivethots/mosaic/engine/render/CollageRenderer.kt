@@ -37,6 +37,7 @@ class CollageRenderer {
             if (y % 8 == 0) coroutineContext.ensureActive()
             paintBackground(row, y, width, height, target, useTarget, mean)
             for (sprite in sprites) {
+                if (config.collage.separatePieces) paintShadow(row, y, sprite, width)
                 if (y < sprite.draw.top || y > sprite.draw.bottom) continue
                 paintSprite(row, y, sprite, config, coverage, width)
             }
@@ -108,24 +109,40 @@ class CollageRenderer {
         }
     }
 
+    private fun paintShadow(row: IntArray, y: Int, sprite: Sprite, width: Int) {
+        val sampleY = y - SHADOW_SHIFT
+        if (sampleY < sprite.draw.top || sampleY > sprite.draw.bottom) return
+        val start = (sprite.draw.left + SHADOW_SHIFT).coerceAtLeast(0)
+        val end = sprite.draw.right.coerceAtMost(width - 1)
+        for (x in start..end) {
+            val sampled = sampleCutout(sprite.source, sprite.descriptor, sprite.draw, x - SHADOW_SHIFT, sampleY)
+            val alpha = (sampled ushr 24) and 0xFF
+            if (alpha <= TileAnalyzer.ALPHA_THRESHOLD) continue
+            val shadowAlpha = alpha * SHADOW_ALPHA / 255
+            row[x] = srcOver(row[x], shadowAlpha shl 24)
+        }
+    }
+
+    /**
+     * Shifts chroma toward the covered target and moves luminance only part of the way,
+     * so the cutout's own shading stays visible. Strength 0 leaves the pixel unchanged.
+     */
     private fun recolor(argb: Int, sprite: Sprite, mode: RenderMode, strength: Float): Int {
         val alpha = argb and OPAQUE_MASK
         if (mode == RenderMode.ORIGINAL || strength <= 0f) return argb
         val lab = OkLab.fromArgb(argb)
+        val chroma = if (mode == RenderMode.BLENDED) strength * 0.65f else strength
+        val shading = 1f - strength * 0.25f
         val shifted = OkLab.Lab(
-            l = (lab.l + (sprite.targetL - sprite.descriptor.labL) * strength).coerceIn(0f, 1f),
-            a = (lab.a + (sprite.targetA - sprite.descriptor.labA) * strength).coerceIn(-0.5f, 0.5f),
-            b = (lab.b + (sprite.targetB - sprite.descriptor.labB) * strength).coerceIn(-0.5f, 0.5f)
+            l = (
+                sprite.descriptor.labL +
+                    (sprite.targetL - sprite.descriptor.labL) * strength * 0.4f +
+                    (lab.l - sprite.descriptor.labL) * shading
+                ).coerceIn(0f, 1f),
+            a = (lab.a + (sprite.targetA - sprite.descriptor.labA) * chroma).coerceIn(-0.5f, 0.5f),
+            b = (lab.b + (sprite.targetB - sprite.descriptor.labB) * chroma).coerceIn(-0.5f, 0.5f)
         )
-        val corrected = OkLab.toArgb(shifted) and 0x00FFFFFF
-        if (mode == RenderMode.COLOR_CORRECTED) return corrected or alpha
-        val pull = strength * 0.5f
-        val blended = OkLab.Lab(
-            l = shifted.l + (sprite.targetL - shifted.l) * pull,
-            a = shifted.a + (sprite.targetA - shifted.a) * pull,
-            b = shifted.b + (sprite.targetB - shifted.b) * pull
-        )
-        return (OkLab.toArgb(blended) and 0x00FFFFFF) or alpha
+        return (OkLab.toArgb(shifted) and 0x00FFFFFF) or alpha
     }
 
     private fun meanColor(image: PixelImage): Int {
@@ -159,5 +176,7 @@ class CollageRenderer {
     companion object {
         private const val OPAQUE = 0xFF shl 24
         private const val OPAQUE_MASK = OPAQUE
+        private const val SHADOW_SHIFT = 2
+        private const val SHADOW_ALPHA = 70
     }
 }

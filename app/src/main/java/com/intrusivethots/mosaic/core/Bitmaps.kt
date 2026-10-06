@@ -9,6 +9,7 @@ import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import com.intrusivethots.mosaic.engine.color.argb
 import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.image.cleanupCutout
 import com.intrusivethots.mosaic.engine.image.downscaleLongEdge
 import com.intrusivethots.mosaic.engine.tile.TileIdentity
 import java.io.File
@@ -88,7 +89,9 @@ fun tightenSubject(source: Bitmap): Bitmap {
     painted.setPixels(pixels, 0, source.width, 0, 0, source.width, source.height)
     val cropped = cropToSubject(painted, 96)
     if (cropped !== painted) painted.recycle()
-    return cropped
+    val cleaned = cleanupCutout(cropped.toPixelImage()).toBitmap()
+    if (cropped !== cleaned && !cropped.isRecycled) cropped.recycle()
+    return cleaned
 }
 
 private fun opaqueBounds(source: Bitmap, alphaThreshold: Int): IntArray? {
