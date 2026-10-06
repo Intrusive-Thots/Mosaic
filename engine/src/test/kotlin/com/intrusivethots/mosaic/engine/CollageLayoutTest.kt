@@ -1,5 +1,6 @@
 package com.intrusivethots.mosaic.engine
 
+import com.intrusivethots.mosaic.engine.color.OkLab
 import com.intrusivethots.mosaic.engine.color.argb
 import com.intrusivethots.mosaic.engine.config.CollageBackground
 import com.intrusivethots.mosaic.engine.config.CollageSettings
@@ -9,10 +10,12 @@ import com.intrusivethots.mosaic.engine.config.RenderMode
 import com.intrusivethots.mosaic.engine.config.planCollageOutput
 import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
 import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.image.cleanupCutout
 import com.intrusivethots.mosaic.engine.match.CutoutPlacement
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.progress.GenerationStage
 import com.intrusivethots.mosaic.engine.quality.luminanceSsim
+import com.intrusivethots.mosaic.engine.quality.maskedEdgeDeltaE
 import com.intrusivethots.mosaic.engine.quality.maskedLuminanceSsim
 import com.intrusivethots.mosaic.engine.quality.maskedMeanDeltaE
 import com.intrusivethots.mosaic.engine.quality.meanCellDeltaE
@@ -205,13 +208,84 @@ class CollageLayoutTest {
         val painted = covered.count { it }.toFloat() / covered.size
         val delta = maskedMeanDeltaE(image, target, covered)
         val ssim = maskedLuminanceSsim(image, target, covered)
+        val edge = maskedEdgeDeltaE(image, target, covered)
         val placed = result.plan.placements.size
         assertTrue(
-            painted >= 0.95f,
-            "painted $painted analysis ${result.plan.coverage} placed $placed ΔE $delta SSIM $ssim"
+            painted >= 0.96f,
+            "painted $painted analysis ${result.plan.coverage} placed $placed ΔE $delta SSIM $ssim edge $edge"
         )
-        assertTrue(delta < 0.09, "masked ΔE $delta painted $painted")
-        assertTrue(ssim > 0.35, "masked SSIM $ssim")
+        assertTrue(delta < 0.055, "masked ΔE $delta painted $painted edge $edge")
+        assertTrue(ssim > 0.60, "masked SSIM $ssim")
+        assertTrue(edge < 0.065, "edge ΔE $edge")
+    }
+
+    @Test
+    fun cleanupFillsEnclosedHolesAndDropsAFaintHalo() {
+        val size = 12
+        val pixels = IntArray(size * size)
+        for (y in 0 until size) {
+            for (x in 0 until size) {
+                val border = x == 0 || y == 0 || x == size - 1 || y == size - 1
+                val hole = x in 4..7 && y in 4..7
+                val halo = x == 1 || y == 1
+                pixels[y * size + x] = when {
+                    border || hole -> 0
+                    halo -> argb(200, 10, 10, alpha = 10)
+                    else -> argb(180, 40, 40)
+                }
+            }
+        }
+        val cleaned = cleanupCutout(PixelImage(size, size, pixels))
+        assertEquals(0, cleaned.pixel(0, 0) ushr 24)
+        assertEquals(0, cleaned.pixel(1, 3) ushr 24)
+        assertEquals(255, cleaned.pixel(5, 5) ushr 24)
+        assertEquals(180, (cleaned.pixel(5, 5) shr 16) and 255)
+        assertEquals(255, cleaned.pixel(3, 3) ushr 24)
+    }
+
+    @Test
+    fun colorCorrectionKeepsCutoutShading() = runBlocking {
+        val tile = shadingDisk()
+        val analyzer = TileAnalyzer()
+        val descriptor = analyzer.describe(key("shade"), tile.width, tile.height, tile)
+        val targetLab = OkLab.fromArgb(argb(40, 80, 160))
+        val plan = MosaicPlan(
+            columns = 4,
+            rows = 4,
+            assignments = IntArray(16) { 0 },
+            cellRgb = IntArray(16),
+            cellLab = FloatArray(48),
+            staggered = false,
+            fingerprint = "shade",
+            placements = listOf(CutoutPlacement(0, 0.5f, 0.5f, 0f, 0.7f, targetLab.l, targetLab.a, targetLab.b))
+        )
+        val original = renderMode(plan, descriptor, tile, RenderMode.ORIGINAL, 0f)
+        val corrected = renderMode(plan, descriptor, tile, RenderMode.COLOR_CORRECTED, 0.65f)
+        val originalSpread = kotlin.math.abs(OkLab.fromArgb(original.pixel(32, 24)).l - OkLab.fromArgb(original.pixel(32, 42)).l)
+        val correctedSpread = kotlin.math.abs(OkLab.fromArgb(corrected.pixel(32, 24)).l - OkLab.fromArgb(corrected.pixel(32, 42)).l)
+        assertTrue(correctedSpread > originalSpread * 0.55, "spread $correctedSpread vs $originalSpread")
+        val originalBlue = original.pixel(32, 32) and 255
+        val correctedBlue = corrected.pixel(32, 32) and 255
+        assertTrue(correctedBlue > originalBlue + 8, "blue $correctedBlue vs $originalBlue")
+    }
+
+    @Test
+    fun photoCutoutsKeepTextureInsideTheSilhouette() {
+        val cutout = photoCutout(21, 40, 36)
+        var transparent = 0
+        var minRed = 255
+        var maxRed = 0
+        for (pixel in cutout.pixels) {
+            if (pixel ushr 24 == 0) {
+                transparent++
+                continue
+            }
+            val red = (pixel shr 16) and 255
+            if (red < minRed) minRed = red
+            if (red > maxRed) maxRed = red
+        }
+        assertTrue(transparent > 40)
+        assertTrue(maxRed - minRed >= 6, "span ${maxRed - minRed}")
     }
 
     @Test
@@ -241,6 +315,27 @@ class CollageLayoutTest {
                 assertTrue(blue <= red + 2, "fringe at $x,$y red=$red blue=$blue")
             }
         }
+    }
+
+    private suspend fun renderMode(
+        plan: MosaicPlan,
+        descriptor: com.intrusivethots.mosaic.engine.tile.TileDescriptor,
+        tile: PixelImage,
+        mode: RenderMode,
+        strength: Float
+    ): PixelImage {
+        val config = collageConfig(pieceCount = 4, seed = 1).copy(renderMode = mode, colorMatchWeight = strength)
+        val sink = MemoryRowSink(64, 64)
+        MosaicRenderer().render(
+            plan,
+            listOf(descriptor),
+            listOf(tile),
+            com.intrusivethots.mosaic.engine.config.OutputLayout(1, 1, 64, 64, false),
+            config,
+            sink,
+            target = solid(64, 64, argb(40, 80, 160))
+        )
+        return sink.toImage()
     }
 
     private suspend fun repaint(
@@ -294,6 +389,25 @@ private fun halfRed(): PixelImage {
         }
     }
     return PixelImage(16, 16, pixels)
+}
+
+private fun shadingDisk(): PixelImage {
+    val size = 32
+    val pixels = IntArray(size * size)
+    val center = (size - 1) / 2f
+    for (y in 0 until size) {
+        for (x in 0 until size) {
+            val dx = x - center
+            val dy = y - center
+            if (dx * dx + dy * dy > 13f * 13f) {
+                pixels[y * size + x] = 0
+                continue
+            }
+            val shade = 0.35f + 0.65f * y / (size - 1f)
+            pixels[y * size + x] = argb((190 * shade).toInt(), (36 * shade).toInt(), (28 * shade).toInt())
+        }
+    }
+    return PixelImage(size, size, pixels)
 }
 
 private fun disk(inside: Int, outside: Int, size: Int = 28): PixelImage {

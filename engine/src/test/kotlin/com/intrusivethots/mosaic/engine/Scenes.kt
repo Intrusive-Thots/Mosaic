@@ -92,6 +92,21 @@ fun organicCutout(index: Int, count: Int, size: Int = 40): PixelImage {
     return PixelImage(size, size, pixels)
 }
 
+/**
+ * Organic silhouette filled with a generated photographic texture.
+ * The texture is synthesized in this repository. It is not a third-party photograph.
+ */
+fun photoCutout(index: Int, count: Int, size: Int = 40): PixelImage {
+    val texture = photoLibrary(count, size)[index]
+    val mask = organicCutout(index, count, size)
+    val pixels = IntArray(size * size)
+    for (pixel in pixels.indices) {
+        val alpha = mask.pixels[pixel] ushr 24
+        pixels[pixel] = if (alpha == 0) 0 else (alpha shl 24) or (texture.pixels[pixel] and 0x00FFFFFF)
+    }
+    return PixelImage(size, size, pixels)
+}
+
 private fun paletteHue(index: Int, count: Int): Float {
     val hues = floatArrayOf(
         0.05f, 0.07f, 0.09f, 0.04f,

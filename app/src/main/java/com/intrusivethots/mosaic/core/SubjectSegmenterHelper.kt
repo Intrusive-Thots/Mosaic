@@ -8,6 +8,7 @@ import com.intrusivethots.mosaic.engine.config.SegmentationSettings
 import com.intrusivethots.mosaic.engine.config.SubjectShape
 import com.intrusivethots.mosaic.engine.segment.SubjectCandidate
 import com.intrusivethots.mosaic.engine.segment.SubjectExtractionPolicy
+import com.intrusivethots.mosaic.engine.image.cleanupCutout
 import com.intrusivethots.mosaic.engine.tile.FeatureVector
 import com.intrusivethots.mosaic.engine.tile.TileAnalyzer
 import kotlinx.coroutines.tasks.await
@@ -58,8 +59,10 @@ object SubjectSegmenterHelper {
         if (extracted.isEmpty()) return emptyList()
         val cropped = extracted.map { subject ->
             val tight = cropToSubject(subject)
-            if (tight !== subject) subject.recycle()
-            tight
+            val cleaned = cleanupCutout(tight.toPixelImage()).toBitmap()
+            if (tight !== subject && !subject.isRecycled) subject.recycle()
+            if (!tight.isRecycled) tight.recycle()
+            cleaned
         }
         val features = FeatureVector()
         val candidates = cropped.mapIndexed { index, subject ->

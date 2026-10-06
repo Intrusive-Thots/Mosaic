@@ -230,6 +230,7 @@ fun MosaicConfig.matchFingerprint(targetWidth: Int, targetHeight: Int, tileToken
         append("|bg").append(pieces.background.name)
         append("|sw").append((pieces.shapeWeight * 100f).toInt())
         append("|photos").append(pieces.includeSourcePhotos)
+        append("|refine").append(pieces.refineSteps)
         append("|w")
         append(weights.color).append(',')
         append(weights.luminance).append(',')

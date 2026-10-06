@@ -53,12 +53,14 @@ fun CollageControls(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CollageSliders(settings: CollageSettings, onCollage: (CollageSettings) -> Unit) {
-    Text(
-        "Cutouts keep landing while they cover more of the picture and lower the error. The background is flat unless you choose the target photo.",
-        fontSize = 12.sp,
-        color = TextSecondary
-    )
-    LabeledSlider("Pieces: ${settings.pieceCount}", settings.pieceCount.toFloat(), 8f, 600f, AccentAmber) {
+        Text(
+            "Large pieces land first, then smaller ones on edges and features. " +
+                "Draft through Maximum set the budget, scale, and adjustment effort. " +
+                "The background is flat unless you choose the target photo.",
+            fontSize = 12.sp,
+            color = TextSecondary
+        )
+    LabeledSlider("Pieces: ${settings.pieceCount}", settings.pieceCount.toFloat(), 8f, 1200f, AccentAmber) {
         onCollage(settings.copy(pieceCount = it.roundToInt()))
     }
     LabeledSlider("Smallest scale: ${(settings.minScale * 100).roundToInt()}%", settings.minScale, 0.03f, 0.4f, AccentAmber) {
@@ -88,6 +90,14 @@ private fun CollageSliders(settings: CollageSettings, onCollage: (CollageSetting
         Switch(
             checked = settings.includeSourcePhotos,
             onCheckedChange = { onCollage(settings.copy(includeSourcePhotos = it)) },
+            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AccentAmber)
+        )
+    }
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text("Separate pieces", fontSize = 13.sp, color = TextSecondary)
+        Switch(
+            checked = settings.separatePieces,
+            onCheckedChange = { onCollage(settings.copy(separatePieces = it)) },
             colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AccentAmber)
         )
     }

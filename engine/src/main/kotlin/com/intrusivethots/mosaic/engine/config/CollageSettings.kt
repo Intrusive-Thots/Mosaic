@@ -23,7 +23,9 @@ data class CollageSettings(
     val coverageGoal: Float = 0.99f,
     val background: CollageBackground = CollageBackground.MEAN_COLOR,
     val shapeWeight: Float = 0.35f,
-    val includeSourcePhotos: Boolean = false
+    val includeSourcePhotos: Boolean = false,
+    val refineSteps: Int = 8,
+    val separatePieces: Boolean = false
 ) {
     fun sanitized(): CollageSettings {
         val safeMin = if (minScale.isNaN()) 0.04f else minScale.coerceIn(0.03f, 0.8f)
@@ -35,7 +37,8 @@ data class CollageSettings(
             rotationRangeDegrees = if (rotationRangeDegrees.isNaN()) 0f else rotationRangeDegrees.coerceIn(0f, 180f),
             overlap = if (overlap.isNaN()) 0.4f else overlap.coerceIn(0f, 1f),
             coverageGoal = if (coverageGoal.isNaN()) 0.99f else coverageGoal.coerceIn(0.5f, 1f),
-            shapeWeight = if (shapeWeight.isNaN()) 0.35f else shapeWeight.coerceIn(0f, 1f)
+            shapeWeight = if (shapeWeight.isNaN()) 0.35f else shapeWeight.coerceIn(0f, 1f),
+            refineSteps = refineSteps.coerceIn(0, 24)
         )
     }
 }

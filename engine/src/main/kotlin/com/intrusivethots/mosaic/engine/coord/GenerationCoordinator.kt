@@ -11,6 +11,7 @@ import com.intrusivethots.mosaic.engine.config.planCollageOutput
 import com.intrusivethots.mosaic.engine.config.planOutput
 import com.intrusivethots.mosaic.engine.config.validated
 import com.intrusivethots.mosaic.engine.match.CollagePlacer
+import com.intrusivethots.mosaic.engine.match.CutoutPlacement
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.centerAspectRect
 import com.intrusivethots.mosaic.engine.image.crop
@@ -98,9 +99,16 @@ class GenerationCoordinator(
             val matchLabel = if (collage) "Placing cutouts" else "Matching cells"
             progress.report(GenerationStage.MATCHING, 0f, matchLabel, force = true)
             val matched = if (collage) {
-                collagePlacer.place(cropped, descriptors, index, validated, tokens) { fraction ->
-                    progress.report(GenerationStage.MATCHING, fraction, matchLabel)
-                }
+                placeCutouts(
+                    cropped,
+                    descriptors,
+                    prepared.map { it.thumbnail },
+                    index,
+                    validated,
+                    tokens,
+                    fingerprint,
+                    progress
+                )
             } else {
                 matcher.match(cropped, descriptors, index, validated, tokens) { fraction ->
                     progress.report(GenerationStage.MATCHING, fraction, matchLabel)
@@ -110,14 +118,52 @@ class GenerationCoordinator(
             comparisons = matched.second.comparisons
             probes = matched.second.probes
             solidCells = matched.second.solidCells
-            progress.report(GenerationStage.MATCHING, 1f, "Matching cells", force = true)
+            val done = if (collage) "Placing cutouts" else "Matching cells"
+            progress.report(GenerationStage.MATCHING, 1f, done, force = true)
         }
 
-        val collage = validated.mosaicKind == MosaicKind.COLLAGE
+        val rendered = renderOutput(
+            plan,
+            descriptors,
+            prepared.map { it.thumbnail },
+            cropped,
+            validated,
+            preview,
+            sink,
+            sinkFactory,
+            progress
+        )
+        cache.retain(descriptors.map { it.key }.toSet())
+        cache.flush()
+        progress.report(GenerationStage.COMPLETE, 1f, "Complete", force = true)
+        return GenerationResult(
+            plan = plan,
+            image = rendered.image,
+            descriptors = descriptors,
+            outputWidth = rendered.layout.width,
+            outputHeight = rendered.layout.height,
+            comparisons = comparisons,
+            probes = probes,
+            solidCells = solidCells
+        )
+    }
+
+    private suspend fun renderOutput(
+        plan: MosaicPlan,
+        descriptors: List<TileDescriptor>,
+        thumbnails: List<PixelImage>,
+        target: PixelImage,
+        config: MosaicConfig,
+        preview: Boolean,
+        sink: RowSink?,
+        sinkFactory: ((width: Int, height: Int) -> RowSink)?,
+        progress: ThrottledProgress
+    ): RenderedOutput {
+        val collage = config.mosaicKind == MosaicKind.COLLAGE
         val layout = if (collage) {
-            planCollageOutput(cropped.width, cropped.height, validated, preview)
+            planCollageOutput(target.width, target.height, config, preview)
         } else {
-            planOutput(cropped.width, cropped.height, validated, preview)
+            planOutput(target.width, target.height, config, preview)
         }
         if (!preview) {
             val cellWidth = if (collage) 1 else layout.cellWidth
@@ -136,31 +182,63 @@ class GenerationCoordinator(
         }
         val destination = sink ?: sinkFactory?.invoke(layout.width, layout.height) ?: memory!!
         progress.report(GenerationStage.RENDERING, 0f, "Rendering mosaic", force = true)
-        renderer.render(
-            plan = plan,
-            descriptors = descriptors,
-            thumbnails = prepared.map { it.thumbnail },
-            layout = layout,
-            config = validated,
-            sink = destination,
-            target = cropped
-        ) { fraction ->
+        renderer.render(plan, descriptors, thumbnails, layout, config, destination, target) { fraction ->
             progress.report(GenerationStage.RENDERING, fraction, "Rendering mosaic")
         }
         progress.report(GenerationStage.RENDERING, 1f, "Rendering mosaic", force = true)
-        cache.retain(descriptors.map { it.key }.toSet())
-        cache.flush()
-        progress.report(GenerationStage.COMPLETE, 1f, "Complete", force = true)
-        return GenerationResult(
-            plan = plan,
-            image = memory?.toImage(),
-            descriptors = descriptors,
-            outputWidth = layout.width,
-            outputHeight = layout.height,
-            comparisons = comparisons,
-            probes = probes,
-            solidCells = solidCells
+        return RenderedOutput(memory?.toImage(), layout)
+    }
+
+    private suspend fun placeCutouts(
+        target: PixelImage,
+        descriptors: List<TileDescriptor>,
+        thumbnails: List<PixelImage>,
+        index: TileIndex,
+        config: MosaicConfig,
+        tokens: List<String>,
+        fingerprint: String,
+        progress: ThrottledProgress
+    ) = collagePlacer.place(
+        target,
+        descriptors,
+        index,
+        config,
+        tokens,
+        onSnapshot = { placements, label ->
+            emitLanding(target, descriptors, thumbnails, config, fingerprint, placements, label, progress)
+        },
+        onProgress = { fraction, label ->
+            progress.report(GenerationStage.MATCHING, fraction, label)
+        }
+    )
+
+    private suspend fun emitLanding(
+        target: PixelImage,
+        descriptors: List<TileDescriptor>,
+        thumbnails: List<PixelImage>,
+        config: MosaicConfig,
+        fingerprint: String,
+        placements: List<CutoutPlacement>,
+        label: String,
+        progress: ThrottledProgress
+    ) {
+        if (placements.isEmpty()) return
+        coroutineContext.ensureActive()
+        val layout = planCollageOutput(target.width, target.height, config, preview = true)
+        val partial = MosaicPlan(
+            columns = 1,
+            rows = 1,
+            assignments = intArrayOf(MosaicPlan.SOLID),
+            cellRgb = intArrayOf(0),
+            cellLab = FloatArray(3),
+            staggered = false,
+            fingerprint = fingerprint,
+            placements = placements
         )
+        val sink = MemoryRowSink(layout.width, layout.height)
+        renderer.render(partial, descriptors, thumbnails, layout, config, sink, target)
+        val fraction = placements.size.toFloat() / config.collage.pieceCount.coerceAtLeast(1)
+        progress.report(GenerationStage.MATCHING, fraction, label, force = true, preview = sink.toImage())
     }
 
     private suspend fun analyzeTiles(
@@ -217,6 +295,11 @@ class GenerationCoordinator(
     }
 
     private class PreparedTile(val descriptor: TileDescriptor, val thumbnail: PixelImage)
+
+    private class RenderedOutput(
+        val image: PixelImage?,
+        val layout: com.intrusivethots.mosaic.engine.config.OutputLayout
+    )
 
     companion object {
         const val MAX_IN_MEMORY_PIXELS = 2_500_000L
