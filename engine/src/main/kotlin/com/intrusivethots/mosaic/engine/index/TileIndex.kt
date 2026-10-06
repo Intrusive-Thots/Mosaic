@@ -30,11 +30,23 @@ class TileIndex private constructor(
         if (size == 0 || maxCandidates <= 0) return
         val center = binOf(l, a, b)
         val window = candidateWindow(maxCandidates, radiusHint)
+        val exclusion = radiusHint.coerceAtLeast(0) * 2 + 1
+        val budget = minOf(size, maxOf(48, exclusion * exclusion + maxCandidates))
+        val probedAtStart = probes.probes
         for (ring in 0..MAX_RING) {
-            for (binIndex in neighborBins(center, ring)) {
-                scanBin(bins[binIndex], l, a, b, window, blocked, into, probes)
+            if (probes.probes - probedAtStart >= budget) return
+            val ringBins = neighborBins(center, ring)
+            var closestBound = Float.POSITIVE_INFINITY
+            for (binIndex in ringBins) {
+                if (probes.probes - probedAtStart >= budget) return
+                val bound = binLowerBound(binIndex, l, a, b)
+                if (bound < closestBound) closestBound = bound
+                val worst = into.worstScore()
+                if (worst < Float.POSITIVE_INFINITY && bound >= worst) continue
+                scanBin(bins[binIndex], l, a, b, window, blocked, into, probes, probedAtStart + budget)
             }
-            if (into.size >= maxCandidates) return
+            val worst = into.worstScore()
+            if (worst < Float.POSITIVE_INFINITY && closestBound >= worst) return
         }
     }
 
@@ -46,7 +58,8 @@ class TileIndex private constructor(
         window: Int,
         blocked: (Int) -> Boolean,
         into: TopK,
-        probes: ProbeCounter
+        probes: ProbeCounter,
+        probeLimit: Long
     ) {
         if (bin.isEmpty()) return
         var closest = 0
@@ -68,11 +81,15 @@ class TileIndex private constructor(
         var right = closest + 1
         var visited = 0
         val limit = minOf(bin.size, window)
-        while (visited < limit && (left >= 0 || right < bin.size)) {
+        while (visited < limit && (left >= 0 || right < bin.size) && probes.probes < probeLimit) {
+            val worst = into.worstScore()
+            val leftGap = if (left >= 0) abs(labL[bin[left]] - l) else Float.POSITIVE_INFINITY
+            val rightGap = if (right < bin.size) abs(labL[bin[right]] - l) else Float.POSITIVE_INFINITY
+            if (leftGap * leftGap >= worst && rightGap * rightGap >= worst) break
             val takeLeft = when {
                 left < 0 -> false
                 right >= bin.size -> true
-                else -> abs(labL[bin[left]] - l) <= abs(labL[bin[right]] - l)
+                else -> leftGap <= rightGap
             }
             val tile = if (takeLeft) bin[left--] else bin[right++]
             visited++
@@ -121,6 +138,27 @@ class TileIndex private constructor(
             return maxOf(maxCandidates * 8, exclusionArea + maxCandidates, 64).coerceAtMost(1024)
         }
 
+        internal fun binLowerBound(binIndex: Int, l: Float, a: Float, b: Float): Float {
+            val bl = binIndex / (BINS_PER_AXIS * BINS_PER_AXIS)
+            val ba = (binIndex / BINS_PER_AXIS) % BINS_PER_AXIS
+            val bb = binIndex % BINS_PER_AXIS
+            val dl = axisGap(l, bl, 0f, 1f)
+            val da = axisGap(a, ba, -0.4f, 0.4f)
+            val db = axisGap(b, bb, -0.4f, 0.4f)
+            return dl * dl + da * da + db * db
+        }
+
+        private fun axisGap(value: Float, bin: Int, min: Float, max: Float): Float {
+            val span = max - min
+            val low = min + bin * span / BINS_PER_AXIS
+            val high = low + span / BINS_PER_AXIS
+            return when {
+                value < low -> low - value
+                value > high -> value - high
+                else -> 0f
+            }
+        }
+
         internal fun neighborBins(center: Int, ring: Int): IntArray {
             val bl = center / (BINS_PER_AXIS * BINS_PER_AXIS)
             val ba = (center / BINS_PER_AXIS) % BINS_PER_AXIS
@@ -160,6 +198,9 @@ class TopK(val capacity: Int) {
     fun reset() {
         size = 0
     }
+
+    /** Distance of the farthest accepted candidate, or infinity until the set is full. */
+    fun worstScore(): Float = if (size < capacity) Float.POSITIVE_INFINITY else scores[size - 1]
 
     fun offer(id: Int, score: Float) {
         if (size < capacity) {

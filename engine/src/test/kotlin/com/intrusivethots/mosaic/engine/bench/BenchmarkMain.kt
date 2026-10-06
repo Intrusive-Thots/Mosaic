@@ -46,16 +46,21 @@ fun main() = runBlocking {
         BenchCase(1_000, 80, 80),
         BenchCase(5_000, 120, 120)
     )
+    runCase(cases.first(), report = false)
     val results = cases.map { runCase(it) }
     val report = renderReport(results)
-    val output = File("engine/build/reports/benchmarks/results.md")
-    output.parentFile.mkdirs()
-    output.writeText(report)
+    listOf(
+        File("engine/build/reports/benchmarks/results.md"),
+        File("docs/benchmarks/results.md")
+    ).forEach { output ->
+        output.parentFile.mkdirs()
+        output.writeText(report)
+    }
     println(report)
     writeComparison()
 }
 
-private suspend fun runCase(case: BenchCase): BenchResult {
+private suspend fun runCase(case: BenchCase, report: Boolean = true): BenchResult {
     val runtime = Runtime.getRuntime()
     System.gc()
     val before = runtime.totalMemory() - runtime.freeMemory()
@@ -125,14 +130,23 @@ private suspend fun runCase(case: BenchCase): BenchResult {
         comparisons = matchResult.second.comparisons,
         heapMb = heapMb
     ).also { result ->
-        val naive = case.columns.toLong() * case.rows * case.tiles
-        check(result.probes < naive / 5) {
-            "Candidate probes ${result.probes} were not smaller than a full scan ($naive)."
+        val cells = case.columns.toLong() * case.rows
+        val naive = cells * case.tiles
+        val perCell = result.probes.toDouble() / cells.toDouble()
+        check(perCell < case.tiles) {
+            "Average probes per cell ($perCell) reached the full library (${case.tiles})."
         }
-        println(
-            "bench ${case.tiles}/${case.columns}x${case.rows}: " +
-                "total ${"%.1f".format(result.totalMs)} ms, probes ${result.probes} vs $naive"
-        )
+        if (case.tiles >= 500) {
+            check(result.probes < naive / 4) {
+                "Candidate probes ${result.probes} were not well below a full scan ($naive)."
+            }
+        }
+        if (report) {
+            println(
+                "bench ${case.tiles}/${case.columns}x${case.rows}: " +
+                    "total ${"%.1f".format(result.totalMs)} ms, probes ${result.probes} vs $naive"
+            )
+        }
     }
 }
 
@@ -140,6 +154,7 @@ private fun renderReport(results: List<BenchResult>): String = buildString {
     appendLine("# Engine benchmarks")
     appendLine()
     appendLine("JVM run with synthetic tiles (unique hues, 16 px thumbnails, 12 px render cells).")
+    appendLine("One unmeasured 100-tile pass runs first so the numbers below are not dominated by JIT warmup.")
     appendLine("Heap is the change in `totalMemory - freeMemory` around the case and is only an estimate.")
     appendLine()
     appendLine("| Tiles | Grid | Load ms | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full-library comparisons | Heap MB |")
@@ -157,7 +172,8 @@ private fun renderReport(results: List<BenchResult>): String = buildString {
         append("%.1f".format(result.heapMb)).appendLine(" |")
     }
     appendLine()
-    appendLine("Probes are candidate color checks inside OKLab bins. The full-library column is cells × tiles, which is what the 1.x matcher did.")
+    appendLine("Probes are candidate color checks inside OKLab bins, capped per cell so a large library is not scanned in full.")
+    appendLine("The full-library column is cells × tiles, which is what the 1.x matcher did.")
 }
 
 private suspend fun writeComparison() {

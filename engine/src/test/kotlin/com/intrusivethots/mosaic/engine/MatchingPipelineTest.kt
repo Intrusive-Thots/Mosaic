@@ -94,6 +94,17 @@ class MatchingPipelineTest {
         assertTrue(top.size <= 8)
         assertContains((0 until top.size).map { top.ids[it] }.toList(), 20)
         assertTrue(probes.probes < images.size, "Probed ${probes.probes} of ${images.size}")
+        val brute = descriptors.mapIndexed { index, descriptor ->
+            val dl = descriptor.labL - target.labL
+            val da = descriptor.labA - target.labA
+            val db = descriptor.labB - target.labB
+            index to dl * dl + da * da + db * db
+        }.sortedBy { it.second }
+        val limit = brute[7].second
+        val found = (0 until top.size).map { top.ids[it] }.toSet()
+        brute.filter { it.second < limit - 1e-6f }.forEach { (index, _) ->
+            assertTrue(index in found, "Missing nearer tile $index")
+        }
     }
 
     @Test
