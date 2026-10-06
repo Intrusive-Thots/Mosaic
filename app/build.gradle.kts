@@ -3,6 +3,26 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.devtools.ksp")
+    id("io.gitlab.arturbosch.detekt")
+}
+
+detekt {
+    buildUponDefaultConfig = true
+    config.setFrom(files("${rootProject.projectDir}/detekt.yml"))
+    parallel = true
+}
+
+tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
+    jvmTarget = "17"
+    setSource(
+        files(
+            "src/main/java",
+            "src/test/java",
+            "src/androidTest/java"
+        )
+    )
+    exclude("**/build/**")
 }
 
 val keystoreProps = Properties().apply {
@@ -18,8 +38,9 @@ android {
         applicationId = "com.intrusivethots.mosaic"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "2.0.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -48,6 +69,10 @@ android {
     }
 
     buildFeatures { compose = true }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 dependencies {
@@ -63,6 +88,17 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.9.5")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
+    implementation(project(":engine"))
     implementation("com.google.android.gms:play-services-mlkit-subject-segmentation:16.0.0-beta1")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
+    implementation("androidx.room:room-runtime:2.7.2")
+    implementation("androidx.room:room-ktx:2.7.2")
+    ksp("androidx.room:room-compiler:2.7.2")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core:1.6.1")
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 }

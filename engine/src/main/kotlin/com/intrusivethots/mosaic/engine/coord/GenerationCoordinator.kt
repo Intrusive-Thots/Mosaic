@@ -51,6 +51,7 @@ class GenerationCoordinator(
         preview: Boolean = false,
         reusePlan: MosaicPlan? = null,
         sink: RowSink? = null,
+        sinkFactory: ((width: Int, height: Int) -> RowSink)? = null,
         progressIntervalMs: Long = 100,
         onProgress: (com.intrusivethots.mosaic.engine.progress.GenerationProgress) -> Unit = {}
     ): GenerationResult {
@@ -94,14 +95,16 @@ class GenerationCoordinator(
         }
 
         val layout = planOutput(cropped.width, cropped.height, validated, preview)
-        if (sink == null && layout.pixels > MAX_IN_MEMORY_PIXELS) {
-            throw IllegalArgumentException(
+        val memory = if (sink == null && sinkFactory == null) {
+            require(layout.pixels <= MAX_IN_MEMORY_PIXELS) {
                 "Output ${layout.width}×${layout.height} is too large for one bitmap. Render to a file instead."
-            )
+            }
+            MemoryRowSink(layout.width, layout.height)
+        } else {
+            null
         }
+        val destination = sink ?: sinkFactory?.invoke(layout.width, layout.height) ?: memory!!
         progress.report(GenerationStage.RENDERING, 0f, "Rendering mosaic", force = true)
-        val memory = if (sink == null) MemoryRowSink(layout.width, layout.height) else null
-        val destination = sink ?: memory!!
         renderer.render(
             plan = plan,
             descriptors = descriptors,

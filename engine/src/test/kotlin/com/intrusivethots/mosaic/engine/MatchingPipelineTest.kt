@@ -27,6 +27,7 @@ import com.intrusivethots.mosaic.engine.tile.MemoryTileSource
 import com.intrusivethots.mosaic.engine.tile.TileAnalyzer
 import com.intrusivethots.mosaic.engine.tile.toKey
 import kotlinx.coroutines.CancellationException
+import kotlin.test.assertFailsWith
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.ByteArrayInputStream
@@ -292,6 +293,14 @@ class MatchingPipelineTest {
         assertEquals(13, (pixel shr 16) and 255)
         assertEquals(20, (pixel shr 8) and 255)
         assertEquals(30, pixel and 255)
+    }
+
+    @Test
+    fun incompletePngCloseReleasesDeflaterAndCanBeClosedAgain() {
+        val writer = StreamingPngWriter(ByteArrayOutputStream(), 2, 2)
+        writer.writeRow(0, intArrayOf(argb(1, 2, 3), argb(4, 5, 6)))
+        assertFailsWith<IllegalStateException> { writer.close() }
+        writer.close()
     }
 
     @Test

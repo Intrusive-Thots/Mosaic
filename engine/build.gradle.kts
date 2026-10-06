@@ -2,6 +2,19 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     kotlin("jvm")
+    id("io.gitlab.arturbosch.detekt")
+}
+
+detekt {
+    buildUponDefaultConfig = true
+    config.setFrom(files("${rootProject.projectDir}/detekt.yml"))
+    parallel = true
+}
+
+tasks.withType<io.gitlab.arturbosch.detekt.Detekt>().configureEach {
+    jvmTarget = "17"
+    setSource(files("src/main/kotlin", "src/test/kotlin"))
+    exclude("**/build/**")
 }
 
 java {

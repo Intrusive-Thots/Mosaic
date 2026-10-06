@@ -4,10 +4,15 @@ import android.graphics.Bitmap
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.segmentation.subject.SubjectSegmentation
 import com.google.mlkit.vision.segmentation.subject.SubjectSegmenterOptions
+import com.intrusivethots.mosaic.engine.config.SegmentationSettings
+import com.intrusivethots.mosaic.engine.config.SubjectShape
+import com.intrusivethots.mosaic.engine.segment.SubjectCandidate
+import com.intrusivethots.mosaic.engine.segment.SubjectExtractionPolicy
+import com.intrusivethots.mosaic.engine.tile.FeatureVector
+import com.intrusivethots.mosaic.engine.tile.TileAnalyzer
 import kotlinx.coroutines.tasks.await
 
 object SubjectSegmenterHelper {
-
     private val options = SubjectSegmenterOptions.Builder()
         .enableMultipleSubjects(
             SubjectSegmenterOptions.SubjectResultOptions.Builder()
@@ -16,35 +21,59 @@ object SubjectSegmenterHelper {
         )
         .build()
 
-    private val segmenter by lazy {
-        SubjectSegmentation.getClient(options)
-    }
+    private val segmenter by lazy { SubjectSegmentation.getClient(options) }
+    private val analyzer = TileAnalyzer()
 
     /**
-     * Extracts individual subjects (dogs, pets, people, foreground objects) from a bitmap using on-device ML Kit.
-     * If subjects are found, returns list of individual extracted bitmaps.
-     * If no distinct subjects found, returns the original bitmap.
+     * Manual stamp extraction. ML Kit has no semantic labels, so every detected shape is eligible
+     * and the cap is higher than automatic generation.
      */
-    suspend fun extractSubjects(bitmap: Bitmap): List<Bitmap> {
-        return try {
-            val inputImage = InputImage.fromBitmap(bitmap, 0)
-            val result = segmenter.process(inputImage).await()
-            val extractedBitmaps = mutableListOf<Bitmap>()
+    suspend fun extractSubjects(bitmap: Bitmap): List<Bitmap> = extractLimited(
+        bitmap = bitmap,
+        originalTileCount = 0,
+        settings = MANUAL
+    )
 
-            result.subjects.forEach { subject ->
-                subject.bitmap?.let { subjectBmp ->
-                    extractedBitmaps.add(subjectBmp)
-                }
-            }
+    /**
+     * Automatic cutouts added beside the original photos. The policy caps how many survive so
+     * subjects cannot take over the tile library.
+     */
+    suspend fun extractForLibrary(
+        bitmap: Bitmap,
+        originalTileCount: Int,
+        settings: SegmentationSettings
+    ): List<Bitmap> = extractLimited(bitmap, originalTileCount, settings)
 
-            if (extractedBitmaps.isNotEmpty()) {
-                extractedBitmaps
-            } else {
-                listOf(bitmap)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            listOf(bitmap)
+    private suspend fun extractLimited(
+        bitmap: Bitmap,
+        originalTileCount: Int,
+        settings: SegmentationSettings
+    ): List<Bitmap> {
+        val extracted = try {
+            val result = segmenter.process(InputImage.fromBitmap(bitmap, 0)).await()
+            result.subjects.mapNotNull { subject -> subject.bitmap }
+        } catch (_: Exception) {
+            emptyList()
         }
+        if (extracted.isEmpty()) return emptyList()
+        val features = FeatureVector()
+        val candidates = extracted.mapIndexed { index, subject ->
+            val image = subject.toPixelImage()
+            analyzer.sample(image, 0, 0, image.width, image.height, wrapX = false, into = features)
+            SubjectCandidate(subject.width, subject.height, features.copyHistogram(), index)
+        }
+        val kept = SubjectExtractionPolicy.select(originalTileCount, candidates, settings).toSet()
+        extracted.forEachIndexed { index, subject ->
+            if (index !in kept && subject !== bitmap) subject.recycle()
+        }
+        return extracted.filterIndexed { index, _ -> index in kept }
     }
+
+    private val MANUAL = SegmentationSettings(
+        maxExtractedSubjects = 64,
+        minSubjectSizePx = 32,
+        maxLibraryFraction = 0.9f,
+        deduplicate = true,
+        allowedShapes = setOf(SubjectShape.TALL, SubjectShape.WIDE, SubjectShape.COMPACT)
+    )
 }

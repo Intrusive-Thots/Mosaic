@@ -47,14 +47,17 @@ class StreamingPngWriter(
 
     override fun close() {
         if (closed) return
-        check(rowsWritten == height) { "Expected $height rows, wrote $rowsWritten." }
-        deflater.finish()
-        drain(finish = true)
-        flushPending(force = true)
-        writeChunk(IEND, ByteArray(0))
-        deflater.end()
-        output.flush()
         closed = true
+        try {
+            check(rowsWritten == height) { "Expected $height rows, wrote $rowsWritten." }
+            deflater.finish()
+            drain(finish = true)
+            flushPending(force = true)
+            writeChunk(IEND, ByteArray(0))
+            output.flush()
+        } finally {
+            deflater.end()
+        }
     }
 
     private fun drain(finish: Boolean) {

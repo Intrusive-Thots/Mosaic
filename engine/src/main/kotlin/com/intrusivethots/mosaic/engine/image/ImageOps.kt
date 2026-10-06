@@ -88,7 +88,7 @@ fun PixelImage.resizeAreaAverage(targetWidth: Int, targetHeight: Int): PixelImag
             var count = 0L
             for (sy in srcY0 until srcY1) {
                 var index = sy * width + srcX0
-                for (sx in srcX0 until srcX1) {
+                repeat(srcX1 - srcX0) {
                     val pixel = pixels[index++]
                     alpha += (pixel ushr 24) and 0xFF
                     red += (pixel ushr 16) and 0xFF
