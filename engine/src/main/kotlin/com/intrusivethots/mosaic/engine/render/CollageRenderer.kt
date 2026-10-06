@@ -50,7 +50,7 @@ class CollageRenderer {
         }
     }
 
-    private fun paintSprite(
+    internal fun paintSprite(
         row: IntArray,
         y: Int,
         sprite: Sprite,
@@ -62,15 +62,14 @@ class CollageRenderer {
         val end = sprite.draw.right
         for (x in start..end) {
             val sampled = sampleCutout(sprite.source, sprite.descriptor, sprite.draw, x, y)
-            val alpha = sampled ushr 24
-            if (alpha <= TileAnalyzer.ALPHA_THRESHOLD) continue
+            val styled = stylePixel(sampled, sprite, config)
+            if (styled == 0) continue
             if (coverage != null) coverage[y * width + x] = true
-            val corrected = recolor(sampled, sprite, config.renderMode, config.colorMatchWeight)
-            row[x] = srcOver(row[x], corrected)
+            row[x] = srcOver(row[x], styled)
         }
     }
 
-    private fun sprites(
+    internal fun sprites(
         plan: MosaicPlan,
         descriptors: List<TileDescriptor>,
         thumbnails: List<PixelImage>,
@@ -89,7 +88,7 @@ class CollageRenderer {
         return sprites
     }
 
-    private fun paintBackground(
+    internal fun paintBackground(
         row: IntArray,
         y: Int,
         width: Int,
@@ -109,7 +108,7 @@ class CollageRenderer {
         }
     }
 
-    private fun paintShadow(row: IntArray, y: Int, sprite: Sprite, width: Int) {
+    internal fun paintShadow(row: IntArray, y: Int, sprite: Sprite, width: Int) {
         val sampleY = y - SHADOW_SHIFT
         if (sampleY < sprite.draw.top || sampleY > sprite.draw.bottom) return
         val start = (sprite.draw.left + SHADOW_SHIFT).coerceAtLeast(0)
@@ -121,6 +120,19 @@ class CollageRenderer {
             val shadowAlpha = alpha * SHADOW_ALPHA / 255
             row[x] = srcOver(row[x], shadowAlpha shl 24)
         }
+    }
+
+    private fun stylePixel(sampled: Int, sprite: Sprite, config: MosaicConfig): Int {
+        var alpha = sampled ushr 24
+        val feather = config.collage.feather
+        if (feather > 0f && alpha < 255) {
+            val keep = 1f - feather * (1f - alpha / 255f)
+            alpha = (alpha * keep).toInt().coerceIn(0, 255)
+        }
+        if (alpha <= TileAnalyzer.ALPHA_THRESHOLD) return 0
+        if (config.collage.outline && alpha < 220) return (alpha shl 24) or OUTLINE
+        val withAlpha = (sampled and 0x00FFFFFF) or (alpha shl 24)
+        return recolor(withAlpha, sprite, config.renderMode, config.colorMatchWeight)
     }
 
     /**
@@ -164,7 +176,7 @@ class CollageRenderer {
         return argb((red / n).toInt(), (green / n).toInt(), (blue / n).toInt())
     }
 
-    private class Sprite(
+    internal class Sprite(
         val descriptor: TileDescriptor,
         val source: PixelImage,
         val draw: PieceDraw,
@@ -178,5 +190,6 @@ class CollageRenderer {
         private const val OPAQUE_MASK = OPAQUE
         private const val SHADOW_SHIFT = 2
         private const val SHADOW_ALPHA = 70
+        private const val OUTLINE = 0x1C140E
     }
 }

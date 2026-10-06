@@ -1,10 +1,13 @@
 package com.intrusivethots.mosaic.engine.render
 
 import com.intrusivethots.mosaic.engine.color.OkLab
+import com.intrusivethots.mosaic.engine.config.CollageBackground
+import com.intrusivethots.mosaic.engine.config.HybridStack
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.OutputLayout
 import com.intrusivethots.mosaic.engine.config.RenderMode
 import com.intrusivethots.mosaic.engine.config.TileFit
+import com.intrusivethots.mosaic.engine.config.effectiveStack
 import com.intrusivethots.mosaic.engine.config.validated
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.sampleBilinear
@@ -30,7 +33,12 @@ class MosaicRenderer(
         coverage: BooleanArray? = null,
         onProgress: (Float) -> Unit = {}
     ) {
-        if (plan.placements.isNotEmpty()) {
+        val stack = config.validated().effectiveStack()
+        if (stack == HybridStack.GRID_UNDER || stack == HybridStack.COLLAGE_UNDER) {
+            renderHybrid(plan, descriptors, thumbnails, layout, config, sink, target, stack, onProgress)
+            return
+        }
+        if (plan.placements.isNotEmpty() && stack.usesCollage()) {
             collageRenderer.render(
                 plan, descriptors, thumbnails, layout, config, target, sink, coverage, onProgress
             )
@@ -208,6 +216,116 @@ class MosaicRenderer(
         val oriented = sourceCoordinate(displayWidth, displayHeight, cellWidth, cellHeight, dx, dy, centerCrop)
             ?: return null
         return unrotateSample(source.width, source.height, oriented.first, oriented.second, quarterTurns, mirror)
+    }
+
+    private suspend fun renderHybrid(
+        plan: MosaicPlan,
+        descriptors: List<TileDescriptor>,
+        thumbnails: List<PixelImage>,
+        layout: OutputLayout,
+        config: MosaicConfig,
+        sink: RowSink,
+        target: PixelImage?,
+        stack: HybridStack,
+        onProgress: (Float) -> Unit
+    ) {
+        val collageOnTop = stack == HybridStack.GRID_UNDER
+        val sprites = collageRenderer.sprites(plan, descriptors, thumbnails, layout.width, layout.height)
+        val mean = if (target == null) 0xFF18181C.toInt() else meanOf(target)
+        val useTarget = config.collage.background == CollageBackground.TARGET && target != null
+        val row = IntArray(layout.width)
+        val gridRow = IntArray(layout.width)
+        val grout = (minOf(layout.cellWidth, layout.cellHeight) / 10).coerceAtLeast(1)
+        var lastReported = -1
+        for (y in 0 until layout.height) {
+            if (y % 8 == 0) coroutineContext.ensureActive()
+            if (collageOnTop) {
+                fillUniformRow(plan, descriptors, thumbnails, layout, config, y, row)
+                paintCutouts(row, y, sprites, config, layout.width)
+            } else {
+                collageRenderer.paintBackground(row, y, layout.width, layout.height, target, useTarget, mean)
+                paintCutouts(row, y, sprites, config, layout.width)
+                fillUniformRow(plan, descriptors, thumbnails, layout, config, y, gridRow)
+                overlayGrid(row, gridRow, y, layout, grout)
+            }
+            sink.writeRow(y, row)
+            val percent = ((y + 1) * 100) / layout.height
+            if (percent != lastReported) {
+                lastReported = percent
+                onProgress((y + 1).toFloat() / layout.height.toFloat())
+            }
+        }
+    }
+
+    private fun paintCutouts(
+        row: IntArray,
+        y: Int,
+        sprites: List<CollageRenderer.Sprite>,
+        config: MosaicConfig,
+        width: Int
+    ) {
+        for (sprite in sprites) {
+            if (config.collage.separatePieces) collageRenderer.paintShadow(row, y, sprite, width)
+            if (y < sprite.draw.top || y > sprite.draw.bottom) continue
+            collageRenderer.paintSprite(row, y, sprite, config, null, width)
+        }
+    }
+
+    private fun overlayGrid(row: IntArray, gridRow: IntArray, y: Int, layout: OutputLayout, grout: Int) {
+        val dy = y % layout.cellHeight
+        if (dy < grout) return
+        for (x in row.indices) {
+            if (x % layout.cellWidth < grout) continue
+            row[x] = gridRow[x]
+        }
+    }
+
+    private fun fillUniformRow(
+        plan: MosaicPlan,
+        descriptors: List<TileDescriptor>,
+        thumbnails: List<PixelImage>,
+        layout: OutputLayout,
+        config: MosaicConfig,
+        y: Int,
+        row: IntArray
+    ) {
+        val validated = config.validated()
+        val cellWidth = layout.cellWidth
+        val cellHeight = layout.cellHeight
+        val cellRow = (y / cellHeight).coerceIn(0, layout.rows - 1)
+        val dy = y % cellHeight
+        val shift = if (layout.staggered && cellRow % 2 == 1) cellWidth / 2 else 0
+        for (x in 0 until layout.width) {
+            var localX = x - shift
+            if (localX < 0) localX += layout.width
+            val cellColumn = (localX / cellWidth).coerceIn(0, layout.columns - 1)
+            val cell = cellRow * layout.columns + cellColumn
+            val code = orientationCode(plan, cell)
+            row[x] = pixelAt(
+                plan, descriptors, thumbnails, cell, localX % cellWidth, dy, cellWidth, cellHeight,
+                validated.tileFit == TileFit.CENTER_CROP, validated.renderMode, validated.colorMatchWeight,
+                code and 3, code >= 4
+            )
+        }
+    }
+
+    private fun meanOf(image: PixelImage): Int {
+        var red = 0L
+        var green = 0L
+        var blue = 0L
+        val step = (image.pixels.size / 2000).coerceAtLeast(1)
+        var count = 0L
+        var index = 0
+        while (index < image.pixels.size) {
+            val pixel = image.pixels[index]
+            red += (pixel ushr 16) and 0xFF
+            green += (pixel ushr 8) and 0xFF
+            blue += pixel and 0xFF
+            count++
+            index += step
+        }
+        val n = count.coerceAtLeast(1)
+        return ((red / n).toInt() shl 16) or ((green / n).toInt() shl 8) or (blue / n).toInt() or OPAQUE
     }
 
     private fun orientationCode(plan: MosaicPlan, cell: Int): Int {

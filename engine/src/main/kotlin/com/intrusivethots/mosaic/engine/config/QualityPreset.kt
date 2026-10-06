@@ -12,9 +12,9 @@ fun QualityPreset.applyTo(base: MosaicConfig): MosaicConfig {
             render = RenderMode.BLENDED,
             strength = 0.45f,
             balance = 0f,
-            pieces = 120,
-            minScale = 0.06f,
-            maxScale = 0.24f,
+            pieces = 180,
+            minScale = 0.05f,
+            maxScale = 0.22f,
             refineSteps = 0
         )
         QualityPreset.BALANCED -> PresetValues(
@@ -26,9 +26,9 @@ fun QualityPreset.applyTo(base: MosaicConfig): MosaicConfig {
             render = RenderMode.COLOR_CORRECTED,
             strength = 0.65f,
             balance = 0f,
-            pieces = 320,
-            minScale = 0.04f,
-            maxScale = 0.18f,
+            pieces = 480,
+            minScale = 0.03f,
+            maxScale = 0.16f,
             refineSteps = 8
         )
         QualityPreset.HIGH_QUALITY -> PresetValues(
@@ -40,10 +40,10 @@ fun QualityPreset.applyTo(base: MosaicConfig): MosaicConfig {
             render = RenderMode.COLOR_CORRECTED,
             strength = 0.75f,
             balance = 0.15f,
-            pieces = 520,
-            minScale = 0.035f,
-            maxScale = 0.16f,
-            refineSteps = 12
+            pieces = 1200,
+            minScale = 0.02f,
+            maxScale = 0.11f,
+            refineSteps = 14
         )
         QualityPreset.MAXIMUM -> PresetValues(
             columns = 100,
@@ -54,10 +54,10 @@ fun QualityPreset.applyTo(base: MosaicConfig): MosaicConfig {
             render = RenderMode.COLOR_CORRECTED,
             strength = 0.85f,
             balance = 0.30f,
-            pieces = 800,
-            minScale = 0.03f,
-            maxScale = 0.14f,
-            refineSteps = 16
+            pieces = 2200,
+            minScale = 0.015f,
+            maxScale = 0.08f,
+            refineSteps = 20
         )
         QualityPreset.CUSTOM -> error("Custom has no preset values.")
     }

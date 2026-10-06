@@ -117,6 +117,13 @@ fun planCollageOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig,
     }
     var width = targetWidth.coerceAtLeast(1)
     var height = targetHeight.coerceAtLeast(1)
+    val floor = collageLongEdge(validated.outputMode)
+    val longEdge = maxOf(width, height)
+    if (longEdge < floor) {
+        val scale = floor.toFloat() / longEdge.toFloat()
+        width = (width * scale).roundToInt().coerceAtLeast(1)
+        height = (height * scale).roundToInt().coerceAtLeast(1)
+    }
     val pixels = width.toLong() * height.toLong()
     if (pixels > MAX_OUTPUT_PIXELS) {
         val scale = kotlin.math.sqrt(MAX_OUTPUT_PIXELS.toDouble() / pixels.toDouble())
@@ -124,6 +131,24 @@ fun planCollageOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig,
         height = (height * scale).roundToInt().coerceAtLeast(1)
     }
     return OutputLayout(1, 1, width, height, false)
+}
+
+/** Final collage long edge for each output preset. Preview and custom sizes do not use this. */
+fun collageLongEdge(mode: OutputMode): Int = when (mode) {
+    OutputMode.STANDARD -> 1600
+    OutputMode.HIGH -> 2200
+    OutputMode.ULTRA -> 2800
+}
+
+fun planStackedOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig, preview: Boolean): OutputLayout {
+    val stack = config.validated().effectiveStack()
+    if (stack == HybridStack.GRID) return planOutput(targetWidth, targetHeight, config, preview)
+    if (stack == HybridStack.CUTOUTS) return planCollageOutput(targetWidth, targetHeight, config, preview)
+    val picture = planCollageOutput(targetWidth, targetHeight, config, preview)
+    val grid = planGrid(targetWidth, targetHeight, config)
+    val cellWidth = (picture.width / grid.columns).coerceAtLeast(1)
+    val cellHeight = (picture.height / grid.rows).coerceAtLeast(1)
+    return OutputLayout(grid.columns, grid.rows, cellWidth, cellHeight, grid.staggered)
 }
 
 private fun fittedSize(
