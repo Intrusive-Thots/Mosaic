@@ -2,9 +2,12 @@ package com.intrusivethots.mosaic.ui.components
 
 import com.intrusivethots.mosaic.engine.config.CellAspect
 import com.intrusivethots.mosaic.engine.config.CollageSettings
+import com.intrusivethots.mosaic.engine.config.CollageStyle
+import com.intrusivethots.mosaic.engine.config.HybridStack
 import com.intrusivethots.mosaic.engine.config.LayoutMode
 import com.intrusivethots.mosaic.engine.config.MosaicKind
 import com.intrusivethots.mosaic.engine.config.RotationMode
+import com.intrusivethots.mosaic.ui.state.CollageEdit
 
 class ShapeEditor(
     val onClearTiles: () -> Unit,
@@ -17,5 +20,8 @@ class ShapeEditor(
     val onOutput: (Int, Int, Boolean) -> Unit,
     val onKind: (MosaicKind) -> Unit,
     val onCollage: (CollageSettings) -> Unit,
-    val onRemoveStamp: (Int) -> Unit
+    val onRemoveStamp: (Int) -> Unit,
+    val onCollageStyle: (CollageStyle) -> Unit,
+    val onStack: (HybridStack) -> Unit,
+    val onEdit: (CollageEdit) -> Unit
 )

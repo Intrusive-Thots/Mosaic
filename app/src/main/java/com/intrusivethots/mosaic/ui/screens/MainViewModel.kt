@@ -35,6 +35,7 @@ import com.intrusivethots.mosaic.engine.config.SegmentationSettings
 import com.intrusivethots.mosaic.engine.config.SubjectShape
 import com.intrusivethots.mosaic.engine.config.TileFit
 import com.intrusivethots.mosaic.engine.config.applyTo
+import com.intrusivethots.mosaic.engine.config.restyle
 import com.intrusivethots.mosaic.engine.image.unrotateNormalizedRect
 import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
@@ -67,6 +68,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val coordinator = GenerationCoordinator(cache = descriptorCache)
     private val bitmapCache = BitmapLruCache(maxBytes = 32 * 1024 * 1024)
     private val preferences = application.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+    private val stampStore = com.intrusivethots.mosaic.core.StampStore(File(application.filesDir, "stamps"))
 
     private val _state = MutableStateFlow(MosaicUiState())
     val state = _state.asStateFlow()
@@ -75,14 +77,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val events = _events.asSharedFlow()
 
     private var generationJob: Job? = null
+    private var extractJob: Job? = null
     private var lastPlan: MosaicPlan? = null
+    private var undoPlan: MosaicPlan? = null
+    private var planEdit: com.intrusivethots.mosaic.engine.coord.PlanEdit? = null
+    private var tileCount: Int = 0
 
     init {
-        _state.update { it.copy(config = readConfig()) }
+        _state.update { it.copy(config = readMosaicConfig(preferences)) }
         viewModelScope.launch(Dispatchers.IO) {
             val key = repository.getApiKey()
             val available = repository.keystoreAvailable
-            _state.update { it.copy(apiKey = key, keystoreAvailable = available) }
+            val stamps = stampStore.load()
+            _state.update { it.copy(apiKey = key, keystoreAvailable = available, customStamps = stamps.ifEmpty { it.customStamps }) }
         }
         refreshProjects()
     }
@@ -166,6 +173,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         _state.update { it.copy(customStamps = it.customStamps + stamps) }
         lastPlan = null
+        persistStamps()
     }
 
     fun removeCustomStamp(index: Int) {
@@ -173,6 +181,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             state.copy(customStamps = state.customStamps.filterIndexed { stampIndex, _ -> stampIndex != index })
         }
         lastPlan = null
+        persistStamps()
     }
 
     fun clearTiles() {
@@ -181,11 +190,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         bitmapCache.clear()
         lastPlan = null
         persistTileTurns()
+        persistStamps()
     }
 
     fun clearStamps() {
         _state.update { it.copy(customStamps = emptyList()) }
         lastPlan = null
+        persistStamps()
+    }
+
+    fun replaceStamp(index: Int, bitmap: Bitmap) {
+        _state.update { state ->
+            if (index !in state.customStamps.indices) return@update state
+            val stamps = state.customStamps.toMutableList()
+            val previous = stamps[index]
+            stamps[index] = bitmap
+            if (previous !== bitmap && !previous.isRecycled) previous.recycle()
+            state.copy(customStamps = stamps)
+        }
+        lastPlan = null
+        persistStamps()
+    }
+
+    fun extractStampBatch(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        extractJob?.cancel()
+        extractJob = viewModelScope.launch {
+            val found = mutableListOf<Bitmap>()
+            try {
+                uris.forEachIndexed { index, uri ->
+                    _state.update { it.copy(libraryMessage = "Extracting ${index + 1} of ${uris.size}") }
+                    coroutineContext.ensureActive()
+                    found += extractStampsFromUri(uri)
+                }
+                addCustomStamps(found)
+            } catch (cancelled: CancellationException) {
+                found.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+                throw cancelled
+            } finally {
+                _state.update { it.copy(libraryMessage = "") }
+            }
+        }
+    }
+
+    fun cancelExtract() {
+        extractJob?.cancel()
     }
 
     fun applyQualityPreset(preset: QualityPreset) {
@@ -228,9 +277,81 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateLayoutMode(mode: LayoutMode) = updateConfig { it.copy(layoutMode = mode, qualityPreset = QualityPreset.CUSTOM) }
 
-    fun updateMosaicKind(kind: MosaicKind) = updateConfig { it.copy(mosaicKind = kind) }
+    fun updateMosaicKind(kind: MosaicKind) = updateConfig { current ->
+        val stack = when {
+            kind == MosaicKind.GRID -> com.intrusivethots.mosaic.engine.config.HybridStack.GRID
+            current.collage.stack == com.intrusivethots.mosaic.engine.config.HybridStack.GRID ->
+                com.intrusivethots.mosaic.engine.config.HybridStack.CUTOUTS
+            else -> current.collage.stack
+        }
+        current.copy(mosaicKind = kind, collage = current.collage.copy(stack = stack))
+    }
 
     fun updateCollage(settings: CollageSettings) = updateConfig { it.copy(collage = settings) }
+
+    fun applyCollageStyle(style: com.intrusivethots.mosaic.engine.config.CollageStyle) = updateConfig { style.restyle(it) }
+
+    fun applyStack(stack: com.intrusivethots.mosaic.engine.config.HybridStack) = updateConfig { current ->
+        val kind = if (stack == com.intrusivethots.mosaic.engine.config.HybridStack.GRID) MosaicKind.GRID else MosaicKind.COLLAGE
+        current.copy(mosaicKind = kind, collage = current.collage.copy(stack = stack))
+    }
+
+    fun onCollageEdit(edit: com.intrusivethots.mosaic.ui.state.CollageEdit) {
+        when (edit) {
+            is com.intrusivethots.mosaic.ui.state.CollageEdit.Tap -> _state.update { it.copy(editPoint = edit.x to edit.y) }
+            com.intrusivethots.mosaic.ui.state.CollageEdit.Undo -> undoEdit()
+            com.intrusivethots.mosaic.ui.state.CollageEdit.Regenerate -> regenerateEdit()
+            com.intrusivethots.mosaic.ui.state.CollageEdit.Swap -> mutatePiece { plan, index ->
+                com.intrusivethots.mosaic.engine.match.CollageEditor().swap(plan, index, tileCount)
+            }
+            com.intrusivethots.mosaic.ui.state.CollageEdit.Pin -> mutatePiece { plan, index ->
+                com.intrusivethots.mosaic.engine.match.CollageEditor().pin(plan, index)
+            }
+            com.intrusivethots.mosaic.ui.state.CollageEdit.Remove -> mutatePiece { plan, index ->
+                com.intrusivethots.mosaic.engine.match.CollageEditor().remove(plan, index)
+            }
+        }
+    }
+
+    private fun mutatePiece(change: (MosaicPlan, Int) -> MosaicPlan) {
+        val plan = lastPlan ?: return
+        val point = _state.value.editPoint ?: return
+        val index = com.intrusivethots.mosaic.engine.match.CollageEditor().hit(plan, point.first, point.second)
+        if (index < 0) {
+            _events.tryEmit(UiEvent.Message("Tap a piece on the picture first."))
+            return
+        }
+        undoPlan = plan
+        lastPlan = change(plan, index)
+        _state.update { it.copy(canUndoEdit = true) }
+        generatePreview()
+    }
+
+    private fun undoEdit() {
+        val previous = undoPlan ?: return
+        undoPlan = lastPlan
+        lastPlan = previous
+        generatePreview()
+    }
+
+    private fun regenerateEdit() {
+        val point = _state.value.editPoint ?: return
+        if (lastPlan == null) return
+        undoPlan = lastPlan
+        val config = _state.value.config
+        planEdit = { current, descriptors, image, index ->
+            com.intrusivethots.mosaic.engine.match.CollageEditor().regenerate(
+                image, descriptors, index, config, current, point.first, point.second, 0.14f
+            )
+        }
+        _state.update { it.copy(canUndoEdit = true) }
+        generatePreview()
+    }
+
+    private fun persistStamps() {
+        val stamps = _state.value.customStamps
+        viewModelScope.launch(Dispatchers.IO) { stampStore.saveAll(stamps) }
+    }
 
     fun tightenStamp(index: Int) {
         _state.update { state ->
@@ -242,6 +363,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (!stamp.isRecycled) stamp.recycle()
             state.copy(customStamps = stamps)
         }
+        persistStamps()
     }
 
     fun updateRotationMode(mode: RotationMode) = updateConfig { it.copy(rotationMode = mode, qualityPreset = QualityPreset.CUSTOM) }
@@ -378,6 +500,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     config = config,
                     preview = preview,
                     reusePlan = lastPlan,
+                    placementEdit = planEdit.also { planEdit = null },
                     sinkFactory = if (preview) {
                         null
                     } else {
@@ -391,9 +514,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 )
                 lastPlan = result.plan
+                tileCount = result.descriptors.size
                 if (preview) {
                     val bitmap = result.image?.toBitmap()
-                    _state.update { it.copy(previewBitmap = bitmap, displayBitmap = null, hasFullRender = false, generation = GenerationUiState.Idle) }
+                    _state.update {
+                        it.copy(
+                            previewBitmap = bitmap,
+                            displayBitmap = null,
+                            hasFullRender = false,
+                            generation = GenerationUiState.Idle,
+                            canUndoEdit = undoPlan != null
+                        )
+                    }
                 } else {
                     png?.close()
                     stream?.close()
@@ -518,12 +650,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun estimateBytes(width: Int, height: Int, config: MosaicConfig): Long {
-        if (config.customOutputWidth > 0 && config.customOutputHeight > 0) {
-            return config.customOutputWidth.toLong() * config.customOutputHeight.toLong() * 4L
-        }
-        val cells = config.gridColumns.coerceAtLeast(1).toLong() * config.gridRows.coerceAtLeast(1)
-        val pixelsPerCell = if (config.outputMode == OutputMode.ULTRA) 64L else if (config.outputMode == OutputMode.HIGH) 40L else 24L
-        return (cells * pixelsPerCell * pixelsPerCell).coerceAtLeast(width.toLong() * height / 4)
+        val layout = com.intrusivethots.mosaic.engine.config.planStackedOutput(width, height, config, preview = false)
+        return layout.pixels * 4L
     }
 
     private fun publish(stage: GenerationStage, fraction: Float, label: String, preview: Bitmap? = null) {
@@ -540,97 +668,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun updateConfig(transform: (MosaicConfig) -> MosaicConfig) {
         _state.update { state ->
             val updated = transform(state.config)
-            writeConfig(updated)
-            state.copy(config = updated)
+            writeMosaicConfig(preferences, updated)
+            state.copy(config = updated, editPoint = null, canUndoEdit = false)
         }
         lastPlan = null
-    }
-
-    private fun readConfig(): MosaicConfig {
-        if (!preferences.contains("cols")) return QualityPreset.BALANCED.applyTo(MosaicConfig())
-        val preset = preferences.getString("preset", QualityPreset.BALANCED.name)
-            ?.let { runCatching { QualityPreset.valueOf(it) }.getOrNull() }
-            ?: QualityPreset.BALANCED
-        val base = preset.applyTo(MosaicConfig())
-        return base.copy(
-            gridColumns = preferences.getInt("cols", base.gridColumns),
-            gridRows = preferences.getInt("rows", base.gridRows),
-            linkAspectToGrid = preferences.getBoolean("link", base.linkAspectToGrid),
-            colorMatchWeight = preferences.getFloat("blend", base.colorMatchWeight),
-            allowTileRepetition = preferences.getBoolean("repeat", base.allowTileRepetition),
-            maxRepetitionDistance = preferences.getInt("radius", base.maxRepetitionDistance),
-            extractSubjectsWithAi = preferences.getBoolean("ai", false),
-            randomSeed = preferences.getInt("seed", 1),
-            aspectRatio = preferences.getString("aspect", base.aspectRatio.name)
-                ?.let { runCatching { AspectRatioPreset.valueOf(it) }.getOrNull() } ?: base.aspectRatio,
-            mosaicStyle = preferences.getString("style", base.mosaicStyle.name)
-                ?.let { runCatching { MosaicStyle.valueOf(it) }.getOrNull() } ?: base.mosaicStyle,
-            renderMode = preferences.getString("render", base.renderMode.name)
-                ?.let { runCatching { RenderMode.valueOf(it) }.getOrNull() } ?: base.renderMode,
-            outputMode = preferences.getString("output", base.outputMode.name)
-                ?.let { runCatching { OutputMode.valueOf(it) }.getOrNull() } ?: base.outputMode,
-            tileFit = preferences.getString("fit", base.tileFit.name)
-                ?.let { runCatching { TileFit.valueOf(it) }.getOrNull() } ?: base.tileFit,
-            cellAspect = preferences.getString("cellAspect", base.cellAspect.name)
-                ?.let { runCatching { CellAspect.valueOf(it) }.getOrNull() } ?: base.cellAspect,
-            layoutMode = preferences.getString("layoutMode", base.layoutMode.name)
-                ?.let { runCatching { LayoutMode.valueOf(it) }.getOrNull() } ?: base.layoutMode,
-            rotationMode = preferences.getString("rotationMode", base.rotationMode.name)
-                ?.let { runCatching { RotationMode.valueOf(it) }.getOrNull() } ?: base.rotationMode,
-            targetQuarterTurns = preferences.getInt("targetTurns", 0) and 3,
-            targetScale = preferences.getFloat("targetScale", 1f),
-            customOutputWidth = preferences.getInt("outW", 0),
-            customOutputHeight = preferences.getInt("outH", 0),
-            lockOutputAspect = preferences.getBoolean("outLock", true),
-            mosaicKind = preferences.getString("kind", MosaicKind.GRID.name)
-                ?.let { runCatching { MosaicKind.valueOf(it) }.getOrNull() } ?: MosaicKind.GRID,
-            collage = readCollage(base.collage),
-            segmentation = base.segmentation.copy(
-                maxExtractedSubjects = preferences.getInt("aiMax", base.segmentation.maxExtractedSubjects),
-                minSubjectSizePx = preferences.getInt("aiMin", base.segmentation.minSubjectSizePx),
-                allowedShapes = readShapes()
-            )
-        )
-    }
-
-    private fun writeConfig(config: MosaicConfig) {
-        preferences.edit()
-            .putInt("cols", config.gridColumns)
-            .putInt("rows", config.gridRows)
-            .putBoolean("link", config.linkAspectToGrid)
-            .putFloat("blend", config.colorMatchWeight)
-            .putBoolean("repeat", config.allowTileRepetition)
-            .putInt("radius", config.maxRepetitionDistance)
-            .putBoolean("ai", config.extractSubjectsWithAi)
-            .putInt("seed", config.randomSeed)
-            .putString("preset", config.qualityPreset.name)
-            .putString("aspect", config.aspectRatio.name)
-            .putString("style", config.mosaicStyle.name)
-            .putString("render", config.renderMode.name)
-            .putString("output", config.outputMode.name)
-            .putString("fit", config.tileFit.name)
-            .putString("cellAspect", config.cellAspect.name)
-            .putString("layoutMode", config.layoutMode.name)
-            .putString("rotationMode", config.rotationMode.name)
-            .putInt("targetTurns", config.targetQuarterTurns and 3)
-            .putFloat("targetScale", config.targetScale)
-            .putInt("outW", config.customOutputWidth)
-            .putInt("outH", config.customOutputHeight)
-            .putBoolean("outLock", config.lockOutputAspect)
-            .putString("kind", config.mosaicKind.name)
-            .putInt("pieces", config.collage.pieceCount)
-            .putFloat("smin", config.collage.minScale)
-            .putFloat("smax", config.collage.maxScale)
-            .putFloat("rdeg", config.collage.rotationRangeDegrees)
-            .putFloat("overlap", config.collage.overlap)
-            .putString("cbg", config.collage.background.name)
-            .putFloat("shapeW", config.collage.shapeWeight)
-            .putBoolean("collagePhotos", config.collage.includeSourcePhotos)
-            .putBoolean("separate", config.collage.separatePieces)
-            .putInt("aiMax", config.segmentation.maxExtractedSubjects)
-            .putInt("aiMin", config.segmentation.minSubjectSizePx)
-            .putString("shapes", config.segmentation.allowedShapes.joinToString(",") { it.name })
-            .apply()
+        undoPlan = null
     }
 
     private fun refreshThumbs() {
@@ -651,28 +693,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun persistTileTurns() {
         val state = _state.value
-        preferences.edit()
-            .putString(TILE_TURNS, encodeTileRotations(state.tileUris.map { it.toString() }, state.tileQuarterTurns))
-            .apply()
-    }
-
-    private fun readCollage(base: CollageSettings): CollageSettings = base.copy(
-        pieceCount = preferences.getInt("pieces", base.pieceCount),
-        minScale = preferences.getFloat("smin", base.minScale),
-        maxScale = preferences.getFloat("smax", base.maxScale),
-        rotationRangeDegrees = preferences.getFloat("rdeg", base.rotationRangeDegrees),
-        overlap = preferences.getFloat("overlap", base.overlap),
-        background = preferences.getString("cbg", base.background.name)
-            ?.let { runCatching { CollageBackground.valueOf(it) }.getOrNull() } ?: base.background,
-        shapeWeight = preferences.getFloat("shapeW", base.shapeWeight),
-        includeSourcePhotos = preferences.getBoolean("collagePhotos", base.includeSourcePhotos),
-        separatePieces = preferences.getBoolean("separate", base.separatePieces)
-    )
-
-    private fun readShapes(): Set<SubjectShape> {
-        val raw = preferences.getString("shapes", null) ?: return setOf(SubjectShape.TALL, SubjectShape.WIDE, SubjectShape.COMPACT)
-        val parsed = raw.split(",").mapNotNull { runCatching { SubjectShape.valueOf(it) }.getOrNull() }.toSet()
-        return parsed.ifEmpty { setOf(SubjectShape.TALL, SubjectShape.WIDE, SubjectShape.COMPACT) }
+        preferences.edit().putString(TILE_TURNS, encodeTileRotations(state.tileUris.map { it.toString() }, state.tileQuarterTurns)).apply()
     }
 
     companion object {

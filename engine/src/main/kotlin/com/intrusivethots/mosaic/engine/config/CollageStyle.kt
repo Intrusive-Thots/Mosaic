@@ -29,7 +29,7 @@ fun MosaicConfig.effectiveStack(): HybridStack {
     return stack
 }
 
-fun CollageStyle.applyTo(config: MosaicConfig): MosaicConfig {
+fun CollageStyle.restyle(config: MosaicConfig): MosaicConfig {
     val current = config.collage.sanitized()
     val tuned = when (this) {
         CollageStyle.PAPER -> current.copy(

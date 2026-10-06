@@ -51,12 +51,12 @@ class CollageFeatureTest {
     @Test
     fun stylesChangeLookWithoutErasingThePieceBudgetKnob() {
         val balanced = QualityPreset.BALANCED.applyTo(MosaicConfig())
-        val stamp = CollageStyle.STAMP.applyTo(balanced)
+        val stamp = CollageStyle.STAMP.restyle(balanced)
         assertTrue(stamp.collage.outline)
         assertEquals(RenderMode.ORIGINAL, stamp.renderMode)
         assertEquals(0f, stamp.colorMatchWeight)
         assertEquals(balanced.collage.pieceCount, stamp.collage.pieceCount)
-        val sparse = CollageStyle.SPARSE.applyTo(balanced)
+        val sparse = CollageStyle.SPARSE.restyle(balanced)
         assertTrue(sparse.collage.pieceCount < balanced.collage.pieceCount)
         assertTrue(sparse.collage.coverageGoal < 0.6f)
     }

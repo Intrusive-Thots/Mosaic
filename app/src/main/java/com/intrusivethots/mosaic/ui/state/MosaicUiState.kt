@@ -24,7 +24,10 @@ data class MosaicUiState(
     val generation: GenerationUiState = GenerationUiState.Idle,
     val projects: List<MosaicProject> = emptyList(),
     val apiKey: String = "",
-    val keystoreAvailable: Boolean = true
+    val keystoreAvailable: Boolean = true,
+    val editPoint: Pair<Float, Float>? = null,
+    val canUndoEdit: Boolean = false,
+    val libraryMessage: String = ""
 ) {
     val hasTiles: Boolean get() = tileUris.isNotEmpty() || customStamps.isNotEmpty()
     val outputBitmap: Bitmap? get() = displayBitmap ?: previewBitmap

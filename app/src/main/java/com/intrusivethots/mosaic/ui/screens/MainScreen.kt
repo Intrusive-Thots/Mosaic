@@ -37,7 +37,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,7 +61,6 @@ import com.intrusivethots.mosaic.ui.theme.SurfaceDark
 import com.intrusivethots.mosaic.ui.theme.SurfaceVariantDark
 import com.intrusivethots.mosaic.ui.theme.TextPrimary
 import com.intrusivethots.mosaic.ui.theme.TextSecondary
-import kotlinx.coroutines.launch
 import java.io.File
 
 @Composable
@@ -112,11 +110,9 @@ private fun navColors(selected: Color) = NavigationBarItemDefaults.colors(
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
     var tab by remember { mutableIntStateOf(0) }
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
-    var extracting by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) {
@@ -136,14 +132,8 @@ fun MainScreen(viewModel: MainViewModel) {
     val tilePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(maxItems = 100)) { uris ->
         if (uris.isNotEmpty()) viewModel.addTileImages(uris)
     }
-    val stampPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) {
-            scope.launch {
-                extracting = true
-                viewModel.addCustomStamps(viewModel.extractStampsFromUri(uri))
-                extracting = false
-            }
-        }
+    val stampPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(maxItems = 40)) { uris ->
+        if (uris.isNotEmpty()) viewModel.extractStampBatch(uris)
     }
 
     Scaffold(
@@ -209,11 +199,14 @@ fun MainScreen(viewModel: MainViewModel) {
                 )
                 1 -> StampsScreen(
                     stamps = state.customStamps,
-                    extracting = extracting,
+                    extracting = state.libraryMessage.isNotEmpty(),
+                    progress = state.libraryMessage,
                     onPick = { stampPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     onRemove = viewModel::removeCustomStamp,
                     onClear = viewModel::clearStamps,
-                    onTighten = viewModel::tightenStamp
+                    onTighten = viewModel::tightenStamp,
+                    onCancel = viewModel::cancelExtract,
+                    onReplace = viewModel::replaceStamp
                 )
                 2 -> ProjectLibraryScreen(state.projects, viewModel::deleteProject, viewModel::exportProjectToGallery)
                 else -> SettingsDialog(state.apiKey, state.keystoreAvailable, viewModel::saveApiKey)
@@ -233,5 +226,8 @@ private fun shapeEditor(viewModel: MainViewModel) = ShapeEditor(
     onOutput = viewModel::updateCustomOutput,
     onKind = viewModel::updateMosaicKind,
     onCollage = viewModel::updateCollage,
-    onRemoveStamp = viewModel::removeCustomStamp
+    onRemoveStamp = viewModel::removeCustomStamp,
+    onCollageStyle = viewModel::applyCollageStyle,
+    onStack = viewModel::applyStack,
+    onEdit = viewModel::onCollageEdit
 )

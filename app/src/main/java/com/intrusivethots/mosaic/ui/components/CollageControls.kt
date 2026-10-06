@@ -60,10 +60,10 @@ private fun CollageSliders(settings: CollageSettings, onCollage: (CollageSetting
             fontSize = 12.sp,
             color = TextSecondary
         )
-    LabeledSlider("Pieces: ${settings.pieceCount}", settings.pieceCount.toFloat(), 8f, 1200f, AccentAmber) {
+    LabeledSlider("Pieces: ${settings.pieceCount}", settings.pieceCount.toFloat(), 8f, 4000f, AccentAmber) {
         onCollage(settings.copy(pieceCount = it.roundToInt()))
     }
-    LabeledSlider("Smallest scale: ${(settings.minScale * 100).roundToInt()}%", settings.minScale, 0.03f, 0.4f, AccentAmber) {
+    LabeledSlider("Smallest scale: ${(settings.minScale * 100).roundToInt()}%", settings.minScale, 0.015f, 0.4f, AccentAmber) {
         onCollage(settings.copy(minScale = it))
     }
     LabeledSlider("Largest scale: ${(settings.maxScale * 100).roundToInt()}%", settings.maxScale, 0.12f, 0.7f, AccentAmber) {
