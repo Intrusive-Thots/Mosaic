@@ -3,12 +3,21 @@ package com.intrusivethots.mosaic.engine.coord
 import com.intrusivethots.mosaic.engine.EmptyLibraryException
 import com.intrusivethots.mosaic.engine.InvalidTargetException
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
+import com.intrusivethots.mosaic.engine.config.MosaicKind
+import com.intrusivethots.mosaic.engine.config.customSizeError
 import com.intrusivethots.mosaic.engine.config.matchFingerprint
+import com.intrusivethots.mosaic.engine.config.outputLimitError
+import com.intrusivethots.mosaic.engine.config.planCollageOutput
 import com.intrusivethots.mosaic.engine.config.planOutput
 import com.intrusivethots.mosaic.engine.config.validated
+import com.intrusivethots.mosaic.engine.match.CollagePlacer
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.centerAspectRect
 import com.intrusivethots.mosaic.engine.image.crop
+import com.intrusivethots.mosaic.engine.image.downscaleLongEdge
+import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
+import com.intrusivethots.mosaic.engine.image.rotateClockwise
+import kotlin.math.roundToInt
 import com.intrusivethots.mosaic.engine.index.TileIndex
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.match.TileMatcher
@@ -41,6 +50,7 @@ class GenerationCoordinator(
     private val analyzer: TileAnalyzer = TileAnalyzer(),
     private val cache: DescriptorCache = MemoryDescriptorCache(),
     private val matcher: TileMatcher = TileMatcher(analyzer),
+    private val collagePlacer: CollagePlacer = CollagePlacer(),
     private val renderer: MosaicRenderer = MosaicRenderer(),
     private val clock: () -> Long = System::currentTimeMillis
 ) {
@@ -57,11 +67,12 @@ class GenerationCoordinator(
     ): GenerationResult {
         if (target.width <= 0 || target.height <= 0) throw InvalidTargetException()
         val validated = config.validated()
+        validated.customSizeError()?.let { throw IllegalArgumentException(it) }
         val progress = ThrottledProgress(progressIntervalMs, clock, onProgress)
         progress.report(GenerationStage.LOADING, 0f, "Loading images", force = true)
         coroutineContext.ensureActive()
 
-        val cropped = cropTarget(target, validated)
+        val cropped = prepareTarget(target, validated)
         val prepared = analyzeTiles(tiles, validated, progress)
         if (prepared.isEmpty()) throw EmptyLibraryException()
 
@@ -83,9 +94,17 @@ class GenerationCoordinator(
             solidCells = reusePlan.assignments.count { it == MosaicPlan.SOLID }
             progress.report(GenerationStage.MATCHING, 1f, "Reusing tile selection", force = true)
         } else {
-            progress.report(GenerationStage.MATCHING, 0f, "Matching cells", force = true)
-            val matched = matcher.match(cropped, descriptors, index, validated, tokens) { fraction ->
-                progress.report(GenerationStage.MATCHING, fraction, "Matching cells")
+            val collage = validated.mosaicKind == MosaicKind.COLLAGE
+            val matchLabel = if (collage) "Placing cutouts" else "Matching cells"
+            progress.report(GenerationStage.MATCHING, 0f, matchLabel, force = true)
+            val matched = if (collage) {
+                collagePlacer.place(cropped, descriptors, index, validated, tokens) { fraction ->
+                    progress.report(GenerationStage.MATCHING, fraction, matchLabel)
+                }
+            } else {
+                matcher.match(cropped, descriptors, index, validated, tokens) { fraction ->
+                    progress.report(GenerationStage.MATCHING, fraction, matchLabel)
+                }
             }
             plan = matched.first
             comparisons = matched.second.comparisons
@@ -94,7 +113,19 @@ class GenerationCoordinator(
             progress.report(GenerationStage.MATCHING, 1f, "Matching cells", force = true)
         }
 
-        val layout = planOutput(cropped.width, cropped.height, validated, preview)
+        val collage = validated.mosaicKind == MosaicKind.COLLAGE
+        val layout = if (collage) {
+            planCollageOutput(cropped.width, cropped.height, validated, preview)
+        } else {
+            planOutput(cropped.width, cropped.height, validated, preview)
+        }
+        if (!preview) {
+            val cellWidth = if (collage) 1 else layout.cellWidth
+            val cellHeight = if (collage) 1 else layout.cellHeight
+            outputLimitError(layout.width, layout.height, cellWidth, cellHeight)?.let {
+                throw IllegalArgumentException(it)
+            }
+        }
         val memory = if (sink == null && sinkFactory == null) {
             require(layout.pixels <= MAX_IN_MEMORY_PIXELS) {
                 "Output ${layout.width}×${layout.height} is too large for one bitmap. Render to a file instead."
@@ -111,7 +142,8 @@ class GenerationCoordinator(
             thumbnails = prepared.map { it.thumbnail },
             layout = layout,
             config = validated,
-            sink = destination
+            sink = destination,
+            target = cropped
         ) { fraction ->
             progress.report(GenerationStage.RENDERING, fraction, "Rendering mosaic")
         }
@@ -142,15 +174,18 @@ class GenerationCoordinator(
         tiles.forEachIndexed { index, source ->
             coroutineContext.ensureActive()
             val key = source.identity.toKey(analyzer.algorithmVersion)
-            val thumbnail = source.loadThumbnail(config.descriptorMaxEdge)
+            val collage = config.mosaicKind == MosaicKind.COLLAGE
+            val renderEdge = if (collage) maxOf(config.descriptorMaxEdge, COLLAGE_RENDER_EDGE) else config.descriptorMaxEdge
+            val loaded = source.loadThumbnail(renderEdge)
+            val analyzed = if (collage) loaded.downscaleLongEdge(config.descriptorMaxEdge) else loaded
             val cached = cache.get(key)
             val descriptor = cached ?: analyzer.describe(
                 key = key,
                 sourceWidth = source.identity.width,
                 sourceHeight = source.identity.height,
-                image = thumbnail
+                image = analyzed
             ).also { cache.put(key, it) }
-            prepared.add(PreparedTile(descriptor, thumbnail))
+            prepared.add(PreparedTile(descriptor, if (collage) loaded else analyzed))
             progress.report(
                 GenerationStage.ANALYZING,
                 (index + 1).toFloat() / tiles.size.toFloat(),
@@ -159,6 +194,19 @@ class GenerationCoordinator(
         }
         progress.report(GenerationStage.ANALYZING, 1f, "Analyzing tiles", force = true)
         return prepared
+    }
+
+    private fun prepareTarget(target: PixelImage, config: MosaicConfig): PixelImage {
+        val rotated = target.rotateClockwise(config.targetQuarterTurns)
+        val scaled = scaleTarget(rotated, config.targetScale)
+        return cropTarget(scaled, config)
+    }
+
+    private fun scaleTarget(target: PixelImage, scale: Float): PixelImage {
+        if (scale >= 0.999f) return target
+        val width = (target.width * scale).roundToInt().coerceAtLeast(1)
+        val height = (target.height * scale).roundToInt().coerceAtLeast(1)
+        return target.resizeAreaAverage(width, height)
     }
 
     private fun cropTarget(target: PixelImage, config: MosaicConfig): PixelImage {
@@ -172,5 +220,6 @@ class GenerationCoordinator(
 
     companion object {
         const val MAX_IN_MEMORY_PIXELS = 2_500_000L
+        const val COLLAGE_RENDER_EDGE = 128
     }
 }

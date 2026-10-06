@@ -3,6 +3,9 @@ package com.intrusivethots.mosaic.engine.tile
 import com.intrusivethots.mosaic.engine.color.HISTOGRAM_BIN_COUNT
 import com.intrusivethots.mosaic.engine.color.SPATIAL_FLOATS
 
+const val SHAPE_MASK_GRID = 8
+const val SHAPE_MASK_CELLS = SHAPE_MASK_GRID * SHAPE_MASK_GRID
+
 data class TileIdentity(
     val uri: String,
     val width: Int,
@@ -51,11 +54,17 @@ class TileDescriptor(
     val edgeDensity: Float,
     val alphaCoverage: Float,
     val histogram: FloatArray,
-    val spatial: FloatArray
+    val spatial: FloatArray,
+    val mask: ByteArray = ByteArray(0),
+    val contentLeft: Float = 0f,
+    val contentTop: Float = 0f,
+    val contentRight: Float = 1f,
+    val contentBottom: Float = 1f
 ) {
     init {
         require(histogram.size == HISTOGRAM_BIN_COUNT)
         require(spatial.size == SPATIAL_FLOATS)
+        require(mask.isEmpty() || mask.size == SHAPE_MASK_CELLS)
     }
 }
 

@@ -56,17 +56,22 @@ object SubjectSegmenterHelper {
             emptyList()
         }
         if (extracted.isEmpty()) return emptyList()
+        val cropped = extracted.map { subject ->
+            val tight = cropToSubject(subject)
+            if (tight !== subject) subject.recycle()
+            tight
+        }
         val features = FeatureVector()
-        val candidates = extracted.mapIndexed { index, subject ->
+        val candidates = cropped.mapIndexed { index, subject ->
             val image = subject.toPixelImage()
             analyzer.sample(image, 0, 0, image.width, image.height, wrapX = false, into = features)
             SubjectCandidate(subject.width, subject.height, features.copyHistogram(), index)
         }
         val kept = SubjectExtractionPolicy.select(originalTileCount, candidates, settings).toSet()
-        extracted.forEachIndexed { index, subject ->
+        cropped.forEachIndexed { index, subject ->
             if (index !in kept && subject !== bitmap) subject.recycle()
         }
-        return extracted.filterIndexed { index, _ -> index in kept }
+        return cropped.filterIndexed { index, _ -> index in kept }
     }
 
     private val MANUAL = SegmentationSettings(

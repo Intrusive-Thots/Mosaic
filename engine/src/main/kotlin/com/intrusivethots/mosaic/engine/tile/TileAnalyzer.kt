@@ -18,6 +18,7 @@ class TileAnalyzer(
     fun describe(key: DescriptorKey, sourceWidth: Int, sourceHeight: Int, image: PixelImage): TileDescriptor {
         val features = FeatureVector()
         sample(image, 0, 0, image.width, image.height, wrapX = false, into = features)
+        val shape = ShapeMask.measure(image)
         val aspect = sourceWidth.toFloat() / sourceHeight.toFloat().coerceAtLeast(1f)
         return TileDescriptor(
             key = key,
@@ -32,7 +33,12 @@ class TileAnalyzer(
             edgeDensity = features.edgeDensity,
             alphaCoverage = features.alphaCoverage,
             histogram = features.copyHistogram(),
-            spatial = features.spatial.copyOf()
+            spatial = features.spatial.copyOf(),
+            mask = shape.mask,
+            contentLeft = shape.left,
+            contentTop = shape.top,
+            contentRight = shape.right,
+            contentBottom = shape.bottom
         )
     }
 

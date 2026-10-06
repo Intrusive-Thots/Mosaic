@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.intrusivethots.mosaic.ui.components.ProjectLibraryScreen
 import com.intrusivethots.mosaic.ui.components.SettingsDialog
+import com.intrusivethots.mosaic.ui.components.ShapeEditor
 import com.intrusivethots.mosaic.ui.components.StampsScreen
 import com.intrusivethots.mosaic.ui.components.StudioScreen
 import com.intrusivethots.mosaic.ui.theme.AccentAmber
@@ -200,7 +201,7 @@ fun MainScreen(viewModel: MainViewModel) {
                     },
                     onCrop = viewModel::applyCropToTarget,
                     onResetCrop = viewModel::resetTargetCrop,
-                    onClearTiles = viewModel::clearTiles,
+                    shapeEditor = shapeEditor(viewModel),
                     onPreview = viewModel::generatePreview,
                     onRender = viewModel::generateFullMosaic,
                     onCancel = viewModel::cancelGeneration,
@@ -211,7 +212,8 @@ fun MainScreen(viewModel: MainViewModel) {
                     extracting = extracting,
                     onPick = { stampPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     onRemove = viewModel::removeCustomStamp,
-                    onClear = viewModel::clearStamps
+                    onClear = viewModel::clearStamps,
+                    onTighten = viewModel::tightenStamp
                 )
                 2 -> ProjectLibraryScreen(state.projects, viewModel::deleteProject, viewModel::exportProjectToGallery)
                 else -> SettingsDialog(state.apiKey, state.keystoreAvailable, viewModel::saveApiKey)
@@ -219,3 +221,17 @@ fun MainScreen(viewModel: MainViewModel) {
         }
     }
 }
+
+private fun shapeEditor(viewModel: MainViewModel) = ShapeEditor(
+    onClearTiles = viewModel::clearTiles,
+    onRotateTarget = viewModel::rotateTarget,
+    onRotateTile = viewModel::rotateTile,
+    onCellAspect = viewModel::updateCellAspect,
+    onLayout = viewModel::updateLayoutMode,
+    onRotation = viewModel::updateRotationMode,
+    onScale = viewModel::updateTargetScale,
+    onOutput = viewModel::updateCustomOutput,
+    onKind = viewModel::updateMosaicKind,
+    onCollage = viewModel::updateCollage,
+    onRemoveStamp = viewModel::removeCustomStamp
+)

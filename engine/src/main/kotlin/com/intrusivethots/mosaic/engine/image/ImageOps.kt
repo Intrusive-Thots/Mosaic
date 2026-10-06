@@ -57,6 +57,101 @@ fun PixelImage.crop(rect: IntRect): PixelImage {
     return PixelImage(rect.width, rect.height, out)
 }
 
+/** Clockwise quarter turns. Odd turns swap width and height. */
+fun PixelImage.rotateClockwise(quarterTurns: Int): PixelImage {
+    val turns = quarterTurns and 3
+    if (turns == 0) return this
+    val dstWidth = if (turns and 1 == 1) height else width
+    val dstHeight = if (turns and 1 == 1) width else height
+    val out = IntArray(dstWidth * dstHeight)
+    for (y in 0 until height) {
+        for (x in 0 until width) {
+            val pixel = pixels[y * width + x]
+            val dx: Int
+            val dy: Int
+            when (turns) {
+                1 -> {
+                    dx = height - 1 - y
+                    dy = x
+                }
+                2 -> {
+                    dx = width - 1 - x
+                    dy = height - 1 - y
+                }
+                else -> {
+                    dx = y
+                    dy = width - 1 - x
+                }
+            }
+            out[dy * dstWidth + dx] = pixel
+        }
+    }
+    return PixelImage(dstWidth, dstHeight, out)
+}
+
+/**
+ * Maps a normalized rectangle drawn on a clockwise-rotated view back onto the unrotated image.
+ * Corners stay axis-aligned, so the result is the crop to store before the engine rotates again.
+ */
+fun unrotateNormalizedRect(quarterTurns: Int, left: Float, top: Float, right: Float, bottom: Float): FloatArray {
+    val turns = quarterTurns and 3
+    fun point(nx: Float, ny: Float): Pair<Float, Float> = when (turns) {
+        0 -> nx to ny
+        1 -> ny to (1f - nx)
+        2 -> (1f - nx) to (1f - ny)
+        else -> (1f - ny) to nx
+    }
+    val corners = arrayOf(point(left, top), point(right, top), point(left, bottom), point(right, bottom))
+    var minX = 1f
+    var minY = 1f
+    var maxX = 0f
+    var maxY = 0f
+    for (corner in corners) {
+        if (corner.first < minX) minX = corner.first
+        if (corner.second < minY) minY = corner.second
+        if (corner.first > maxX) maxX = corner.first
+        if (corner.second > maxY) maxY = corner.second
+    }
+    return floatArrayOf(minX.coerceIn(0f, 1f), minY.coerceIn(0f, 1f), maxX.coerceIn(0f, 1f), maxY.coerceIn(0f, 1f))
+}
+
+/**
+ * Maps a sample in the rotated thumbnail back to the stored thumbnail.
+ * [mirror] flips X before the rotation, matching descriptor orientation.
+ */
+fun unrotateSample(
+    srcWidth: Int,
+    srcHeight: Int,
+    displayX: Float,
+    displayY: Float,
+    quarterTurns: Int,
+    mirror: Boolean
+): Pair<Float, Float> {
+    val turns = quarterTurns and 3
+    val px: Float
+    val py: Float
+    when (turns) {
+        0 -> {
+            px = displayX
+            py = displayY
+        }
+        1 -> {
+            px = displayY
+            py = (srcHeight - 1) - displayX
+        }
+        2 -> {
+            px = (srcWidth - 1) - displayX
+            py = (srcHeight - 1) - displayY
+        }
+        else -> {
+            px = (srcWidth - 1) - displayY
+            py = displayX
+        }
+    }
+    val sx = if (mirror) (srcWidth - 1) - px else px
+    return sx to py
+}
+
 fun PixelImage.cropToAspect(widthRatio: Float, heightRatio: Float): PixelImage {
     val rect = centerAspectRect(width, height, widthRatio, heightRatio)
     return crop(rect)

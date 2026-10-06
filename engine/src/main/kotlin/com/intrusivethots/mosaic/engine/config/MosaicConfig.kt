@@ -24,7 +24,17 @@ data class MosaicConfig(
     val randomSeed: Int = 1,
     val scoreWeights: ScoreWeights = ScoreWeights(),
     val previewCellPixels: Int = 8,
-    val segmentation: SegmentationSettings = SegmentationSettings()
+    val segmentation: SegmentationSettings = SegmentationSettings(),
+    val cellAspect: CellAspect = CellAspect.MATCH_GRID,
+    val layoutMode: LayoutMode = LayoutMode.UNIFORM,
+    val rotationMode: RotationMode = RotationMode.OFF,
+    val targetQuarterTurns: Int = 0,
+    val targetScale: Float = 1f,
+    val customOutputWidth: Int = 0,
+    val customOutputHeight: Int = 0,
+    val lockOutputAspect: Boolean = true,
+    val mosaicKind: MosaicKind = MosaicKind.GRID,
+    val collage: CollageSettings = CollageSettings()
 )
 
 enum class AspectRatioPreset(val label: String, val widthRatio: Float, val heightRatio: Float) {
@@ -59,6 +69,35 @@ enum class TileFit(val label: String) {
     CENTER_CROP("Center crop"),
     FIT_INSIDE("Fit inside")
 }
+
+/** Width / height of one uniform cell. [MATCH_GRID] keeps today's grid math. */
+enum class CellAspect(val label: String, val ratio: Float) {
+    MATCH_GRID("Match grid", 0f),
+    SQUARE("Square", 1f),
+    LANDSCAPE_4_3("4:3", 4f / 3f),
+    LANDSCAPE_3_2("3:2", 3f / 2f),
+    LANDSCAPE_16_9("16:9", 16f / 9f),
+    PORTRAIT_3_4("3:4", 3f / 4f),
+    PORTRAIT_2_3("2:3", 2f / 3f),
+    PORTRAIT_9_16("9:16", 9f / 16f)
+}
+
+enum class LayoutMode(val label: String) {
+    UNIFORM("Uniform cells"),
+    MIXED("Mixed shapes")
+}
+
+/** How many rotated copies of a tile the matcher may consider. Usage stays on the source photo. */
+enum class RotationMode(val label: String) {
+    OFF("Off"),
+    ORIENTATION("Match orientation"),
+    FULL("Full rotation")
+}
+
+const val MIN_CUSTOM_OUTPUT_EDGE = 64
+const val MAX_CUSTOM_OUTPUT_EDGE = 8192
+const val MAX_OUTPUT_PIXELS = 24_000_000L
+const val MAX_CELL_PIXELS = 512
 
 enum class QualityPreset(val label: String) {
     DRAFT("Draft"),
@@ -124,8 +163,36 @@ fun MosaicConfig.validated(): MosaicConfig = copy(
     usageBalanceWeight = usageBalanceWeight.coerceIn(0f, 10f),
     previewCellPixels = previewCellPixels.coerceIn(2, 64),
     scoreWeights = scoreWeights.sanitized(),
-    segmentation = segmentation.sanitized()
+    segmentation = segmentation.sanitized(),
+    targetQuarterTurns = targetQuarterTurns and 3,
+    targetScale = if (targetScale.isNaN()) 1f else targetScale.coerceIn(0.25f, 1f),
+    collage = collage.sanitized()
 )
+
+fun MosaicConfig.customSizeError(): String? {
+    val widthError = dimensionError("Custom width", customOutputWidth)
+    if (widthError != null) return widthError
+    return dimensionError("Custom height", customOutputHeight)
+}
+
+private fun dimensionError(name: String, value: Int): String? {
+    if (value == 0) return null
+    if (value < MIN_CUSTOM_OUTPUT_EDGE || value > MAX_CUSTOM_OUTPUT_EDGE) {
+        return "$name must be from $MIN_CUSTOM_OUTPUT_EDGE to $MAX_CUSTOM_OUTPUT_EDGE pixels, or 0 to use the output preset."
+    }
+    return null
+}
+
+fun outputLimitError(width: Int, height: Int, cellWidth: Int, cellHeight: Int): String? {
+    if (cellWidth > MAX_CELL_PIXELS || cellHeight > MAX_CELL_PIXELS) {
+        return "Each cell would be ${cellWidth}×$cellHeight pixels. The maximum is $MAX_CELL_PIXELS. Use a finer grid or a smaller output."
+    }
+    val pixels = width.toLong() * height.toLong()
+    if (pixels > MAX_OUTPUT_PIXELS) {
+        return "Output ${width}×$height is $pixels pixels. The maximum is $MAX_OUTPUT_PIXELS. Reduce the custom size or the grid."
+    }
+    return null
+}
 
 /**
  * Fields that change which tile is chosen. Render mode and output size are intentionally absent
@@ -147,6 +214,22 @@ fun MosaicConfig.matchFingerprint(targetWidth: Int, targetHeight: Int, tileToken
         append("|k").append(candidateCount)
         append("|edge").append(descriptorMaxEdge)
         append("|fit").append(tileFit.name)
+        append("|cell").append(cellAspect.name)
+        append("|layout").append(layoutMode.name)
+        append("|rot").append(rotationMode.name)
+        append("|tq").append(targetQuarterTurns and 3)
+        append("|scale").append((targetScale.coerceIn(0.25f, 1f) * 1000f).toInt())
+        append("|kind").append(mosaicKind.name)
+        val pieces = collage.sanitized()
+        append("|pieces").append(pieces.pieceCount)
+        append("|smin").append((pieces.minScale * 1000f).toInt())
+        append("|smax").append((pieces.maxScale * 1000f).toInt())
+        append("|rdeg").append(pieces.rotationRangeDegrees.toInt())
+        append("|ov").append((pieces.overlap * 100f).toInt())
+        append("|goal").append((pieces.coverageGoal * 100f).toInt())
+        append("|bg").append(pieces.background.name)
+        append("|sw").append((pieces.shapeWeight * 100f).toInt())
+        append("|photos").append(pieces.includeSourcePhotos)
         append("|w")
         append(weights.color).append(',')
         append(weights.luminance).append(',')

@@ -131,6 +131,12 @@ class FileDescriptorCache(private val file: File) : DescriptorCache {
         output.writeFloat(descriptor.alphaCoverage)
         descriptor.histogram.forEach { output.writeFloat(it) }
         descriptor.spatial.forEach { output.writeFloat(it) }
+        output.writeFloat(descriptor.contentLeft)
+        output.writeFloat(descriptor.contentTop)
+        output.writeFloat(descriptor.contentRight)
+        output.writeFloat(descriptor.contentBottom)
+        output.writeInt(descriptor.mask.size)
+        descriptor.mask.forEach { output.writeByte(it.toInt()) }
     }
 
     private fun readDescriptor(input: DataInputStream): TileDescriptor {
@@ -155,12 +161,21 @@ class FileDescriptorCache(private val file: File) : DescriptorCache {
             edgeDensity = input.readFloat(),
             alphaCoverage = input.readFloat(),
             histogram = FloatArray(HISTOGRAM_BIN_COUNT) { input.readFloat() },
-            spatial = FloatArray(SPATIAL_FLOATS) { input.readFloat() }
+            spatial = FloatArray(SPATIAL_FLOATS) { input.readFloat() },
+            contentLeft = input.readFloat(),
+            contentTop = input.readFloat(),
+            contentRight = input.readFloat(),
+            contentBottom = input.readFloat(),
+            mask = ByteArray(input.readInt().also { size ->
+                require(size == 0 || size == SHAPE_MASK_CELLS)
+            }).also { mask ->
+                for (index in mask.indices) mask[index] = input.readByte()
+            }
         )
     }
 
     companion object {
         private const val MAGIC = 0x4D4F5344
-        private const val FORMAT = 1
+        private const val FORMAT = 2
     }
 }
