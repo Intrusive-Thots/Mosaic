@@ -28,7 +28,7 @@ class ProjectRepository(context: Context) {
         appContext,
         MosaicDatabase::class.java,
         "mosaic.db"
-    ).build()
+    ).addMigrations(MIGRATION_1_2).build()
     private val dao = database.projectDao()
     private val keyStore by lazy { KeystoreApiKeyStore(appContext) }
     private val projectsDir: File = File(appContext.filesDir, "projects").apply { mkdirs() }
@@ -49,7 +49,9 @@ class ProjectRepository(context: Context) {
         tileCount: Int,
         columns: Int,
         rows: Int,
-        preset: String
+        preset: String,
+        targetQuarterTurns: Int = 0,
+        tileRotations: String = ""
     ): MosaicProject = withContext(Dispatchers.IO) {
         val id = java.util.UUID.randomUUID().toString()
         val previewFile = File(projectsDir, "mosaic_${id}_preview.jpg")
@@ -68,7 +70,9 @@ class ProjectRepository(context: Context) {
             tileCount = tileCount,
             columns = columns,
             rows = rows,
-            preset = preset
+            preset = preset,
+            targetQuarterTurns = targetQuarterTurns and 3,
+            tileRotations = tileRotations
         )
         try {
             dao.upsert(project.toEntity())
@@ -227,7 +231,9 @@ class ProjectRepository(context: Context) {
         columns = columns,
         rows = rows,
         preset = preset,
-        missingFiles = missingFiles
+        missingFiles = missingFiles,
+        targetQuarterTurns = targetQuarterTurns,
+        tileRotations = tileRotations
     )
 
     companion object {

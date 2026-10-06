@@ -3,12 +3,17 @@ package com.intrusivethots.mosaic.engine.coord
 import com.intrusivethots.mosaic.engine.EmptyLibraryException
 import com.intrusivethots.mosaic.engine.InvalidTargetException
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
+import com.intrusivethots.mosaic.engine.config.customSizeError
 import com.intrusivethots.mosaic.engine.config.matchFingerprint
+import com.intrusivethots.mosaic.engine.config.outputLimitError
 import com.intrusivethots.mosaic.engine.config.planOutput
 import com.intrusivethots.mosaic.engine.config.validated
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.centerAspectRect
 import com.intrusivethots.mosaic.engine.image.crop
+import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
+import com.intrusivethots.mosaic.engine.image.rotateClockwise
+import kotlin.math.roundToInt
 import com.intrusivethots.mosaic.engine.index.TileIndex
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.match.TileMatcher
@@ -57,11 +62,12 @@ class GenerationCoordinator(
     ): GenerationResult {
         if (target.width <= 0 || target.height <= 0) throw InvalidTargetException()
         val validated = config.validated()
+        validated.customSizeError()?.let { throw IllegalArgumentException(it) }
         val progress = ThrottledProgress(progressIntervalMs, clock, onProgress)
         progress.report(GenerationStage.LOADING, 0f, "Loading images", force = true)
         coroutineContext.ensureActive()
 
-        val cropped = cropTarget(target, validated)
+        val cropped = prepareTarget(target, validated)
         val prepared = analyzeTiles(tiles, validated, progress)
         if (prepared.isEmpty()) throw EmptyLibraryException()
 
@@ -95,6 +101,11 @@ class GenerationCoordinator(
         }
 
         val layout = planOutput(cropped.width, cropped.height, validated, preview)
+        if (!preview) {
+            outputLimitError(layout.width, layout.height, layout.cellWidth, layout.cellHeight)?.let {
+                throw IllegalArgumentException(it)
+            }
+        }
         val memory = if (sink == null && sinkFactory == null) {
             require(layout.pixels <= MAX_IN_MEMORY_PIXELS) {
                 "Output ${layout.width}×${layout.height} is too large for one bitmap. Render to a file instead."
@@ -159,6 +170,19 @@ class GenerationCoordinator(
         }
         progress.report(GenerationStage.ANALYZING, 1f, "Analyzing tiles", force = true)
         return prepared
+    }
+
+    private fun prepareTarget(target: PixelImage, config: MosaicConfig): PixelImage {
+        val rotated = target.rotateClockwise(config.targetQuarterTurns)
+        val scaled = scaleTarget(rotated, config.targetScale)
+        return cropTarget(scaled, config)
+    }
+
+    private fun scaleTarget(target: PixelImage, scale: Float): PixelImage {
+        if (scale >= 0.999f) return target
+        val width = (target.width * scale).roundToInt().coerceAtLeast(1)
+        val height = (target.height * scale).roundToInt().coerceAtLeast(1)
+        return target.resizeAreaAverage(width, height)
     }
 
     private fun cropTarget(target: PixelImage, config: MosaicConfig): PixelImage {

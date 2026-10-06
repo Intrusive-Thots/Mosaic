@@ -76,7 +76,15 @@ fun ProjectCard(project: MosaicProject, onClick: () -> Unit, onDelete: () -> Uni
             }
             Column(modifier = Modifier.padding(10.dp)) {
                 Text(project.title, fontWeight = FontWeight.Medium, fontSize = 14.sp, color = TextPrimary, maxLines = 1)
-                Text("${project.tileCount} tiles · ${project.columns}×${project.rows}", fontSize = 12.sp, color = TextSecondary)
+                Text(
+                    buildString {
+                        append("${project.tileCount} tiles · ${project.columns}×${project.rows}")
+                        if (project.targetQuarterTurns != 0) append(" · target ${project.targetQuarterTurns * 90}°")
+                        if (project.tileRotations.isNotBlank()) append(" · rotated tiles")
+                    },
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
             }
         }
     }

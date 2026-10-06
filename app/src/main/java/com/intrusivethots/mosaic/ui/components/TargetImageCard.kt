@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -46,7 +47,8 @@ fun TargetImageCard(
     onGallery: () -> Unit,
     onCamera: () -> Unit,
     onCrop: () -> Unit,
-    onResetCrop: () -> Unit
+    onResetCrop: () -> Unit,
+    onRotate: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(20.dp),
@@ -60,6 +62,7 @@ fun TargetImageCard(
                     Text("The picture the mosaic will depict.", fontSize = 13.sp, color = TextSecondary)
                 }
                 if (target != null) {
+                    IconButton(onClick = onRotate) { Icon(Icons.Default.RotateRight, contentDescription = "Rotate", tint = AccentPurple) }
                     IconButton(onClick = onCrop) { Icon(Icons.Default.Crop, contentDescription = "Crop", tint = AccentPurple) }
                     IconButton(onClick = onResetCrop) { Icon(Icons.Default.Refresh, contentDescription = "Reset crop", tint = TextSecondary) }
                 }

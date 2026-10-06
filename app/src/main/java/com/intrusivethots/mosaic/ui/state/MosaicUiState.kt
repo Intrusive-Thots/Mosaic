@@ -11,6 +11,8 @@ import com.intrusivethots.mosaic.data.MosaicProject
 data class MosaicUiState(
     val targetUri: Uri? = null,
     val tileUris: List<Uri> = emptyList(),
+    val tileQuarterTurns: List<Int> = emptyList(),
+    val tileThumbs: List<Bitmap?> = emptyList(),
     val targetBitmap: Bitmap? = null,
     val rawTargetBitmap: Bitmap? = null,
     val customStamps: List<Bitmap> = emptyList(),

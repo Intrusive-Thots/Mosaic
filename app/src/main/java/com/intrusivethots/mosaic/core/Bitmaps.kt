@@ -3,6 +3,7 @@ package com.intrusivethots.mosaic.core
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
@@ -65,6 +66,13 @@ fun decodeSampledFile(path: String, maxEdge: Int): Bitmap? {
     } catch (_: Exception) {
         null
     }
+}
+
+fun rotateBitmap(source: Bitmap, quarterTurns: Int): Bitmap {
+    val turns = quarterTurns and 3
+    if (turns == 0 || source.isRecycled) return source
+    val matrix = Matrix().apply { postRotate(turns * 90f) }
+    return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
 }
 
 fun scaleToLongEdge(bitmap: Bitmap, maxEdge: Int): Bitmap {

@@ -9,14 +9,20 @@ import com.intrusivethots.mosaic.cache.BitmapLruCache
 import com.intrusivethots.mosaic.core.BitmapTileSource
 import com.intrusivethots.mosaic.core.SubjectSegmenterHelper
 import com.intrusivethots.mosaic.core.bitmapIdentity
+import com.intrusivethots.mosaic.core.rotateBitmap
 import com.intrusivethots.mosaic.core.scaleToLongEdge
 import com.intrusivethots.mosaic.core.toBitmap
 import com.intrusivethots.mosaic.core.toPixelImage
 import com.intrusivethots.mosaic.data.ProjectRepository
+import com.intrusivethots.mosaic.data.decodeTileRotations
+import com.intrusivethots.mosaic.data.encodeTileRotations
 import com.intrusivethots.mosaic.engine.EmptyLibraryException
 import com.intrusivethots.mosaic.engine.InsufficientStorageException
 import com.intrusivethots.mosaic.engine.config.AspectRatioPreset
+import com.intrusivethots.mosaic.engine.config.CellAspect
+import com.intrusivethots.mosaic.engine.config.LayoutMode
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
+import com.intrusivethots.mosaic.engine.config.RotationMode
 import com.intrusivethots.mosaic.engine.config.MosaicStyle
 import com.intrusivethots.mosaic.engine.config.OutputMode
 import com.intrusivethots.mosaic.engine.config.QualityPreset
@@ -25,6 +31,7 @@ import com.intrusivethots.mosaic.engine.config.SegmentationSettings
 import com.intrusivethots.mosaic.engine.config.SubjectShape
 import com.intrusivethots.mosaic.engine.config.TileFit
 import com.intrusivethots.mosaic.engine.config.applyTo
+import com.intrusivethots.mosaic.engine.image.unrotateNormalizedRect
 import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.progress.GenerationStage
@@ -48,6 +55,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.roundToInt
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = ProjectRepository(application)
@@ -82,8 +90,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setTargetImage(uri: Uri) {
+        updateConfig { it.copy(targetQuarterTurns = 0) }
         _state.update { it.copy(targetUri = uri, previewBitmap = null, displayBitmap = null, hasFullRender = false) }
-        lastPlan = null
         viewModelScope.launch {
             val bitmap = repository.loadBitmapFromUri(uri, maxDimension = 1920)
             _state.update { it.copy(targetBitmap = bitmap, rawTargetBitmap = bitmap) }
@@ -91,9 +99,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun rotateTarget() = updateConfig { it.copy(targetQuarterTurns = (it.targetQuarterTurns + 1) and 3) }
+
     fun applyCropToTarget(left: Float, top: Float, right: Float, bottom: Float) {
         val raw = _state.value.rawTargetBitmap ?: _state.value.targetBitmap ?: return
-        val cropped = repository.cropBitmap(raw, left, top, right, bottom)
+        val mapped = unrotateNormalizedRect(_state.value.config.targetQuarterTurns, left, top, right, bottom)
+        val cropped = repository.cropBitmap(raw, mapped[0], mapped[1], mapped[2], mapped[3])
         _state.update { it.copy(targetBitmap = cropped, previewBitmap = null, displayBitmap = null, hasFullRender = false) }
         lastPlan = null
     }
@@ -105,14 +116,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun addTileImages(uris: List<Uri>) {
-        _state.update { it.copy(tileUris = (it.tileUris + uris).distinct()) }
+        val saved = decodeTileRotations(preferences.getString(TILE_TURNS, "") )
+        _state.update { state ->
+            val merged = (state.tileUris + uris).distinct()
+            val turns = merged.map { uri ->
+                val index = state.tileUris.indexOf(uri)
+                if (index >= 0) state.tileQuarterTurns.getOrElse(index) { 0 } else saved[uri.toString()] ?: 0
+            }
+            state.copy(tileUris = merged, tileQuarterTurns = turns)
+        }
         lastPlan = null
+        persistTileTurns()
+        refreshThumbs()
+    }
+
+    fun rotateTile(index: Int) {
+        _state.update { state ->
+            if (index !in state.tileUris.indices) return@update state
+            val turns = state.tileQuarterTurns.toMutableList()
+            while (turns.size < state.tileUris.size) turns += 0
+            turns[index] = (turns[index] + 1) and 3
+            state.copy(tileQuarterTurns = turns)
+        }
+        lastPlan = null
+        persistTileTurns()
     }
 
     fun removeTileImage(uri: Uri) {
-        _state.update { it.copy(tileUris = it.tileUris - uri) }
+        _state.update { state ->
+            val index = state.tileUris.indexOf(uri)
+            val thumbs = state.tileThumbs.toMutableList()
+            if (index in thumbs.indices) thumbs.removeAt(index)?.let { thumb -> if (!thumb.isRecycled) thumb.recycle() }
+            val turns = state.tileQuarterTurns.filterIndexed { turnIndex, _ -> turnIndex != index }
+            state.copy(tileUris = state.tileUris - uri, tileQuarterTurns = turns, tileThumbs = thumbs)
+        }
         bitmapCache.remove(uri.toString())
         lastPlan = null
+        persistTileTurns()
     }
 
     fun addCustomStamps(stamps: List<Bitmap>) {
@@ -132,9 +172,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearTiles() {
-        _state.update { it.copy(tileUris = emptyList(), customStamps = emptyList()) }
+        _state.value.tileThumbs.forEach { thumb -> if (thumb != null && !thumb.isRecycled) thumb.recycle() }
+        _state.update { it.copy(tileUris = emptyList(), tileQuarterTurns = emptyList(), tileThumbs = emptyList(), customStamps = emptyList()) }
         bitmapCache.clear()
         lastPlan = null
+        persistTileTurns()
     }
 
     fun clearStamps() {
@@ -169,6 +211,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateOutputMode(mode: OutputMode) = updateConfig { it.copy(outputMode = mode, qualityPreset = QualityPreset.CUSTOM) }
 
     fun updateTileFit(fit: TileFit) = updateConfig { it.copy(tileFit = fit) }
+
+    fun editConfig(transform: (MosaicConfig) -> MosaicConfig) = updateConfig(transform)
+
+    fun updateCellAspect(aspect: CellAspect) = updateConfig {
+        it.copy(
+            cellAspect = aspect,
+            linkAspectToGrid = if (aspect == CellAspect.MATCH_GRID) it.linkAspectToGrid else true,
+            qualityPreset = QualityPreset.CUSTOM
+        )
+    }
+
+    fun updateLayoutMode(mode: LayoutMode) = updateConfig { it.copy(layoutMode = mode, qualityPreset = QualityPreset.CUSTOM) }
+
+    fun updateRotationMode(mode: RotationMode) = updateConfig { it.copy(rotationMode = mode, qualityPreset = QualityPreset.CUSTOM) }
+
+    fun updateTargetScale(scale: Float) = updateConfig {
+        it.copy(targetScale = scale.coerceIn(0.25f, 1f), qualityPreset = QualityPreset.CUSTOM)
+    }
+
+    fun updateCustomOutput(width: Int, height: Int, lock: Boolean) = updateConfig { current ->
+        val bitmap = _state.value.targetBitmap
+        if (!lock || bitmap == null || bitmap.width <= 0 || bitmap.height <= 0) {
+            return@updateConfig current.copy(
+                customOutputWidth = width.coerceAtLeast(0),
+                customOutputHeight = height.coerceAtLeast(0),
+                lockOutputAspect = lock,
+                qualityPreset = QualityPreset.CUSTOM
+            )
+        }
+        val turns = current.targetQuarterTurns and 3
+        val shownWidth = if (turns and 1 == 1) bitmap.height else bitmap.width
+        val shownHeight = if (turns and 1 == 1) bitmap.width else bitmap.height
+        val aspect = shownWidth.toFloat() / shownHeight.toFloat().coerceAtLeast(1f)
+        val linkedHeight = if (width > 0) (width / aspect).roundToInt().coerceAtLeast(1) else 0
+        current.copy(
+            customOutputWidth = width.coerceAtLeast(0),
+            customOutputHeight = linkedHeight,
+            lockOutputAspect = true,
+            qualityPreset = QualityPreset.CUSTOM
+        )
+    }
 
     fun updateRepetition(allow: Boolean, distance: Int) = updateConfig {
         it.copy(allowTileRepetition = allow, maxRepetitionDistance = distance.coerceIn(0, 12), qualityPreset = QualityPreset.CUSTOM)
@@ -304,7 +387,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         tileCount = result.descriptors.size,
                         columns = result.plan.columns,
                         rows = result.plan.rows,
-                        preset = config.qualityPreset.label
+                        preset = config.qualityPreset.label,
+                        targetQuarterTurns = config.targetQuarterTurns,
+                        tileRotations = encodeTileRotations(
+                            snapshot.tileUris.map { it.toString() },
+                            snapshot.tileQuarterTurns
+                        )
                     )
                     fullFile = null
                     _state.update {
@@ -347,15 +435,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val cached = bitmapCache.get(uri.toString())
             val bitmap = cached ?: repository.loadBitmapFromUri(uri, edge)?.also { bitmapCache.put(uri.toString(), it) }
             if (bitmap == null) return@forEachIndexed
+            val turns = snapshot.tileQuarterTurns.getOrElse(index) { 0 } and 3
+            val oriented = if (turns == 0) bitmap else rotateBitmap(bitmap, turns).also { owned += it }
+            val token = if (turns == 0) uri.toString() else "${uri}#q$turns"
             sources += BitmapTileSource(
                 identity = com.intrusivethots.mosaic.engine.tile.TileIdentity(
-                    uri = uri.toString(),
-                    width = bitmap.width,
-                    height = bitmap.height,
+                    uri = token,
+                    width = oriented.width,
+                    height = oriented.height,
                     byteSize = repository.contentSize(uri),
                     modifiedTimeMs = repository.contentModified(uri)
                 ),
-                bitmap = bitmap
+                bitmap = oriented
             )
         }
         snapshot.customStamps.forEachIndexed { index, stamp ->
@@ -390,6 +481,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun estimateBytes(width: Int, height: Int, config: MosaicConfig): Long {
+        if (config.customOutputWidth > 0 && config.customOutputHeight > 0) {
+            return config.customOutputWidth.toLong() * config.customOutputHeight.toLong() * 4L
+        }
         val cells = config.gridColumns.coerceAtLeast(1).toLong() * config.gridRows.coerceAtLeast(1)
         val pixelsPerCell = if (config.outputMode == OutputMode.ULTRA) 64L else if (config.outputMode == OutputMode.HIGH) 40L else 24L
         return (cells * pixelsPerCell * pixelsPerCell).coerceAtLeast(width.toLong() * height / 4)
@@ -433,6 +527,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 ?.let { runCatching { OutputMode.valueOf(it) }.getOrNull() } ?: base.outputMode,
             tileFit = preferences.getString("fit", base.tileFit.name)
                 ?.let { runCatching { TileFit.valueOf(it) }.getOrNull() } ?: base.tileFit,
+            cellAspect = preferences.getString("cellAspect", base.cellAspect.name)
+                ?.let { runCatching { CellAspect.valueOf(it) }.getOrNull() } ?: base.cellAspect,
+            layoutMode = preferences.getString("layoutMode", base.layoutMode.name)
+                ?.let { runCatching { LayoutMode.valueOf(it) }.getOrNull() } ?: base.layoutMode,
+            rotationMode = preferences.getString("rotationMode", base.rotationMode.name)
+                ?.let { runCatching { RotationMode.valueOf(it) }.getOrNull() } ?: base.rotationMode,
+            targetQuarterTurns = preferences.getInt("targetTurns", 0) and 3,
+            targetScale = preferences.getFloat("targetScale", 1f),
+            customOutputWidth = preferences.getInt("outW", 0),
+            customOutputHeight = preferences.getInt("outH", 0),
+            lockOutputAspect = preferences.getBoolean("outLock", true),
             segmentation = base.segmentation.copy(
                 maxExtractedSubjects = preferences.getInt("aiMax", base.segmentation.maxExtractedSubjects),
                 minSubjectSizePx = preferences.getInt("aiMin", base.segmentation.minSubjectSizePx),
@@ -457,9 +562,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .putString("render", config.renderMode.name)
             .putString("output", config.outputMode.name)
             .putString("fit", config.tileFit.name)
+            .putString("cellAspect", config.cellAspect.name)
+            .putString("layoutMode", config.layoutMode.name)
+            .putString("rotationMode", config.rotationMode.name)
+            .putInt("targetTurns", config.targetQuarterTurns and 3)
+            .putFloat("targetScale", config.targetScale)
+            .putInt("outW", config.customOutputWidth)
+            .putInt("outH", config.customOutputHeight)
+            .putBoolean("outLock", config.lockOutputAspect)
             .putInt("aiMax", config.segmentation.maxExtractedSubjects)
             .putInt("aiMin", config.segmentation.minSubjectSizePx)
             .putString("shapes", config.segmentation.allowedShapes.joinToString(",") { it.name })
+            .apply()
+    }
+
+    private fun refreshThumbs() {
+        val uris = _state.value.tileUris
+        viewModelScope.launch(Dispatchers.IO) {
+            val thumbs = uris.map { uri -> repository.loadBitmapFromUri(uri, 128) }
+            _state.update { state ->
+                if (state.tileUris != uris) {
+                    thumbs.forEach { thumb -> if (thumb != null && !thumb.isRecycled) thumb.recycle() }
+                    state
+                } else {
+                    state.tileThumbs.forEach { thumb -> if (thumb != null && !thumb.isRecycled) thumb.recycle() }
+                    state.copy(tileThumbs = thumbs)
+                }
+            }
+        }
+    }
+
+    private fun persistTileTurns() {
+        val state = _state.value
+        preferences.edit()
+            .putString(TILE_TURNS, encodeTileRotations(state.tileUris.map { it.toString() }, state.tileQuarterTurns))
             .apply()
     }
 
@@ -471,5 +607,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val PREFS = "mosaic_settings"
+        private const val TILE_TURNS = "tileTurns"
     }
 }

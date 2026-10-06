@@ -1,5 +1,7 @@
 package com.intrusivethots.mosaic.ui.components
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,19 +11,26 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,7 +40,15 @@ import com.intrusivethots.mosaic.ui.theme.TextPrimary
 import com.intrusivethots.mosaic.ui.theme.TextSecondary
 
 @Composable
-fun TileLibraryCard(tileCount: Int, stampCount: Int, onPickTiles: () -> Unit, onClear: () -> Unit) {
+fun TileLibraryCard(
+    tileCount: Int,
+    stampCount: Int,
+    thumbs: List<Bitmap?>,
+    turns: List<Int>,
+    onPickTiles: () -> Unit,
+    onClear: () -> Unit,
+    onRotateTile: (Int) -> Unit
+) {
     Card(
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = SurfaceDark),
@@ -49,6 +66,30 @@ fun TileLibraryCard(tileCount: Int, stampCount: Int, onPickTiles: () -> Unit, on
                 }
                 if (tileCount > 0 || stampCount > 0) {
                     TextButton(onClick = onClear) { Text("Clear All", color = TextSecondary) }
+                }
+            }
+            if (thumbs.any { it != null }) {
+                Spacer(modifier = Modifier.height(12.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    itemsIndexed(thumbs.take(24)) { index, thumb ->
+                        if (thumb != null && !thumb.isRecycled) {
+                            val turn = turns.getOrElse(index) { 0 }
+                            val shown = rememberRotatedBitmap(thumb, turn)
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                if (shown != null) {
+                                    Image(
+                                        bitmap = shown.asImageBitmap(),
+                                        contentDescription = "Tile ${index + 1}",
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier.size(72.dp).clip(RoundedCornerShape(8.dp))
+                                    )
+                                }
+                                IconButton(onClick = { onRotateTile(index) }, modifier = Modifier.size(32.dp)) {
+                                    Icon(Icons.Default.RotateRight, contentDescription = "Rotate tile ${index + 1}", tint = AccentPink)
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(12.dp))

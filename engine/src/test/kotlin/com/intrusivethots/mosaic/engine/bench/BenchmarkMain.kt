@@ -4,8 +4,11 @@ import com.intrusivethots.mosaic.engine.COMPARISON_COLUMNS
 import com.intrusivethots.mosaic.engine.COMPARISON_ROWS
 import com.intrusivethots.mosaic.engine.COMPARISON_SEED
 import com.intrusivethots.mosaic.engine.compareMatchers
+import com.intrusivethots.mosaic.engine.config.CellAspect
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.RenderMode
+import com.intrusivethots.mosaic.engine.config.RotationMode
+import com.intrusivethots.mosaic.engine.config.planGrid
 import com.intrusivethots.mosaic.engine.gradient
 import com.intrusivethots.mosaic.engine.hueTile
 import com.intrusivethots.mosaic.engine.image.PixelImage
@@ -48,7 +51,8 @@ fun main() = runBlocking {
     )
     runCase(cases.first(), report = false)
     val results = cases.map { runCase(it) }
-    val report = renderReport(results)
+    val shape = runShapeCase()
+    val report = renderReport(results, shape)
     listOf(
         File("engine/build/reports/benchmarks/results.md"),
         File("docs/benchmarks/results.md")
@@ -60,25 +64,19 @@ fun main() = runBlocking {
     writeComparison()
 }
 
-private suspend fun runCase(case: BenchCase, report: Boolean = true): BenchResult {
+private suspend fun runCase(
+    case: BenchCase,
+    report: Boolean = true,
+    config: MosaicConfig = benchConfig(case.columns, case.rows),
+    targetImage: PixelImage? = null,
+    loadSources: (() -> List<MemoryTileSource>)? = null
+): BenchResult {
     val runtime = Runtime.getRuntime()
     System.gc()
     val before = runtime.totalMemory() - runtime.freeMemory()
-    val config = MosaicConfig(
-        gridColumns = case.columns,
-        gridRows = case.rows,
-        linkAspectToGrid = false,
-        candidateCount = 16,
-        descriptorMaxEdge = 16,
-        maxRepetitionDistance = 3,
-        renderMode = RenderMode.COLOR_CORRECTED,
-        colorMatchWeight = 0.65f,
-        previewCellPixels = 12,
-        randomSeed = 1
-    )
     lateinit var sources: List<MemoryTileSource>
     val loadMs = measureNanoTime {
-        sources = List(case.tiles) { index ->
+        sources = loadSources?.invoke() ?: List(case.tiles) { index ->
             MemoryTileSource(hueTile(index, case.tiles, size = 16), "bench-$index")
         }
     }.ms()
@@ -97,7 +95,7 @@ private suspend fun runCase(case: BenchCase, report: Boolean = true): BenchResul
     val indexMs = measureNanoTime {
         index = TileIndex.build(descriptors)
     }.ms()
-    val target = gradient(case.columns * 8, case.rows * 8)
+    val target = targetImage ?: gradient(case.columns * 8, case.rows * 8)
     val matcher = TileMatcher(analyzer)
     lateinit var matchResult: Pair<com.intrusivethots.mosaic.engine.match.MosaicPlan, com.intrusivethots.mosaic.engine.match.MatchStats>
     val matchMs = measureNanoTime {
@@ -150,7 +148,76 @@ private suspend fun runCase(case: BenchCase, report: Boolean = true): BenchResul
     }
 }
 
-private fun renderReport(results: List<BenchResult>): String = buildString {
+private suspend fun runShapeCase(): BenchResult {
+    val columns = 40
+    val probe = planGrid(
+        320,
+        180,
+        MosaicConfig(gridColumns = columns, linkAspectToGrid = true, cellAspect = CellAspect.LANDSCAPE_16_9)
+    )
+    val config = MosaicConfig(
+        gridColumns = columns,
+        gridRows = probe.rows,
+        linkAspectToGrid = false,
+        cellAspect = CellAspect.LANDSCAPE_16_9,
+        rotationMode = RotationMode.ORIENTATION,
+        candidateCount = 16,
+        descriptorMaxEdge = 16,
+        maxRepetitionDistance = 3,
+        renderMode = RenderMode.COLOR_CORRECTED,
+        colorMatchWeight = 0.65f,
+        previewCellPixels = 12,
+        randomSeed = 1
+    )
+    return runCase(
+        BenchCase(500, probe.columns, probe.rows),
+        config = config,
+        targetImage = gradient(320, 180),
+        loadSources = {
+            val wide = List(250) { index ->
+                MemoryTileSource(wideTile(hueTile(index, 500, size = 16)), "wide-$index")
+            }
+            val tall = List(250) { index -> MemoryTileSource(tallTile(index), "tall-$index") }
+            wide + tall
+        }
+    )
+}
+
+private fun benchConfig(columns: Int, rows: Int) = MosaicConfig(
+    gridColumns = columns,
+    gridRows = rows,
+    linkAspectToGrid = false,
+    candidateCount = 16,
+    descriptorMaxEdge = 16,
+    maxRepetitionDistance = 3,
+    renderMode = RenderMode.COLOR_CORRECTED,
+    colorMatchWeight = 0.65f,
+    previewCellPixels = 12,
+    randomSeed = 1
+)
+
+private fun wideTile(square: PixelImage): PixelImage {
+    val pixels = IntArray(square.width * 2 * square.height)
+    for (y in 0 until square.height) {
+        for (x in 0 until square.width * 2) {
+            pixels[y * square.width * 2 + x] = square.pixels[(y * square.width) + (x / 2)]
+        }
+    }
+    return PixelImage(square.width * 2, square.height, pixels)
+}
+
+private fun tallTile(index: Int): PixelImage {
+    val square = hueTile(index + 250, 500, size = 16)
+    val pixels = IntArray(square.width * square.height * 2)
+    for (y in 0 until square.height * 2) {
+        for (x in 0 until square.width) {
+            pixels[y * square.width + x] = square.pixels[(y / 2) * square.width + x]
+        }
+    }
+    return PixelImage(square.width, square.height * 2, pixels)
+}
+
+private fun renderReport(results: List<BenchResult>, shape: BenchResult): String = buildString {
     appendLine("# Engine benchmarks")
     appendLine()
     appendLine("JVM run with synthetic tiles (unique hues, 16 px thumbnails, 12 px render cells).")
@@ -174,6 +241,21 @@ private fun renderReport(results: List<BenchResult>): String = buildString {
     appendLine()
     appendLine("Probes are candidate color checks inside OKLab bins, capped per cell so a large library is not scanned in full.")
     appendLine("The full-library column is cells × tiles, which is what the 1.x matcher did.")
+    appendLine()
+    appendLine("## Non-square cells with orientation matching")
+    appendLine()
+    appendLine("500 tiles (250 landscape, 250 portrait), 16:9 cells, rotation mode Match orientation. Same candidate cap as the table above.")
+    appendLine()
+    val naive = shape.columns.toLong() * shape.rows * shape.tiles
+    appendLine("| Tiles | Grid | Analyze ms | Match ms | Render ms | Total ms | Probes | Full scan |")
+    appendLine("| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |")
+    append("| ${shape.tiles} | ${shape.columns}×${shape.rows} | ")
+    append("%.1f".format(shape.analyzeMs)).append(" | ")
+    append("%.1f".format(shape.matchMs)).append(" | ")
+    append("%.1f".format(shape.renderMs)).append(" | ")
+    append("%.1f".format(shape.totalMs)).append(" | ")
+    append("${shape.probes} | $naive |")
+    appendLine()
 }
 
 private suspend fun writeComparison() {

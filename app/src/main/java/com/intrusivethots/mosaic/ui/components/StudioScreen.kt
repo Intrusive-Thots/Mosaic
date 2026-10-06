@@ -72,7 +72,7 @@ fun StudioScreen(
     onSegmentation: (Int, Int, Set<SubjectShape>) -> Unit,
     onCrop: (Float, Float, Float, Float) -> Unit,
     onResetCrop: () -> Unit,
-    onClearTiles: () -> Unit,
+    shapeEditor: ShapeEditor,
     onPreview: () -> Unit,
     onRender: (String) -> Unit,
     onCancel: () -> Unit,
@@ -84,12 +84,22 @@ fun StudioScreen(
     var showEnlarge by rememberSaveable { mutableStateOf(false) }
     val busy = state.generation is GenerationUiState.Running
     val canGenerate = state.targetBitmap != null && state.hasTiles && !busy
+    val shownTarget = rememberRotatedBitmap(state.targetBitmap, state.config.targetQuarterTurns)
+    val cropSource = rememberRotatedBitmap(state.rawTargetBitmap ?: state.targetBitmap, state.config.targetQuarterTurns)
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        TargetImageCard(state.targetBitmap, onGallery, onCamera, { showCrop = true }, onResetCrop)
-        TileLibraryCard(state.tileUris.size, state.customStamps.size, onPickTiles, onClearTiles)
+        TargetImageCard(shownTarget, onGallery, onCamera, { showCrop = true }, onResetCrop, shapeEditor.onRotateTarget)
+        TileLibraryCard(
+            state.tileUris.size,
+            state.customStamps.size,
+            state.tileThumbs,
+            state.tileQuarterTurns,
+            onPickTiles,
+            shapeEditor.onClearTiles,
+            shapeEditor.onRotateTile
+        )
         MosaicControlsCard(
             config = state.config,
             onPreset = onPreset,
@@ -104,7 +114,14 @@ fun StudioScreen(
             onOutputMode = onOutputMode,
             onFit = onFit,
             onAi = onAi,
-            onSegmentation = onSegmentation
+            onSegmentation = onSegmentation,
+            targetWidth = state.targetBitmap?.width ?: 0,
+            targetHeight = state.targetBitmap?.height ?: 0,
+            onCellAspect = shapeEditor.onCellAspect,
+            onLayout = shapeEditor.onLayout,
+            onRotation = shapeEditor.onRotation,
+            onScale = shapeEditor.onScale,
+            onOutput = shapeEditor.onOutput
         )
         GenerationProgress(state.generation, onCancel)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
@@ -142,7 +159,7 @@ fun StudioScreen(
         }
     }
     if (showCrop) {
-        val source = state.rawTargetBitmap ?: state.targetBitmap
+        val source = cropSource
         if (source != null) {
             CropSelectionDialog(source, onDismiss = { showCrop = false }, onApplyCrop = { l, t, r, b ->
                 onCrop(l, t, r, b)

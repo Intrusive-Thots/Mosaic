@@ -43,6 +43,16 @@ The default score is mostly OKLab color (0.78), with smaller luminance, histogra
 
 Photos are not stretched into squares. The default is a center crop that keeps the source aspect inside the cell. Fit-inside letterboxes the tile instead. Mostly transparent pixels do not contribute a strong color.
 
+## Non-square cells, rotation, and size
+
+Uniform cells that follow the grid are still the default, and center-crop and fit-inside still work. Extra controls sit beside that:
+
+- **Cell shape.** Match grid keeps the previous row math. Square, 4:3, 3:2, 16:9, and the portrait pairs set the cell aspect when rows are linked to the grid. Sampling cells and output cells share that aspect, so a tile is cropped or fitted into a rectangle instead of a square.
+- **Mixed shapes.** The grid is packed with 1×1, 2×1, and 1×2 rectangles. A landscape photo can occupy a wide cell and a portrait photo a tall one. Every unit cell belongs to exactly one rectangle, so the mosaic has no gaps or overlaps. The seed makes preview and the full render pack the same way. Mixed layout does not shift rows like staggered bricks.
+- **Automatic rotation.** Off leaves every tile upright. Match orientation tries 90° and 270° only when the tile aspect and the cell aspect disagree, so a portrait photo can fill a landscape cell. Full also tries 180° and a mirror. Each variant reuses the cached descriptor and only rotates the 4×4 spatial grid, so the photo is not decoded again per angle. Repetition and the usage penalty count the source photo, not each rotated copy.
+- **Manual rotation.** The target has a rotate button (90° steps). Each library tile has one too. Target turns and the per-tile turns are stored in settings and on the Room project. A manual tile turn is part of the cache key (`uri#qN`).
+- **Size.** A target scale from 25% to 100% is applied before matching. Full-render width and height can be custom; blank fields keep the Standard, High, or Ultra preset. Lock aspect derives the height from the rotated target. Each edge must be 0 or from 64 to 8192. A cell cannot exceed 512 pixels on a side, and the image cannot exceed 24 million pixels. Output above 2.5 million pixels is streamed to a PNG instead of one bitmap. The screen states the limit when a size is rejected. Custom output size does not change which tile is chosen, so preview and final still share a plan.
+
 ## Quality presets
 
 Advanced controls stay available. Choosing a preset fills them in:
@@ -64,12 +74,14 @@ Measured with `./gradlew :engine:benchmark` on this machine (OpenJDK 21, synthet
 
 | Tiles | Grid | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full scan | Heap MB |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100 | 40×40 | 9.7 | 0.3 | 63.7 | 54.1 | 129.0 | 84,135 | 160,000 | 0.6 |
-| 500 | 60×60 | 12.9 | 0.7 | 40.5 | 100.6 | 157.0 | 233,676 | 1,800,000 | 1.8 |
-| 1,000 | 80×80 | 22.7 | 0.7 | 62.6 | 179.7 | 269.7 | 415,996 | 6,400,000 | 3.9 |
-| 5,000 | 120×120 | 112.5 | 4.1 | 131.1 | 406.4 | 669.1 | 936,000 | 72,000,000 | 13.1 |
+| 100 | 40×40 | 9.6 | 0.3 | 60.3 | 53.3 | 124.4 | 84,135 | 160,000 | 0.6 |
+| 500 | 60×60 | 10.9 | 0.4 | 36.7 | 108.4 | 158.5 | 233,676 | 1,800,000 | 1.8 |
+| 1,000 | 80×80 | 21.4 | 0.6 | 66.3 | 192.0 | 284.2 | 415,996 | 6,400,000 | 3.9 |
+| 5,000 | 120×120 | 109.6 | 2.5 | 142.4 | 433.1 | 702.0 | 936,000 | 72,000,000 | 13.0 |
 
-"Full scan" is cells × tiles, which is what the 1.x matcher did. At 5,000 tiles the index probes about 1.3% of that. Matching 14,400 cells against 5,000 tiles took 131 ms in this run.
+"Full scan" is cells × tiles, which is what the 1.x matcher did. At 5,000 tiles the index probes about 1.3% of that. Matching 14,400 cells against 5,000 tiles took 142 ms in this run.
+
+A separate 500-tile case uses 16:9 cells and orientation matching (250 landscape tiles, 250 portrait). The grid is 40×40. Match took 44.9 ms and 103,890 probes against a full scan of 800,000. Total time was 158 ms. Probes stay on the source photos; rotated copies are scored from the cached spatial grid.
 
 Quality is measured on a separate portrait: a face, a gradient background, and a hard-edged flower, with 120 varied tiles, a 32×42 grid, and seed 7. Both sides are the original tile pixels through the same renderer, so neither side is helped by a color wash. Lower OKLab ΔE is closer color. Higher luminance SSIM is closer structure. `MatchingQualityTest` fails if the OKLab side stops beating average-RGB on either number.
 

@@ -9,6 +9,7 @@ import com.intrusivethots.mosaic.engine.config.validated
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.sampleBilinear
 import com.intrusivethots.mosaic.engine.image.sourceCoordinate
+import com.intrusivethots.mosaic.engine.image.unrotateSample
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.tile.TileAnalyzer
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
@@ -25,6 +26,10 @@ class MosaicRenderer {
         sink: RowSink,
         onProgress: (Float) -> Unit = {}
     ) {
+        if (plan.anchors.isNotEmpty()) {
+            renderPlaced(plan, descriptors, thumbnails, layout, config, sink, onProgress)
+            return
+        }
         val validated = config.validated()
         val row = IntArray(layout.width)
         val cellWidth = layout.cellWidth
@@ -43,6 +48,7 @@ class MosaicRenderer {
                 val cellColumn = (localX / cellWidth).coerceIn(0, layout.columns - 1)
                 val dx = localX % cellWidth
                 val cell = cellRow * layout.columns + cellColumn
+                val code = orientationCode(plan, cell)
                 row[x] = pixelAt(
                     plan = plan,
                     descriptors = descriptors,
@@ -54,7 +60,59 @@ class MosaicRenderer {
                     cellHeight = cellHeight,
                     centerCrop = centerCrop,
                     mode = validated.renderMode,
-                    strength = strength
+                    strength = strength,
+                    quarterTurns = code and 3,
+                    mirror = code >= 4
+                )
+            }
+            sink.writeRow(y, row)
+            val percent = ((y + 1) * 100) / layout.height
+            if (percent != lastReported) {
+                lastReported = percent
+                onProgress((y + 1).toFloat() / layout.height.toFloat())
+            }
+        }
+    }
+
+    private suspend fun renderPlaced(
+        plan: MosaicPlan,
+        descriptors: List<TileDescriptor>,
+        thumbnails: List<PixelImage>,
+        layout: OutputLayout,
+        config: MosaicConfig,
+        sink: RowSink,
+        onProgress: (Float) -> Unit
+    ) {
+        val validated = config.validated()
+        val row = IntArray(layout.width)
+        val centerCrop = validated.tileFit == TileFit.CENTER_CROP
+        var lastReported = -1
+        for (y in 0 until layout.height) {
+            if (y % layout.cellHeight == 0) coroutineContext.ensureActive()
+            val cellRow = (y / layout.cellHeight).coerceAtMost(layout.rows - 1)
+            for (x in 0 until layout.width) {
+                val cellColumn = (x / layout.cellWidth).coerceAtMost(layout.columns - 1)
+                val unit = cellRow * layout.columns + cellColumn
+                val anchor = plan.anchors[unit]
+                val anchorColumn = anchor % layout.columns
+                val anchorRow = anchor / layout.columns
+                val placeWidth = plan.spanX[anchor].toInt() * layout.cellWidth
+                val placeHeight = plan.spanY[anchor].toInt() * layout.cellHeight
+                val code = orientationCode(plan, anchor)
+                row[x] = pixelAt(
+                    plan = plan,
+                    descriptors = descriptors,
+                    thumbnails = thumbnails,
+                    cell = anchor,
+                    dx = x - anchorColumn * layout.cellWidth,
+                    dy = y - anchorRow * layout.cellHeight,
+                    cellWidth = placeWidth,
+                    cellHeight = placeHeight,
+                    centerCrop = centerCrop,
+                    mode = validated.renderMode,
+                    strength = validated.colorMatchWeight,
+                    quarterTurns = code and 3,
+                    mirror = code >= 4
                 )
             }
             sink.writeRow(y, row)
@@ -77,13 +135,15 @@ class MosaicRenderer {
         cellHeight: Int,
         centerCrop: Boolean,
         mode: RenderMode,
-        strength: Float
+        strength: Float,
+        quarterTurns: Int = 0,
+        mirror: Boolean = false
     ): Int {
         val fallback = plan.cellRgb[cell] or OPAQUE
         val tileIndex = plan.assignments[cell]
         if (tileIndex !in thumbnails.indices || tileIndex !in descriptors.indices) return fallback
         val source = thumbnails[tileIndex]
-        val mapped = sourceCoordinate(source.width, source.height, cellWidth, cellHeight, dx, dy, centerCrop)
+        val mapped = mappedSample(source, cellWidth, cellHeight, dx, dy, centerCrop, quarterTurns, mirror)
             ?: return fallback
         val sampled = source.sampleBilinear(mapped.first, mapped.second)
         if ((sampled ushr 24) <= TileAnalyzer.ALPHA_THRESHOLD) return fallback
@@ -118,6 +178,31 @@ class MosaicRenderer {
             b = shifted.b + (targetB - shifted.b) * pull
         )
         return OkLab.toArgb(blended)
+    }
+
+    private fun mappedSample(
+        source: PixelImage,
+        cellWidth: Int,
+        cellHeight: Int,
+        dx: Int,
+        dy: Int,
+        centerCrop: Boolean,
+        quarterTurns: Int,
+        mirror: Boolean
+    ): Pair<Float, Float>? {
+        if (quarterTurns == 0 && !mirror) {
+            return sourceCoordinate(source.width, source.height, cellWidth, cellHeight, dx, dy, centerCrop)
+        }
+        val displayWidth = if (quarterTurns and 1 == 1) source.height else source.width
+        val displayHeight = if (quarterTurns and 1 == 1) source.width else source.height
+        val oriented = sourceCoordinate(displayWidth, displayHeight, cellWidth, cellHeight, dx, dy, centerCrop)
+            ?: return null
+        return unrotateSample(source.width, source.height, oriented.first, oriented.second, quarterTurns, mirror)
+    }
+
+    private fun orientationCode(plan: MosaicPlan, cell: Int): Int {
+        if (plan.orientations.isEmpty() || cell !in plan.orientations.indices) return 0
+        return plan.orientations[cell].toInt() and 0xFF
     }
 
     companion object {

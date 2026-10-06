@@ -14,7 +14,9 @@ data class ProjectEntity(
     val columns: Int,
     val rows: Int,
     val preset: String,
-    val missingFiles: Boolean
+    val missingFiles: Boolean,
+    val targetQuarterTurns: Int = 0,
+    val tileRotations: String = ""
 )
 
 data class MosaicProject(
@@ -27,7 +29,9 @@ data class MosaicProject(
     val columns: Int,
     val rows: Int = columns,
     val preset: String = "Balanced",
-    val missingFiles: Boolean = false
+    val missingFiles: Boolean = false,
+    val targetQuarterTurns: Int = 0,
+    val tileRotations: String = ""
 )
 
 fun ProjectEntity.toProject() = MosaicProject(
@@ -40,5 +44,7 @@ fun ProjectEntity.toProject() = MosaicProject(
     columns = columns,
     rows = rows,
     preset = preset,
-    missingFiles = missingFiles
+    missingFiles = missingFiles,
+    targetQuarterTurns = targetQuarterTurns,
+    tileRotations = tileRotations
 )
