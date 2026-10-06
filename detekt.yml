@@ -1,0 +1,67 @@
+build:
+  maxIssues: 0
+
+config:
+  validation: true
+
+complexity:
+  LongMethod:
+    threshold: 110
+  NestedBlockDepth:
+    threshold: 6
+  ComplexCondition:
+    threshold: 6
+  LongParameterList:
+    functionThreshold: 25
+    constructorThreshold: 25
+  TooManyFunctions:
+    active: false
+  LargeClass:
+    threshold: 700
+  CyclomaticComplexMethod:
+    threshold: 25
+
+naming:
+  FunctionNaming:
+    ignoreAnnotated:
+      - Composable
+  MatchingDeclarationName:
+    active: false
+
+style:
+  MagicNumber:
+    active: false
+  MaxLineLength:
+    maxLineLength: 160
+  WildcardImport:
+    active: true
+  ReturnCount:
+    max: 8
+  ThrowsCount:
+    max: 4
+  UnusedPrivateMember:
+    allowedNames: "preview.*"
+  LoopWithTooManyJumpStatements:
+    active: false
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: false
+  SwallowedException:
+    active: false
+  InstanceOfCheckForException:
+    active: false
+
+empty-blocks:
+  EmptyCatchBlock:
+    allowedExceptionNameRegex: "_|(ignore|expected).*"
+
+coroutines:
+  GlobalCoroutineUsage:
+    active: true
+
+potential-bugs:
+  LateinitUsage:
+    active: false
+  ExplicitGarbageCollectionCall:
+    active: false

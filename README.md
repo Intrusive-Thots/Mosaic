@@ -1,57 +1,164 @@
-# Mosaic 🎨
+# Mosaic
 
-**Mosaic** is a modern, high-performance Android application built with Jetpack Compose that creates photographic mosaics from a collection of your own images.
+Mosaic is an Android app that builds a photographic mosaic from your own pictures. The matching engine is pure Kotlin in the `:engine` module, so the algorithm, tests, and benchmarks run on a normal JVM. The Android app handles the camera, gallery, project library, and on-device subject segmentation.
 
-Stepping close reveals individual memories; stepping back reveals the overarching masterpiece.
+## Architecture
 
----
-
-## ✨ Features
-
-- **High-Performance Color Matching Engine**:
-  - Perceptually weighted Euclidean RGB color distance algorithm ($2\Delta R^2 + 4\Delta G^2 + 3\Delta B^2$) tailored for human visual sensitivity.
-  - Spatial repetition penalty prevention to avoid repetitive clustering of tiles.
-  - Configurable tile-to-color blending slider (0% to 100%) to preserve macro contrast.
-- **Fast Low-Res Preview Mode**:
-  - Rapid multi-threaded preview generation so users can evaluate composition and adjustments without wasting compute power or battery.
-- **Seamless Media Ingestion**:
-  - Modern Android Photo Picker (`PickVisualMedia` / `PickMultipleVisualMedia`) supporting batches of up to 100 images without requiring intrusive storage permissions.
-  - Native system camera capture via secure `FileProvider`.
-- **Local Project Library**:
-  - Built-in persistent library preserving past creations.
-  - Full-screen zoom and inspection dialog.
-  - Project deletion and management.
-- **Production & Play Store Ready**:
-  - R8 minification and resource shrinking configured (resulting in an ultra-lean ~1.8 MB APK).
-  - Pre-configured release signing and Android App Bundle (`.aab`) packaging.
-
----
-
-## 🏗️ Architecture & Tech Stack
-
-- **UI**: 100% Jetpack Compose with Material 3 Dark theme.
-- **Language**: Kotlin.
-- **Target SDK**: Android 16 (API 36).
-- **Min SDK**: Android 10 (API 29).
-- **Concurrency**: Kotlin Coroutines & Flow.
-
----
-
-## 🚀 Building & Generating Releases
-
-### Standalone Release APK
-```bash
-./gradlew :app:assembleRelease
 ```
-Output: `app/build/outputs/apk/release/app-release.apk`
+:engine   color, descriptors, index, matcher, renderer, coordinator
+:app      Compose UI, Room, Keystore, bitmap decode, ML Kit
+```
 
-### Play Store Release Bundle (AAB)
+Generation is coordinated by `GenerationCoordinator` and runs in this order:
+
+1. Loading
+2. Analyzing
+3. Indexing
+4. Matching
+5. Rendering
+6. Saving
+7. Complete
+
+Progress events are throttled by time. Cancel stops the coroutine between tiles and cells. Preview and the full render use the same matcher and the same seed. They differ by output resolution. A full render can reuse the preview's tile plan when the target, library, and matching settings are unchanged.
+
+Full-resolution output is written scanline by scanline with `StreamingPngWriter`. The image is never one giant bitmap, and the manifest does not set `android:largeHeap`.
+
+## Matching
+
+Each tile is described once and cached. A descriptor stores:
+
+- OKLab color, luminance, and saturation
+- a 4×4×4 OKLab histogram
+- a 4×4 spatial OKLab grid
+- edge density
+- alpha coverage and aspect ratio
+
+The cache key is the URI, pixel size, byte size, modified time, and algorithm version. Adding or removing one photo does not rebuild the other descriptors.
+
+Tiles are placed in an 8×8×8 OKLab bin index. For each target cell the matcher asks for a small candidate set: nearby bins first, then a luminance window, skipping bins that cannot beat the current best. Repetition radius and a per-cell probe budget bound the search. A 5,000-tile library does not compare every tile with every cell.
+
+The default score is mostly OKLab color (0.78), with smaller luminance, histogram, spatial, and edge terms. A usage penalty exists, but its unit is `0.0005` per previous use and the default weight is 0, so it does not override a better color. The repetition radius defaults to 0 for the same reason: a radius of 2 or 3 on a flat region forces a worse tile and the mosaic turns speckled. Set a radius when you want hard spacing. If every legal tile is excluded by that radius, the cell is left as the target color. The matcher does not fall back to a tile inside the exclusion zone. Equal scores break with a deterministic seed.
+
+## Tile preparation
+
+Photos are not stretched into squares. The default is a center crop that keeps the source aspect inside the cell. Fit-inside letterboxes the tile instead. Mostly transparent pixels do not contribute a strong color.
+
+## Quality presets
+
+Advanced controls stay available. Choosing a preset fills them in:
+
+| Preset | Grid | Descriptor edge | Candidates | Output | Render |
+| --- | ---: | ---: | ---: | --- | --- |
+| Draft | 24×24 | 16 px | 8 | Standard (24 px cells) | Blended |
+| Balanced | 40×40 | 24 px | 16 | Standard | Color corrected |
+| High Quality | 64×64 | 32 px | 32 | High (40 px cells) | Color corrected |
+| Maximum | 100×100 | 48 px | 48 | Ultra (64 px cells) | Color corrected |
+
+Output modes are Standard, High, and Ultra. Render modes are Original, Color corrected, and Blended. Color correction shifts each tile toward the cell in OKLab. Blending mixes that correction with the original tile. The old flat translucent rectangle is gone.
+
+Draft and Balanced leave the usage penalty at 0. High Quality and Maximum add a light penalty (0.15 and 0.30) so repeated near-matches rotate a little. A few hundred distinct photos is enough for a balanced grid. More than about a thousand helps Maximum grids. Very small libraries will repeat until you raise the repetition radius.
+
+## Performance
+
+Measured with `./gradlew :engine:benchmark` on this machine (OpenJDK 21, synthetic unique-hue tiles, 16 px analysis thumbnails, 12 px render cells, one discarded warmup pass). Heap is `totalMemory - freeMemory` around the case and is only an estimate. The full table is in [docs/benchmarks/results.md](docs/benchmarks/results.md).
+
+| Tiles | Grid | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full scan | Heap MB |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 40×40 | 9.7 | 0.3 | 63.7 | 54.1 | 129.0 | 84,135 | 160,000 | 0.6 |
+| 500 | 60×60 | 12.9 | 0.7 | 40.5 | 100.6 | 157.0 | 233,676 | 1,800,000 | 1.8 |
+| 1,000 | 80×80 | 22.7 | 0.7 | 62.6 | 179.7 | 269.7 | 415,996 | 6,400,000 | 3.9 |
+| 5,000 | 120×120 | 112.5 | 4.1 | 131.1 | 406.4 | 669.1 | 936,000 | 72,000,000 | 13.1 |
+
+"Full scan" is cells × tiles, which is what the 1.x matcher did. At 5,000 tiles the index probes about 1.3% of that. Matching 14,400 cells against 5,000 tiles took 131 ms in this run.
+
+Quality is measured on a separate portrait: a face, a gradient background, and a hard-edged flower, with 120 varied tiles, a 32×42 grid, and seed 7. Both sides are the original tile pixels through the same renderer, so neither side is helped by a color wash. Lower OKLab ΔE is closer color. Higher luminance SSIM is closer structure. `MatchingQualityTest` fails if the OKLab side stops beating average-RGB on either number.
+
+| Matcher | Mean cell OKLab ΔE | Luminance SSIM |
+| --- | ---: | ---: |
+| Average RGB | 0.0453 | 0.5506 |
+| OKLab default | 0.0436 | 0.6559 |
+
+![Average-RGB selection on the left, OKLab selection on the right](docs/images/matching-comparison.png)
+
+The picture is 656×420. The right side keeps the face, the background gradient, and the red flower. The left side breaks those regions into blockier, less accurate tiles. An earlier comparison looked worse on the OKLab side because a repetition radius of 3 and a large usage penalty were discarding the best color.
+
+## AI segmentation
+
+Subject extraction uses on-device ML Kit. It does not upload photos. Automatic extraction, when enabled, adds cutouts beside the original photos. It does not replace them. Limits:
+
+- maximum number of extracted subjects
+- minimum subject size
+- shape categories (tall, wide, compact)
+- deduplication
+- a cap so cutouts stay a fraction of the normal library
+
+The Stamps tab still extracts subjects from a picked photo into their own pool, with the same size and duplicate filters and a higher cap.
+
+## Privacy and API keys
+
+There is no developer API key in the app. An optional key you type is encrypted with an Android Keystore master key (`EncryptedSharedPreferences`) and stays on the device. If the keystore cannot be opened, the key is not written to plain preferences. A key left in the old plaintext setting is copied into encrypted storage and then removed.
+
+This version does not send that key anywhere. Segmentation is on-device. The field is kept so a key you already saved is still available and is no longer stored in plaintext.
+
+## Projects
+
+Project metadata lives in Room (`mosaic.db`). Image files stay in app storage. Writes go to a temporary file, are flushed, then renamed. On launch, a missing preview or full image is marked on the project, and files that no longer belong to a project are deleted. An existing `library_index.json` is imported once and renamed to `library_index.json.migrated`.
+
+## Build
+
+Requirements: JDK 17, Android SDK 36.
+
 ```bash
+./gradlew :engine:test
+./gradlew :engine:benchmark
+./gradlew :app:assembleDebug
+./gradlew :app:assembleRelease
 ./gradlew :app:bundleRelease
 ```
-Output: `app/build/outputs/bundle/release/app-release.aab`
 
----
+Debug output: `app/build/outputs/apk/debug/app-debug.apk`
 
-## 📄 License
-MIT License.
+Without `keystore.properties`, release packaging still succeeds and produces an unsigned APK (`app-release-unsigned.apk`) and an unsigned AAB. To sign a release, create a gitignored `keystore.properties`:
+
+```properties
+storeFile=release.jks
+storePassword=
+keyAlias=
+keyPassword=
+```
+
+Do not commit that file or the keystore.
+
+## Testing
+
+JVM tests cover OKLab conversion, histograms, cropping, descriptors, candidate indexing, repetition, usage balance, grid planning, empty libraries, small and large images, transparent images, cancellation, atomic writes, and a golden image. The golden digest is SHA-256 `0745027b47ef5ffb4aad0ea56cad0d5fa123d41795e750931914bd37af2194ba`.
+
+```bash
+./gradlew :engine:test :engine:detekt :app:detekt :app:lintDebug
+```
+
+`ProjectDaoTest` is an instrumented Room test. CI runs it on an API 29 emulator. It needs a device or emulator locally:
+
+```bash
+./gradlew :app:connectedDebugAndroidTest
+```
+
+## Release procedure
+
+GitHub Actions (`.github/workflows/ci.yml`) runs engine tests, detekt, benchmarks, Android lint, debug and release packages, and the instrumented test. Release signing uses these repository secrets when they are present:
+
+- `KEYSTORE_BASE64`
+- `STORE_PASSWORD`
+- `KEY_ALIAS`
+- `KEY_PASSWORD`
+
+If `KEYSTORE_BASE64` is empty, the workflow logs that and still builds unsigned artifacts. Upload the AAB to Play Console from a machine that has the real upload key. This repository does not contain one.
+
+## Known limitations
+
+- Photo picker batches are capped at 100 images by the system picker contract. Add more in further picks.
+- Ultra output is a large PNG. The renderer streams it, but the device still needs enough free storage. The app checks free space before a full render and refuses when the estimate plus an 8 MB reserve does not fit.
+- Descriptor modified time is whatever the content provider reports. Providers that omit it fall back to file size, so a same-size replacement may reuse a cached descriptor until the photo is removed and added again.
+- ML Kit subject segmentation needs the Play services model. The first extraction can fail until that model is available. The app keeps the original photos either way.
+- Benchmark heap figures move around with the garbage collector. Use the probe counts and stage times for comparisons.
+- Process death, a real low-memory device, and Play Console signing were not exercised in the automated JVM run. Projects are reloaded from Room on startup, and generation is cancelled by cancelling the coroutine job.
