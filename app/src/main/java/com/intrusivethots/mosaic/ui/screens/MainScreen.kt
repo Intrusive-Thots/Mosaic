@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +35,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -41,16 +44,15 @@ import com.intrusivethots.mosaic.core.AspectRatioPreset
 import com.intrusivethots.mosaic.core.MosaicStyle
 import com.intrusivethots.mosaic.data.MosaicProject
 import com.intrusivethots.mosaic.ui.theme.*
+import kotlinx.coroutines.launch
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
-    var selectedTab by remember { mutableStateOf(0) } // 0: Studio, 1: Library
+    val coroutineScope = rememberCoroutineScope()
+    var selectedTab by remember { mutableStateOf(0) } // 0: Studio, 1: Stamps, 2: Library, 3: Settings
 
     // Camera capture temp URI state
     var tempCameraUri by remember { mutableStateOf<Uri?>(null) }
@@ -72,7 +74,7 @@ fun MainScreen(viewModel: MainViewModel) {
         }
     }
 
-    // Multiple photo picker for tiles
+    // Multiple photo picker for general tiles
     val tilesPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 100)
     ) { uris ->
@@ -81,7 +83,36 @@ fun MainScreen(viewModel: MainViewModel) {
         }
     }
 
+    // Photo picker specifically for pulling multiple stamps from an image
+    var isExtractingStamps by remember { mutableStateOf(false) }
+    val stampExtractorLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            coroutineScope.launch {
+                isExtractingStamps = true
+                val stamps = viewModel.extractStampsFromUri(uri)
+                if (stamps.isNotEmpty()) {
+                    viewModel.addCustomStamps(stamps)
+                }
+                isExtractingStamps = false
+            }
+        }
+    }
+
+    // Toast/Snackbar export feedback
+    val exportStatus by viewModel.exportStatusMessage.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(exportStatus) {
+        exportStatus?.let { msg ->
+            snackbarHostState.showSnackbar(msg)
+            viewModel.clearExportStatus()
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -138,8 +169,21 @@ fun MainScreen(viewModel: MainViewModel) {
                 )
                 NavigationBarItem(
                     selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    icon = { Icon(Icons.Default.ContentCut, contentDescription = "Stamps") },
+                    label = { Text("Stamps") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = AccentAmber,
+                        selectedTextColor = AccentAmber,
+                        unselectedIconColor = TextSecondary,
+                        unselectedTextColor = TextSecondary,
+                        indicatorColor = SurfaceVariantDark
+                    )
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 2,
                     onClick = {
-                        selectedTab = 1
+                        selectedTab = 2
                         viewModel.loadProjects()
                     },
                     icon = { Icon(Icons.Default.Collections, contentDescription = "Library") },
@@ -147,6 +191,19 @@ fun MainScreen(viewModel: MainViewModel) {
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = AccentPink,
                         selectedTextColor = AccentPink,
+                        unselectedIconColor = TextSecondary,
+                        unselectedTextColor = TextSecondary,
+                        indicatorColor = SurfaceVariantDark
+                    )
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                    label = { Text("Settings") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = AccentPurple,
+                        selectedTextColor = AccentPurple,
                         unselectedIconColor = TextSecondary,
                         unselectedTextColor = TextSecondary,
                         indicatorColor = SurfaceVariantDark
@@ -161,35 +218,53 @@ fun MainScreen(viewModel: MainViewModel) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            if (selectedTab == 0) {
-                StudioTab(
-                    viewModel = viewModel,
-                    onPickTargetFromGallery = {
-                        targetPickerLauncher.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                        )
-                    },
-                    onTakeTargetWithCamera = {
-                        val cacheDir = File(context.cacheDir, "camera").apply { mkdirs() }
-                        val file = File(cacheDir, "target_${System.currentTimeMillis()}.jpg")
-                        val uri = FileProvider.getUriForFile(
-                            context,
-                            "${context.packageName}.files",
-                            file
-                        )
-                        tempCameraUri = uri
-                        cameraLauncher.launch(uri)
-                    },
-                    onPickTiles = {
-                        tilesPickerLauncher.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                        )
-                    }
-                )
-            } else {
-                LibraryTab(
-                    viewModel = viewModel
-                )
+            when (selectedTab) {
+                0 -> {
+                    StudioTab(
+                        viewModel = viewModel,
+                        onPickTargetFromGallery = {
+                            targetPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        onTakeTargetWithCamera = {
+                            val cacheDir = File(context.cacheDir, "camera").apply { mkdirs() }
+                            val file = File(cacheDir, "target_${System.currentTimeMillis()}.jpg")
+                            val uri = FileProvider.getUriForFile(
+                                context,
+                                "${context.packageName}.files",
+                                file
+                            )
+                            tempCameraUri = uri
+                            cameraLauncher.launch(uri)
+                        },
+                        onPickTiles = {
+                            tilesPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        }
+                    )
+                }
+                1 -> {
+                    StampsTab(
+                        viewModel = viewModel,
+                        isExtracting = isExtractingStamps,
+                        onPickImageToExtractStamps = {
+                            stampExtractorLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        }
+                    )
+                }
+                2 -> {
+                    LibraryTab(
+                        viewModel = viewModel,
+                        onExportProject = { viewModel.exportProjectToGallery(it) }
+                    )
+                }
+                3 -> {
+                    SettingsTab(viewModel = viewModel)
+                }
             }
         }
     }
@@ -207,11 +282,14 @@ fun StudioTab(
     val previewBitmap by viewModel.previewBitmap.collectAsState()
     val fullBitmap by viewModel.fullBitmap.collectAsState()
     val tileUris by viewModel.tileUris.collectAsState()
+    val customStamps by viewModel.customTileBitmaps.collectAsState()
     val genState by viewModel.generationState.collectAsState()
     val config by viewModel.config.collectAsState()
 
     var projectTitle by remember { mutableStateOf("") }
     var showFullDialog by remember { mutableStateOf(false) }
+    var showCropDialog by remember { mutableStateOf(false) }
+
     val displayBmp = fullBitmap ?: previewBitmap
 
     Column(
@@ -228,17 +306,36 @@ fun StudioTab(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "1. Main Target Image",
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp,
-                    color = TextPrimary
-                )
-                Text(
-                    text = "The overarching image that the mosaic will depict.",
-                    fontSize = 13.sp,
-                    color = TextSecondary
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "1. Main Target Image",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 16.sp,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "The overarching image that the mosaic will depict.",
+                            fontSize = 13.sp,
+                            color = TextSecondary
+                        )
+                    }
+                    if (targetBitmap != null) {
+                        Row {
+                            IconButton(onClick = { showCropDialog = true }) {
+                                Icon(Icons.Default.Crop, contentDescription = "Crop", tint = AccentPurple)
+                            }
+                            IconButton(onClick = { viewModel.resetTargetCrop() }) {
+                                Icon(Icons.Default.Refresh, contentDescription = "Reset Crop", tint = TextSecondary)
+                            }
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(12.dp))
 
                 if (targetBitmap != null) {
@@ -251,7 +348,7 @@ fun StudioTab(
                         Image(
                             bitmap = targetBitmap!!.asImageBitmap(),
                             contentDescription = "Target Image",
-                            contentScale = ContentScale.Crop,
+                            contentScale = ContentScale.Fit,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -285,7 +382,7 @@ fun StudioTab(
             }
         }
 
-        // Step 2: Tile Images Card
+        // Step 2: Tile Images & Custom Stamps Card
         Card(
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = SurfaceDark),
@@ -299,20 +396,20 @@ fun StudioTab(
                 ) {
                     Column {
                         Text(
-                            text = "2. Smaller Tile Images",
+                            text = "2. Tile Pool",
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 16.sp,
                             color = TextPrimary
                         )
                         Text(
-                            text = "${tileUris.size} tile images loaded",
+                            text = "${tileUris.size} tile photos + ${customStamps.size} AI stamps",
                             fontSize = 13.sp,
-                            color = if (tileUris.isEmpty()) TextSecondary else AccentPink
+                            color = if (tileUris.isEmpty() && customStamps.isEmpty()) TextSecondary else AccentPink
                         )
                     }
-                    if (tileUris.isNotEmpty()) {
+                    if (tileUris.isNotEmpty() || customStamps.isNotEmpty()) {
                         TextButton(onClick = { viewModel.clearTiles() }) {
-                            Text("Clear", color = TextSecondary)
+                            Text("Clear All", color = TextSecondary)
                         }
                     }
                 }
@@ -381,9 +478,9 @@ fun StudioTab(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("AI Subject Segmentation", fontWeight = FontWeight.Medium, fontSize = 14.sp, color = TextPrimary)
+                            Text("AI Auto-Cutout on Tile Uploads", fontWeight = FontWeight.Medium, fontSize = 14.sp, color = TextPrimary)
                         }
-                        Text("Extract individual people, pets & objects from photos to form varied tile shapes", fontSize = 12.sp, color = TextSecondary)
+                        Text("Extracts subjects (dogs, cats, people) from tile photos automatically", fontSize = 12.sp, color = TextSecondary)
                     }
                     Switch(
                         checked = config.extractSubjectsWithAi,
@@ -496,13 +593,14 @@ fun StudioTab(
         }
 
         // Step 4: Preview and Full Actions
+        val hasTiles = tileUris.isNotEmpty() || customStamps.isNotEmpty()
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             OutlinedButton(
                 onClick = { viewModel.generatePreview() },
-                enabled = targetBitmap != null && tileUris.isNotEmpty() && genState == GenerationState.Idle,
+                enabled = targetBitmap != null && hasTiles && genState == GenerationState.Idle,
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(12.dp)
             ) {
@@ -515,7 +613,7 @@ fun StudioTab(
                 onClick = {
                     viewModel.generateFullMosaic(title = projectTitle)
                 },
-                enabled = targetBitmap != null && tileUris.isNotEmpty() && genState == GenerationState.Idle,
+                enabled = targetBitmap != null && hasTiles && genState == GenerationState.Idle,
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = AccentPurple),
                 shape = RoundedCornerShape(12.dp)
@@ -526,8 +624,7 @@ fun StudioTab(
             }
         }
 
-        // Output Display Area
-        val displayBmp = fullBitmap ?: previewBitmap
+        // Output Display Area with Direct Download/Export Button
         if (displayBmp != null) {
             Card(
                 shape = RoundedCornerShape(20.dp),
@@ -546,8 +643,13 @@ fun StudioTab(
                             color = if (fullBitmap != null) AccentAmber else AccentPink,
                             fontSize = 15.sp
                         )
-                        IconButton(onClick = { showFullDialog = true }) {
-                            Icon(Icons.Default.Fullscreen, contentDescription = "Enlarge", tint = TextPrimary)
+                        Row {
+                            IconButton(onClick = { viewModel.exportToGallery() }) {
+                                Icon(Icons.Default.Download, contentDescription = "Export to Pictures", tint = AccentAmber)
+                            }
+                            IconButton(onClick = { showFullDialog = true }) {
+                                Icon(Icons.Default.Fullscreen, contentDescription = "Enlarge", tint = TextPrimary)
+                            }
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
@@ -564,24 +666,59 @@ fun StudioTab(
                             modifier = Modifier.fillMaxSize()
                         )
                     }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(
+                        onClick = { viewModel.exportToGallery() },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentAmber),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.Black)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Export / Download to Gallery", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
+    }
+
+    // Interactive Crop Dialog
+    if (showCropDialog && targetBitmap != null) {
+        CropSelectionDialog(
+            bitmap = viewModel.rawTargetBitmap.value ?: targetBitmap!!,
+            onDismiss = { showCropDialog = false },
+            onApplyCrop = { left, top, right, bottom ->
+                viewModel.applyCropToTarget(left, top, right, bottom)
+                showCropDialog = false
+            }
+        )
     }
 
     if (showFullDialog && displayBmp != null) {
         AlertDialog(
             onDismissRequest = { showFullDialog = false },
             confirmButton = {
-                TextButton(onClick = { showFullDialog = false }) {
-                    Text("Close", color = AccentPurple)
+                Row {
+                    Button(
+                        onClick = { viewModel.exportToGallery() },
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentAmber)
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Black)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Download", color = Color.Black)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(onClick = { showFullDialog = false }) {
+                        Text("Close", color = AccentPurple)
+                    }
                 }
             },
             text = {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(400.dp)
+                        .height(420.dp)
                 ) {
                     Image(
                         bitmap = displayBmp.asImageBitmap(),
@@ -593,6 +730,322 @@ fun StudioTab(
             },
             containerColor = SurfaceDark
         )
+    }
+}
+
+@Composable
+fun CropSelectionDialog(
+    bitmap: Bitmap,
+    onDismiss: () -> Unit,
+    onApplyCrop: (Float, Float, Float, Float) -> Unit
+) {
+    var left by remember { mutableStateOf(0.1f) }
+    var top by remember { mutableStateOf(0.1f) }
+    var right by remember { mutableStateOf(0.9f) }
+    var bottom by remember { mutableStateOf(0.9f) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("Select Mosaic Crop Region", fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 18.sp)
+        },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .border(1.dp, SurfaceVariantDark, RoundedCornerShape(8.dp))
+                ) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Original target",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                Text("Left Crop Boundary: ${(left * 100).toInt()}%", fontSize = 12.sp, color = TextSecondary)
+                Slider(
+                    value = left,
+                    onValueChange = { left = it.coerceAtMost(right - 0.1f) },
+                    valueRange = 0f..0.8f,
+                    colors = SliderDefaults.colors(thumbColor = AccentPurple, activeTrackColor = AccentPurple)
+                )
+
+                Text("Right Crop Boundary: ${(right * 100).toInt()}%", fontSize = 12.sp, color = TextSecondary)
+                Slider(
+                    value = right,
+                    onValueChange = { right = it.coerceAtLeast(left + 0.1f) },
+                    valueRange = 0.2f..1f,
+                    colors = SliderDefaults.colors(thumbColor = AccentPurple, activeTrackColor = AccentPurple)
+                )
+
+                Text("Top Crop Boundary: ${(top * 100).toInt()}%", fontSize = 12.sp, color = TextSecondary)
+                Slider(
+                    value = top,
+                    onValueChange = { top = it.coerceAtMost(bottom - 0.1f) },
+                    valueRange = 0f..0.8f,
+                    colors = SliderDefaults.colors(thumbColor = AccentPink, activeTrackColor = AccentPink)
+                )
+
+                Text("Bottom Crop Boundary: ${(bottom * 100).toInt()}%", fontSize = 12.sp, color = TextSecondary)
+                Slider(
+                    value = bottom,
+                    onValueChange = { bottom = it.coerceAtLeast(top + 0.1f) },
+                    valueRange = 0.2f..1f,
+                    colors = SliderDefaults.colors(thumbColor = AccentPink, activeTrackColor = AccentPink)
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onApplyCrop(left, top, right, bottom) },
+                colors = ButtonDefaults.buttonColors(containerColor = AccentPurple)
+            ) {
+                Text("Apply Crop")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextSecondary)
+            }
+        },
+        containerColor = SurfaceDark
+    )
+}
+
+@Composable
+fun StampsTab(
+    viewModel: MainViewModel,
+    isExtracting: Boolean,
+    onPickImageToExtractStamps: () -> Unit
+) {
+    val stamps by viewModel.customTileBitmaps.collectAsState()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.ContentCut, contentDescription = null, tint = AccentAmber)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "AI Multi-Subject Stamp Extractor",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp,
+                        color = TextPrimary
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Upload any photo (e.g., photo with multiple dogs, friends, or objects). On-device ML isolates and crops each item individually into distinct mosaic stamps.",
+                    fontSize = 13.sp,
+                    color = TextSecondary
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Button(
+                    onClick = onPickImageToExtractStamps,
+                    enabled = !isExtracting,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentAmber),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    if (isExtracting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.Black)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Extracting Subjects...", color = Color.Black)
+                    } else {
+                        Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.Black)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Extract Stamps from Image", color = Color.Black, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Extracted Stamps (${stamps.size})",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 16.sp,
+                color = TextPrimary
+            )
+            if (stamps.isNotEmpty()) {
+                TextButton(onClick = { viewModel.clearTiles() }) {
+                    Text("Clear All", color = TextSecondary)
+                }
+            }
+        }
+
+        if (stamps.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.ContentCut, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(48.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("No stamps extracted yet", color = TextSecondary, fontSize = 14.sp)
+                    Text("Pick an image above to auto-detect multiple subjects", color = TextSecondary.copy(alpha = 0.7f), fontSize = 12.sp)
+                }
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                contentPadding = PaddingValues(bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                items(stamps.size) { index ->
+                    val stampBmp = stamps[index]
+                    Card(
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(110.dp)
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            Image(
+                                bitmap = stampBmp.asImageBitmap(),
+                                contentDescription = "Stamp $index",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(6.dp)
+                            )
+                            IconButton(
+                                onClick = { viewModel.removeCustomStamp(index) },
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(2.dp)
+                                    .size(24.dp)
+                                    .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = "Delete", tint = Color.White, modifier = Modifier.size(14.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SettingsTab(viewModel: MainViewModel) {
+    val currentKey by viewModel.geminiApiKey.collectAsState()
+    var inputKey by remember { mutableStateOf(currentKey) }
+    var passwordVisible by remember { mutableStateOf(false) }
+    var savedNotice by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.VpnKey, contentDescription = null, tint = AccentPurple)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("API Configuration", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = TextPrimary)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Configure external AI vision API keys (such as Google Gemini) for optional enhanced cloud-assisted stamp extraction and styling.",
+                    fontSize = 13.sp,
+                    color = TextSecondary
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+
+                OutlinedTextField(
+                    value = inputKey,
+                    onValueChange = {
+                        inputKey = it
+                        savedNotice = false
+                    },
+                    label = { Text("Gemini / Vision API Key") },
+                    singleLine = true,
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                contentDescription = "Toggle key visibility",
+                                tint = TextSecondary
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AccentPurple,
+                        unfocusedBorderColor = SurfaceVariantDark,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = {
+                        viewModel.saveApiKey(inputKey)
+                        savedNotice = true
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentPurple),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Save Key")
+                }
+
+                if (savedNotice) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("API Key saved securely to app preferences.", color = AccentAmber, fontSize = 12.sp)
+                }
+            }
+        }
+
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("About Mosaic", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = TextPrimary)
+                Spacer(modifier = Modifier.height(6.dp))
+                Text("Version: 1.2.0 (Play Store Production)", fontSize = 13.sp, color = TextSecondary)
+                Text("Built with Jetpack Compose & Google ML Kit", fontSize = 13.sp, color = TextSecondary)
+                Text("Storage: Saves exports directly to Pictures / Mosaic", fontSize = 13.sp, color = TextSecondary)
+            }
+        }
     }
 }
 
@@ -626,7 +1079,10 @@ fun ProgressBanner(label: String, progress: Float) {
 }
 
 @Composable
-fun LibraryTab(viewModel: MainViewModel) {
+fun LibraryTab(
+    viewModel: MainViewModel,
+    onExportProject: (MosaicProject) -> Unit
+) {
     val projects by viewModel.projects.collectAsState()
     var selectedProject by remember { mutableStateOf<MosaicProject?>(null) }
 
@@ -668,7 +1124,8 @@ fun LibraryTab(viewModel: MainViewModel) {
                 ProjectCard(
                     project = item,
                     onClick = { selectedProject = item },
-                    onDelete = { viewModel.deleteProject(item.id) }
+                    onDelete = { viewModel.deleteProject(item.id) },
+                    onExport = { onExportProject(item) }
                 )
             }
         }
@@ -707,8 +1164,19 @@ fun LibraryTab(viewModel: MainViewModel) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { selectedProject = null }) {
-                    Text("Close", color = AccentPurple)
+                Row {
+                    Button(
+                        onClick = { onExportProject(proj) },
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentAmber)
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Black)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Download", color = Color.Black)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(onClick = { selectedProject = null }) {
+                        Text("Close", color = AccentPurple)
+                    }
                 }
             },
             containerColor = SurfaceDark
@@ -720,7 +1188,8 @@ fun LibraryTab(viewModel: MainViewModel) {
 fun ProjectCard(
     project: MosaicProject,
     onClick: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onExport: () -> Unit
 ) {
     val bitmap = remember(project.previewImagePath) {
         BitmapFactory.decodeFile(project.previewImagePath)
@@ -754,20 +1223,39 @@ fun ProjectCard(
                     )
                 }
 
-                IconButton(
-                    onClick = onDelete,
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(4.dp)
-                        .size(28.dp)
-                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete",
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp)
-                    )
+                    IconButton(
+                        onClick = onExport,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = "Export to Pictures",
+                            tint = AccentAmber,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
             }
 

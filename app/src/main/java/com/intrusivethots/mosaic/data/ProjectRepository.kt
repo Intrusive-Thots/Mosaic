@@ -1,15 +1,21 @@
 package com.intrusivethots.mosaic.data
 
+import android.content.ContentValues
 import android.content.Context
+import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -149,5 +155,73 @@ class ProjectRepository(private val context: Context) {
             e.printStackTrace()
             null
         }
+    }
+
+    private val prefs: SharedPreferences by lazy {
+        context.getSharedPreferences("mosaic_settings", Context.MODE_PRIVATE)
+    }
+
+    fun getApiKey(): String {
+        return prefs.getString("gemini_api_key", "") ?: ""
+    }
+
+    fun setApiKey(key: String) {
+        prefs.edit().putString("gemini_api_key", key.trim()).apply()
+    }
+
+    /**
+     * Exports a rendered bitmap directly to the Android device's public Pictures/Mosaic gallery album.
+     */
+    suspend fun exportBitmapToGallery(bitmap: Bitmap, title: String): Uri? = withContext(Dispatchers.IO) {
+        try {
+            val filename = "Mosaic_${System.currentTimeMillis()}.jpg"
+            val contentValues = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, filename)
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Mosaic")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+            }
+
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues) ?: return@withContext null
+
+            resolver.openOutputStream(uri)?.use { out: OutputStream ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                contentValues.clear()
+                contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
+                resolver.update(uri, contentValues, null, null)
+            }
+
+            uri
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    /**
+     * Crops a bitmap to rectangular bounds normalized from 0f..1f
+     */
+    fun cropBitmap(
+        source: Bitmap,
+        leftNorm: Float,
+        topNorm: Float,
+        rightNorm: Float,
+        bottomNorm: Float
+    ): Bitmap {
+        val left = (leftNorm.coerceIn(0f, 1f) * source.width).toInt()
+        val top = (topNorm.coerceIn(0f, 1f) * source.height).toInt()
+        val right = (rightNorm.coerceIn(0f, 1f) * source.width).toInt().coerceAtLeast(left + 10)
+        val bottom = (bottomNorm.coerceIn(0f, 1f) * source.height).toInt().coerceAtLeast(top + 10)
+
+        val width = (right - left).coerceAtMost(source.width - left)
+        val height = (bottom - top).coerceAtMost(source.height - top)
+
+        return Bitmap.createBitmap(source, left, top, width, height)
     }
 }

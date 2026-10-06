@@ -34,13 +34,23 @@ class MainViewModel(private val repository: ProjectRepository) : ViewModel() {
     val tileUris = MutableStateFlow<List<Uri>>(emptyList())
 
     val targetBitmap = MutableStateFlow<Bitmap?>(null)
+    val rawTargetBitmap = MutableStateFlow<Bitmap?>(null) // Preserved for uncropped reset
     private var analyzedTiles: List<TileAnalysis> = emptyList()
+
+    // Explicit stamp bitmap pool (allows multiple stamps extracted from single or multiple images)
+    val customTileBitmaps = MutableStateFlow<List<Bitmap>>(emptyList())
 
     val previewBitmap = MutableStateFlow<Bitmap?>(null)
     val fullBitmap = MutableStateFlow<Bitmap?>(null)
 
     val generationState = MutableStateFlow<GenerationState>(GenerationState.Idle)
     val config = MutableStateFlow(MosaicConfig())
+
+    // Export notification state
+    val exportStatusMessage = MutableStateFlow<String?>(null)
+
+    // Gemini API Key state
+    val geminiApiKey = MutableStateFlow(repository.getApiKey())
 
     private val _projects = MutableStateFlow<List<MosaicProject>>(emptyList())
     val projects = _projects.asStateFlow()
@@ -59,7 +69,24 @@ class MainViewModel(private val repository: ProjectRepository) : ViewModel() {
         targetImageUri.value = uri
         viewModelScope.launch {
             val bmp = repository.loadBitmapFromUri(uri, maxDimension = 1920)
+            rawTargetBitmap.value = bmp
             targetBitmap.value = bmp
+            previewBitmap.value = null
+            fullBitmap.value = null
+        }
+    }
+
+    fun applyCropToTarget(leftNorm: Float, topNorm: Float, rightNorm: Float, bottomNorm: Float) {
+        val raw = rawTargetBitmap.value ?: targetBitmap.value ?: return
+        val cropped = repository.cropBitmap(raw, leftNorm, topNorm, rightNorm, bottomNorm)
+        targetBitmap.value = cropped
+        previewBitmap.value = null
+        fullBitmap.value = null
+    }
+
+    fun resetTargetCrop() {
+        rawTargetBitmap.value?.let {
+            targetBitmap.value = it
             previewBitmap.value = null
             fullBitmap.value = null
         }
@@ -79,8 +106,25 @@ class MainViewModel(private val repository: ProjectRepository) : ViewModel() {
         analyzedTiles = emptyList()
     }
 
+    fun addCustomStamps(stamps: List<Bitmap>) {
+        val current = customTileBitmaps.value.toMutableList()
+        current.addAll(stamps)
+        customTileBitmaps.value = current
+        analyzedTiles = emptyList()
+    }
+
+    fun removeCustomStamp(index: Int) {
+        val current = customTileBitmaps.value.toMutableList()
+        if (index in current.indices) {
+            current.removeAt(index)
+            customTileBitmaps.value = current
+            analyzedTiles = emptyList()
+        }
+    }
+
     fun clearTiles() {
         tileUris.value = emptyList()
+        customTileBitmaps.value = emptyList()
         analyzedTiles = emptyList()
     }
 
@@ -102,7 +146,7 @@ class MainViewModel(private val repository: ProjectRepository) : ViewModel() {
 
     fun toggleAiSegmentation(enable: Boolean) {
         config.value = config.value.copy(extractSubjectsWithAi = enable)
-        analyzedTiles = emptyList() // Re-analyze needed when mode changes
+        analyzedTiles = emptyList()
     }
 
     fun updateMosaicStyle(style: MosaicStyle) {
@@ -113,14 +157,48 @@ class MainViewModel(private val repository: ProjectRepository) : ViewModel() {
         config.value = config.value.copy(colorMatchWeight = weight.coerceIn(0f, 1f))
     }
 
+    fun saveApiKey(key: String) {
+        geminiApiKey.value = key
+        repository.setApiKey(key)
+    }
+
+    fun exportToGallery(title: String = "My Mosaic") {
+        val bmp = fullBitmap.value ?: previewBitmap.value ?: return
+        viewModelScope.launch {
+            val uri = repository.exportBitmapToGallery(bmp, title)
+            if (uri != null) {
+                exportStatusMessage.value = "Saved to Gallery / Pictures / Mosaic!"
+            } else {
+                exportStatusMessage.value = "Failed to export image."
+            }
+        }
+    }
+
+    fun exportProjectToGallery(project: MosaicProject) {
+        viewModelScope.launch {
+            val bmp = android.graphics.BitmapFactory.decodeFile(project.fullImagePath)
+            if (bmp != null) {
+                val uri = repository.exportBitmapToGallery(bmp, project.title)
+                if (uri != null) {
+                    exportStatusMessage.value = "Saved ${project.title} to Pictures / Mosaic!"
+                }
+            }
+        }
+    }
+
+    fun clearExportStatus() {
+        exportStatusMessage.value = null
+    }
+
     fun generatePreview() {
         val baseBmp = targetBitmap.value ?: return
         val uris = tileUris.value
-        if (uris.isEmpty()) return
+        val stamps = customTileBitmaps.value
+        if (uris.isEmpty() && stamps.isEmpty()) return
 
         viewModelScope.launch {
             try {
-                prepareTilesIfNeeded(uris)
+                prepareTilesIfNeeded(uris, stamps)
 
                 if (analyzedTiles.isEmpty()) {
                     generationState.value = GenerationState.Error("No valid tile images found")
@@ -149,11 +227,12 @@ class MainViewModel(private val repository: ProjectRepository) : ViewModel() {
     fun generateFullMosaic(title: String = "", onSaved: () -> Unit = {}) {
         val baseBmp = targetBitmap.value ?: return
         val uris = tileUris.value
-        if (uris.isEmpty()) return
+        val stamps = customTileBitmaps.value
+        if (uris.isEmpty() && stamps.isEmpty()) return
 
         viewModelScope.launch {
             try {
-                prepareTilesIfNeeded(uris)
+                prepareTilesIfNeeded(uris, stamps)
 
                 if (analyzedTiles.isEmpty()) {
                     generationState.value = GenerationState.Error("No valid tile images found")
@@ -191,7 +270,7 @@ class MainViewModel(private val repository: ProjectRepository) : ViewModel() {
         }
     }
 
-    private suspend fun prepareTilesIfNeeded(uris: List<Uri>) {
+    private suspend fun prepareTilesIfNeeded(uris: List<Uri>, directBitmaps: List<Bitmap>) {
         if (analyzedTiles.isNotEmpty()) return
 
         val rawBitmaps = mutableListOf<Bitmap>()
@@ -202,10 +281,13 @@ class MainViewModel(private val repository: ProjectRepository) : ViewModel() {
         }
 
         val processedBitmaps = mutableListOf<Bitmap>()
+        // Include any directly added/extracted stamps
+        processedBitmaps.addAll(directBitmaps)
 
-        if (config.value.extractSubjectsWithAi) {
+        if (config.value.extractSubjectsWithAi && rawBitmaps.isNotEmpty()) {
             rawBitmaps.forEachIndexed { index, bmp ->
                 generationState.value = GenerationState.SegmentingSubjects(index + 1, rawBitmaps.size)
+                // Extracts ALL distinct subjects from the photo (e.g., multiple dogs/figures)
                 val extracted = SubjectSegmenterHelper.extractSubjects(bmp)
                 processedBitmaps.addAll(extracted)
             }
@@ -217,6 +299,11 @@ class MainViewModel(private val repository: ProjectRepository) : ViewModel() {
         analyzedTiles = engine.analyzeTileImages(processedBitmaps) { p ->
             generationState.value = GenerationState.AnalyzingTiles(p)
         }
+    }
+
+    suspend fun extractStampsFromUri(uri: Uri): List<Bitmap> {
+        val bmp = repository.loadBitmapFromUri(uri, maxDimension = 1024) ?: return emptyList()
+        return SubjectSegmenterHelper.extractSubjects(bmp)
     }
 
     fun deleteProject(id: String) {
