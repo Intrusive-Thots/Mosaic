@@ -57,7 +57,7 @@ Both sides use the original tile pixels and the same renderer. Left is average-R
 
 Sample collage on the portrait scene, 240 cutouts, 320 requested, seed 4, mean-color background.
 Organic run placed 320 pieces. Photo-texture run placed 320 pieces.
-docs/images/cutout-collage.png is the target, the previous collage, this collage, and a photo-texture collage.
+engine/build/reports/benchmarks/images/cutout-collage.png is the target, the previous collage, this collage, and a photo-texture collage. The committed docs/images copies are the Team 7 showcase, not this synthetic row.
 The photo textures are generated in this repository. They are not third-party photographs.
 The previous collage is the committed output from the residual placer before the detail pass.
 Its edge score uses pixels that differ from the target mean color, because that file has no coverage mask.
@@ -82,9 +82,9 @@ Mean absolute RGB error in face windows on the 280×180 canvas, previous residua
 
 Same portrait and 240 organic cutouts, seed 4, correction off, mean-color background.
 Color-only sets shape weight to 0. Shape-aware sets it to 0.9. Both stay at 280×180 and 320 pieces.
-docs/images/cutout-shape-compare.png is the target, color-only, then shape-aware.
+engine/build/reports/benchmarks/images/cutout-shape-compare.png is the target, color-only, then shape-aware.
 Dense coverage asks for 1,200 pieces at the High Quality scale range (2–11%) on a 560×360 canvas.
-docs/images/cutout-hybrid.png is cutouts only, grid under collage, then collage under grid, all 280×180.
+engine/build/reports/benchmarks/images/cutout-hybrid.png is cutouts only, grid under collage, then collage under grid, all 280×180.
 docs/images/studio-phone-mock.png is a labeled layout mock of the phone Studio. It is not a device screenshot.
 
 | | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Generate ms |

@@ -7,3 +7,4 @@ local.properties
 # Signing secrets - NEVER commit
 keystore.properties
 release/*.jks
+showcase-sources/
