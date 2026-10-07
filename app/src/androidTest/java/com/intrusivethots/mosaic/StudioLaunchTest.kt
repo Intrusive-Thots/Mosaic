@@ -1,6 +1,6 @@
 package com.intrusivethots.mosaic
 
-import android.app.Instrumentation
+import android.app.UiAutomation
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.lifecycle.Lifecycle
@@ -13,6 +13,9 @@ import org.junit.runner.RunWith
 
 /**
  * Opens the Studio on a device. The CI emulator is the machine that actually runs this.
+ * The title poll does not call [android.app.Instrumentation.waitForIdleSync]: on a loaded
+ * emulator that call can block longer than the deadline, so the tree is read once and the
+ * labels are reported missing even though they appear a moment later.
  */
 @RunWith(AndroidJUnit4::class)
 class StudioLaunchTest {
@@ -22,25 +25,34 @@ class StudioLaunchTest {
             scenario.onActivity { activity ->
                 assertTrue(activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
             }
-            val instrumentation = InstrumentationRegistry.getInstrumentation()
-            instrumentation.waitForIdleSync()
-            val screenshot = checkNotNull(instrumentation.uiAutomation.takeScreenshot())
+            val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+            val screenshot = checkNotNull(automation.takeScreenshot())
             assertTrue(screenshot.width > 0 && screenshot.height > 0)
-            val missing = listOf("Mosaic", "Studio").filterNot { waitForLabel(instrumentation, it) }
+            val missing = waitForLabels(automation, listOf("Mosaic", "Studio"))
             assertTrue("The Studio title was not on screen. Missing $missing.", missing.isEmpty())
         }
     }
 }
 
-private fun waitForLabel(instrumentation: Instrumentation, label: String): Boolean {
+private fun waitForLabels(automation: UiAutomation, labels: List<String>): List<String> {
+    val pending = labels.toMutableList()
     val deadline = SystemClock.uptimeMillis() + LABEL_WAIT_MS
-    while (SystemClock.uptimeMillis() < deadline) {
-        instrumentation.waitForIdleSync()
-        val root = instrumentation.uiAutomation.rootInActiveWindow
-        if (root != null && nodeContains(root, label)) return true
+    while (pending.isNotEmpty() && SystemClock.uptimeMillis() < deadline) {
+        val roots = windowRoots(automation)
+        pending.removeAll { label -> roots.any { nodeContains(it, label) } }
+        if (pending.isEmpty()) return emptyList()
         SystemClock.sleep(LABEL_POLL_MS)
     }
-    return false
+    return pending
+}
+
+private fun windowRoots(automation: UiAutomation): List<AccessibilityNodeInfo> {
+    val windows = automation.windows
+    if (!windows.isNullOrEmpty()) {
+        val roots = windows.mapNotNull { it.root }
+        if (roots.isNotEmpty()) return roots
+    }
+    return listOfNotNull(automation.rootInActiveWindow)
 }
 
 private fun nodeContains(node: AccessibilityNodeInfo, label: String): Boolean {
@@ -53,5 +65,5 @@ private fun nodeContains(node: AccessibilityNodeInfo, label: String): Boolean {
     return false
 }
 
-private const val LABEL_WAIT_MS = 8_000L
+private const val LABEL_WAIT_MS = 20_000L
 private const val LABEL_POLL_MS = 250L
