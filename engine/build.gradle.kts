@@ -37,6 +37,15 @@ tasks.test {
     useJUnitPlatform()
 }
 
+tasks.register<JavaExec>("showcase") {
+    group = "verification"
+    description = "Rebuild the Team 7 docs images from showcase-sources/"
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.intrusivethots.mosaic.engine.showcase.ShowcaseMainKt")
+    workingDir = rootProject.projectDir
+    dependsOn(tasks.named("testClasses"))
+}
+
 tasks.register<JavaExec>("benchmark") {
     group = "verification"
     description = "Run photomosaic engine benchmarks and write engine/build/reports/benchmarks/results.md"

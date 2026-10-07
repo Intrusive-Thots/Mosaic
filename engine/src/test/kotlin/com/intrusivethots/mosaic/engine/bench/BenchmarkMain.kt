@@ -320,11 +320,10 @@ private suspend fun writeCollageSample() {
     val photos = (0 until count).map { index -> MemoryTileSource(photoCutout(index, count, 36), "photo-$index") }
     val photo = coordinator.generate(target, photos, config, preview = false)
     val photoImage = photo.image ?: error("Photo collage produced no image.")
-    val previous = readPng(File("docs/images/cutout-collage-previous.png"))
-    val files = listOf(File("docs/images/cutout-collage.png"), File("/opt/cursor/artifacts/cutout-collage.png"))
-    writeRowOf(listOf(target, previous, image, photoImage), files)
-    writePng(image, listOf(File("docs/images/cutout-collage-output.png"), File("/opt/cursor/artifacts/cutout-collage-output.png")))
-    writePng(photoImage, listOf(File("docs/images/cutout-collage-photo.png"), File("/opt/cursor/artifacts/cutout-collage-photo.png")))
+    val previous = readPng(File("engine/src/test/resources/fixtures/cutout-collage-previous.png"))
+    writeRowOf(listOf(target, previous, image, photoImage), sampleImage("cutout-collage.png"))
+    writePng(image, sampleImage("cutout-collage-output.png"))
+    writePng(photoImage, sampleImage("cutout-collage-photo.png"))
     val scores = paintedScores(image, target, result, organic.map { it.loadThumbnail(128) }, config)
     val photoScores = paintedScores(photoImage, target, photo, photos.map { it.loadThumbnail(128) }, config)
     val previousScores = scoreImage(previous, target, coverageAgainstMean(previous, target))
@@ -385,7 +384,7 @@ private fun sampleNote(
     appendLine()
     appendLine("Sample collage on the portrait scene, 240 cutouts, 320 requested, seed 4, mean-color background.")
     appendLine("Organic run placed $organicPlaced pieces. Photo-texture run placed $photoPlaced pieces.")
-    appendLine("docs/images/cutout-collage.png is the target, the previous collage, this collage, and a photo-texture collage.")
+    appendLine("engine/build/reports/benchmarks/images/cutout-collage.png is the target, the previous collage, this collage, and a photo-texture collage.")
     appendLine("The photo textures are generated in this repository. They are not third-party photographs.")
     appendLine("The previous collage is the committed output from the residual placer before the detail pass.")
     appendLine("Its edge score uses pixels that differ from the target mean color, because that file has no coverage mask.")
@@ -419,6 +418,11 @@ private data class SampleScores(
     val maskedSsim: Double,
     val edgeDelta: Double,
     val painted: Float
+)
+
+private fun sampleImage(name: String): List<File> = listOf(
+    File("engine/build/reports/benchmarks/images/$name"),
+    File("/opt/cursor/artifacts/$name")
 )
 
 private fun readPng(file: File): PixelImage {
@@ -533,14 +537,7 @@ private fun renderReport(
 
 private suspend fun writeComparison() {
     val comparison = compareMatchers()
-    writeSideBySide(
-        comparison.legacy,
-        comparison.modern,
-        listOf(
-            File("docs/images/matching-comparison.png"),
-            File("/opt/cursor/artifacts/matching-comparison.png")
-        )
-    )
+    writeSideBySide(comparison.legacy, comparison.modern, sampleImage("matching-comparison.png"))
     val note = buildString {
         appendLine("## Matching quality")
         appendLine()
@@ -648,30 +645,21 @@ private suspend fun writeFeatureImages() {
     val shapedConfig = fair.copy(collage = fair.collage.copy(shapeWeight = 0.9f))
     val colorOnly = generateTimed(coordinator, target, organic, colorConfig)
     val shaped = generateTimed(coordinator, target, organic, shapedConfig)
-    writeRowOf(
-        listOf(target, colorOnly.image, shaped.image),
-        listOf(File("docs/images/cutout-shape-compare.png"), File("/opt/cursor/artifacts/cutout-shape-compare.png"))
-    )
+    writeRowOf(listOf(target, colorOnly.image, shaped.image), sampleImage("cutout-shape-compare.png"))
     val denseConfig = fair.copy(
         collage = fair.collage.copy(pieceCount = 1200, minScale = 0.02f, maxScale = 0.11f, refineSteps = 14),
         customOutputWidth = 560,
         customOutputHeight = 360
     )
     val dense = generateTimed(coordinator, target, organic, denseConfig)
-    writePng(
-        dense.image,
-        listOf(File("docs/images/cutout-collage-dense.png"), File("/opt/cursor/artifacts/cutout-collage-dense.png"))
-    )
+    writePng(dense.image, sampleImage("cutout-collage-dense.png"))
     val grid = fair.copy(gridColumns = 20, gridRows = 13)
     val underConfig = grid.copy(collage = grid.collage.copy(stack = HybridStack.GRID_UNDER))
     val overConfig = grid.copy(collage = grid.collage.copy(stack = HybridStack.COLLAGE_UNDER))
     val cutouts = generateTimed(coordinator, target, organic, grid)
     val under = generateTimed(coordinator, target, organic, underConfig)
     val over = generateTimed(coordinator, target, organic, overConfig)
-    writeRowOf(
-        listOf(cutouts.image, under.image, over.image),
-        listOf(File("docs/images/cutout-hybrid.png"), File("/opt/cursor/artifacts/cutout-hybrid.png"))
-    )
+    writeRowOf(listOf(cutouts.image, under.image, over.image), sampleImage("cutout-hybrid.png"))
     writeStudioMock(listOf(File("docs/images/studio-phone-mock.png"), File("/opt/cursor/artifacts/studio-phone-mock.png")))
     val note = featureNote(
         thumbs, target, colorOnly, colorConfig, shaped, shapedConfig, dense, denseConfig, under, underConfig, over, overConfig
@@ -704,9 +692,9 @@ private suspend fun featureNote(
         appendLine()
         appendLine("Same portrait and 240 organic cutouts, seed 4, correction off, mean-color background.")
         appendLine("Color-only sets shape weight to 0. Shape-aware sets it to 0.9. Both stay at 280×180 and 320 pieces.")
-        appendLine("docs/images/cutout-shape-compare.png is the target, color-only, then shape-aware.")
+        appendLine("engine/build/reports/benchmarks/images/cutout-shape-compare.png is the target, color-only, then shape-aware.")
         appendLine("Dense coverage asks for 1,200 pieces at the High Quality scale range (2–11%) on a 560×360 canvas.")
-        appendLine("docs/images/cutout-hybrid.png is cutouts only, grid under collage, then collage under grid, all 280×180.")
+        appendLine("engine/build/reports/benchmarks/images/cutout-hybrid.png is cutouts only, grid under collage, then collage under grid, all 280×180.")
         appendLine("docs/images/studio-phone-mock.png is a labeled layout mock of the phone Studio. It is not a device screenshot.")
         appendLine()
         appendLine("| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Generate ms |")
