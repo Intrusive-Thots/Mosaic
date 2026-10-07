@@ -61,9 +61,65 @@ class CollagePlacer {
         onProgress(session.placements.size.toFloat() / settings.pieceCount.coerceAtLeast(1), ADJUST_LABEL)
         refine(posed, session, descriptors, validated)
         onProgress(1f, "Placing cutouts")
+        return finishSession(field, assignments, session, descriptors, validated, target, tileTokens, coverage)
+    }
+
+    /**
+     * Replaces unpinned pieces near [centerX], [centerY]. Pieces outside the radius and pinned
+     * pieces stay put, so the rest of the plan keeps the seed that placed them.
+     */
+    suspend fun replaceRegion(
+        target: PixelImage,
+        descriptors: List<TileDescriptor>,
+        index: TileIndex,
+        config: MosaicConfig,
+        tileTokens: List<String>,
+        existing: List<CutoutPlacement>,
+        centerX: Float,
+        centerY: Float,
+        radius: Float
+    ): MosaicPlan {
+        val validated = config.validated()
+        val settings = validated.collage
+        val reach = radius.coerceIn(0.02f, 0.5f)
+        val kept = existing.filter { piece ->
+            piece.pinned || pieceDistance(piece.x, piece.y, centerX, centerY) > reach
+        }
+        val field = ResidualField(target)
+        val session = Session(descriptors.size, validated, settings)
+        session.placements.addAll(kept)
+        for (piece in kept) {
+            val cell = field.cellAt(piece.x, piece.y)
+            session.tracker.record(piece.tileIndex, cell % field.columns, cell / field.columns)
+        }
+        if (kept.size < existing.size) {
+            val detail = ResidualField(target, ResidualField.DETAIL_EDGE)
+            replay(detail, kept, descriptors)
+            val allow = regionAllow(detail, centerX, centerY, reach)
+            fill(
+                detail, session, descriptors, index, validated, IntArray(0), existing.size,
+                detail = true, peaks = false, label = DETAIL_LABEL, onProgress = { _, _ -> }, allow = allow
+            )
+        }
+        return finishSession(
+            field, IntArray(field.columns * field.rows) { MosaicPlan.SOLID }, session, descriptors,
+            validated, target, tileTokens, field.paintedFraction()
+        ).first
+    }
+
+    private fun finishSession(
+        field: ResidualField,
+        assignments: IntArray,
+        session: Session,
+        descriptors: List<TileDescriptor>,
+        config: MosaicConfig,
+        target: PixelImage,
+        tileTokens: List<String>,
+        coverage: Float
+    ): Pair<MosaicPlan, MatchStats> {
         session.stats.probes = session.probes.probes
         session.stats.usage = IntArray(descriptors.size) { session.tracker.usageCount(it) }
-        val plan = finish(field, assignments, session.placements, validated, target, tileTokens, coverage)
+        val plan = finish(field, assignments, session.placements, config, target, tileTokens, coverage)
         return plan to session.stats
     }
 
@@ -78,7 +134,8 @@ class CollagePlacer {
         detail: Boolean,
         peaks: Boolean,
         label: String,
-        onProgress: (Float, String) -> Unit
+        onProgress: (Float, String) -> Unit,
+        allow: (Int) -> Boolean = { true }
     ) {
         val settings = config.collage
         var stall = 0
@@ -89,7 +146,8 @@ class CollagePlacer {
             val coveredEnough = field.paintedFraction() >= settings.coverageGoal && stall >= STALL_LIMIT
             if (!detail && coveredEnough) break
             if (detail && stall >= STALL_LIMIT) break
-            val cell = nextCell(field, config.randomSeed, session.placements.size + session.rejects, peaks)
+            val edgeWeight = if (detail && !peaks) EDGE_WEIGHT else 0f
+            val cell = nextCell(field, config.randomSeed, session.placements.size + session.rejects, peaks, edgeWeight, allow)
             if (cell < 0) break
             val scale = when {
                 peaks -> speckScale(settings)
@@ -116,11 +174,18 @@ class CollagePlacer {
         }
     }
 
-    private fun nextCell(field: ResidualField, seed: Int, salt: Int, peaks: Boolean): Int {
-        val first = field.worstCell(seed, salt, peaks)
+    private fun nextCell(
+        field: ResidualField,
+        seed: Int,
+        salt: Int,
+        peaks: Boolean,
+        edgeWeight: Float,
+        allow: (Int) -> Boolean
+    ): Int {
+        val first = field.worstCell(seed, salt, peaks, edgeWeight, allow)
         if (first >= 0) return first
         field.clearFails()
-        return field.worstCell(seed, salt + 1, peaks)
+        return field.worstCell(seed, salt + 1, peaks, edgeWeight, allow)
     }
 
     private fun choose(
@@ -135,6 +200,7 @@ class CollagePlacer {
         detail: Boolean,
         peaks: Boolean
     ): CutoutChoice? {
+        val settings = config.collage
         val lab = if (peaks) field.peakLab(cell) else field.regionLab(cell)
         val column = cell % field.columns
         val row = cell / field.columns
@@ -150,6 +216,8 @@ class CollagePlacer {
         )
         var best: CutoutChoice? = null
         val center = field.centerOf(cell)
+        val region = if (settings.shapeWeight > 0.001f) field.structureMask(cell) else null
+        val edgeDegrees = if (region == null) 0f else field.edgeAngle(cell, settings.rotationRangeDegrees)
         for (slot in 0 until session.topK.size) {
             val tile = session.topK.ids[slot]
             val penalty = session.tracker.penalty(tile)
@@ -157,7 +225,8 @@ class CollagePlacer {
                 session.stats.comparisons++
                 val fit = field.fit(descriptors[tile], angle, cell, scale, center.first, center.second)
                 if (!fit.acceptable(detail)) continue
-                val score = fit.benefit + fit.fresh * FRESH_WEIGHT - penalty
+                val shape = if (region == null) 0f else shapeAgreement(descriptors[tile].mask, angle, region, edgeDegrees)
+                val score = fit.benefit + fit.fresh * FRESH_WEIGHT + settings.shapeWeight * shape * SHAPE_GAIN - penalty
                 best = better(best, tile, angle, score, lab, center.first, center.second)
             }
         }
@@ -278,19 +347,21 @@ class CollagePlacer {
         private const val DETAIL_LABEL = "Placing detail"
         private const val SPECK_LABEL = "Placing fine detail"
         private const val ADJUST_LABEL = "Adjusting pieces"
+        private const val EDGE_WEIGHT = 0.45f
+        private const val SHAPE_GAIN = 0.05f
     }
 }
 
 private fun detailBudget(pieceCount: Int): Int {
     val half = pieceCount / 2
     if (half < 4) return 0
-    return (pieceCount * 0.22f).toInt().coerceIn(4, half)
+    return (pieceCount * 0.38f).toInt().coerceIn(4, half)
 }
 
 private fun speckBudget(pieceCount: Int): Int {
-    val cap = pieceCount / 6
+    val cap = pieceCount / 5
     if (cap < 4) return 0
-    return (pieceCount * 0.08f).toInt().coerceIn(4, cap)
+    return (pieceCount * 0.16f).toInt().coerceIn(4, cap)
 }
 
 private class Session(
@@ -389,8 +460,23 @@ private fun pose(piece: CutoutPlacement, angle: Float, x: Float, y: Float) = Cut
     piece.scale,
     piece.targetL,
     piece.targetA,
-    piece.targetB
+    piece.targetB,
+    piece.pinned
 )
+
+private fun pieceDistance(x: Float, y: Float, centerX: Float, centerY: Float): Float {
+    val dx = x - centerX
+    val dy = y - centerY
+    return kotlin.math.sqrt(dx * dx + dy * dy)
+}
+
+private fun regionAllow(field: ResidualField, centerX: Float, centerY: Float, radius: Float): (Int) -> Boolean {
+    val reach = radius * 1.15f
+    return { cell ->
+        val center = field.centerOf(cell)
+        pieceDistance(center.first, center.second, centerX, centerY) <= reach
+    }
+}
 
 private fun samePose(candidate: CutoutPlacement, piece: CutoutPlacement): Boolean {
     return candidate.angleDegrees == piece.angleDegrees && candidate.x == piece.x && candidate.y == piece.y

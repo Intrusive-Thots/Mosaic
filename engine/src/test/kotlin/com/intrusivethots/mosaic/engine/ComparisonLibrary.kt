@@ -87,14 +87,11 @@ fun comparisonConfig(): MosaicConfig = MosaicConfig(
 
 fun writePng(image: PixelImage, files: List<File>) {
     files.forEach { file ->
-        file.parentFile?.mkdirs()
-        file.outputStream().use { stream ->
-            StreamingPngWriter(stream, image.width, image.height).use { writer ->
-                val row = IntArray(image.width)
-                for (y in 0 until image.height) {
-                    System.arraycopy(image.pixels, y * image.width, row, 0, image.width)
-                    writer.writeRow(y, row)
-                }
+        writeImageFile(file, image.width, image.height) { writer ->
+            val row = IntArray(image.width)
+            for (y in 0 until image.height) {
+                System.arraycopy(image.pixels, y * image.width, row, 0, image.width)
+                writer.writeRow(y, row)
             }
         }
     }
@@ -114,16 +111,25 @@ fun writeRowOf(images: List<PixelImage>, files: List<File>, gap: Int = 16) {
         originX += image.width + gap
     }
     files.forEach { file ->
-        file.parentFile?.mkdirs()
-        file.outputStream().use { stream ->
-            StreamingPngWriter(stream, width, height).use { writer ->
-                val row = IntArray(width)
-                for (y in 0 until height) {
-                    System.arraycopy(pixels, y * width, row, 0, width)
-                    writer.writeRow(y, row)
-                }
+        writeImageFile(file, width, height) { writer ->
+            val row = IntArray(width)
+            for (y in 0 until height) {
+                System.arraycopy(pixels, y * width, row, 0, width)
+                writer.writeRow(y, row)
             }
         }
+    }
+}
+
+private fun writeImageFile(file: File, width: Int, height: Int, rows: (StreamingPngWriter) -> Unit) {
+    try {
+        file.parentFile?.mkdirs()
+        file.outputStream().use { stream ->
+            StreamingPngWriter(stream, width, height).use(rows)
+        }
+    } catch (failure: java.io.IOException) {
+        if (!file.path.startsWith("/opt/cursor/artifacts")) throw failure
+        System.err.println("Artifact write skipped for ${file.path}: ${failure.message}")
     }
 }
 

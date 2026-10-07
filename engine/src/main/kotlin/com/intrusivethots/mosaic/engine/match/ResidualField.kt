@@ -88,19 +88,26 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
      * [peaks] ranks by the worst pixel instead of the cell sum, so a small feature
      * outranks a broad region that is only slightly off.
      */
-    fun worstCell(seed: Int, salt: Int, peaks: Boolean = false): Int {
+    fun worstCell(
+        seed: Int,
+        salt: Int,
+        peaks: Boolean = false,
+        edgeWeight: Float = 0f,
+        allow: (Int) -> Boolean = { true }
+    ): Int {
         var best = -1
         var bestScore = 0f
         for (cell in cellError.indices) {
-            if (fails[cell] != 0 || tries[cell] > MAX_TRIES) continue
+            if (!allow(cell) || fails[cell] != 0 || tries[cell] > MAX_TRIES) continue
             val jitter = (mix(seed, salt, cell) and 255) / 65536f
+            val edgePull = cellEdge[cell] * edgeWeight
             val score = if (peaks) {
                 val peak = maxError(cell)
                 if (peak < SETTLED_ERROR) continue
-                peak + jitter
+                peak + edgePull + jitter
             } else {
                 if (cellOpen[cell] == 0 && cellError[cell] < SETTLED_ERROR) continue
-                cellOpen[cell] * OPEN_WEIGHT + cellError[cell] + jitter
+                cellOpen[cell] * OPEN_WEIGHT + cellError[cell] + edgePull + jitter
             }
             if (score > bestScore) {
                 bestScore = score
@@ -123,6 +130,38 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
     }
 
     fun edgeAt(cell: Int): Float = if (cell in cellEdge.indices) cellEdge[cell] else 0f
+
+    /** 8×8 luminance-gradient map of one cell, normalized so the strongest bin is 255. */
+    fun structureMask(cell: Int): ByteArray {
+        val bounds = cellBounds(cell)
+        val values = FloatArray(SHAPE_MASK_GRID * SHAPE_MASK_GRID)
+        val spanX = (bounds.right - bounds.left).coerceAtLeast(1)
+        val spanY = (bounds.bottom - bounds.top).coerceAtLeast(1)
+        var peak = 1e-4f
+        for (cellY in 0 until SHAPE_MASK_GRID) {
+            val y0 = bounds.top + cellY * spanY / SHAPE_MASK_GRID
+            val y1 = (bounds.top + (cellY + 1) * spanY / SHAPE_MASK_GRID).coerceAtLeast(y0 + 1).coerceAtMost(bounds.bottom)
+            for (cellX in 0 until SHAPE_MASK_GRID) {
+                val x0 = bounds.left + cellX * spanX / SHAPE_MASK_GRID
+                val x1 = (bounds.left + (cellX + 1) * spanX / SHAPE_MASK_GRID).coerceAtLeast(x0 + 1).coerceAtMost(bounds.right)
+                var sum = 0f
+                var count = 0
+                for (y in y0 until y1) {
+                    for (x in x0 until x1) {
+                        val index = y * width + x
+                        val right = if (x + 1 < width) abs(targetL[index] - targetL[index + 1]) else 0f
+                        val down = if (y + 1 < height) abs(targetL[index] - targetL[index + width]) else 0f
+                        sum += right + down
+                        count++
+                    }
+                }
+                val mean = if (count == 0) 0f else sum / count
+                values[cellY * SHAPE_MASK_GRID + cellX] = mean
+                if (mean > peak) peak = mean
+            }
+        }
+        return ByteArray(values.size) { index -> ((values[index] / peak) * 255f).toInt().coerceIn(0, 255).toByte() }
+    }
 
     /** Color of the worst pixels in the cell, so a small feature is not averaged away. */
     fun peakLab(cell: Int): OkLab.Lab {

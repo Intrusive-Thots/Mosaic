@@ -8,5 +8,6 @@ class CutoutPlacement(
     val scale: Float,
     val targetL: Float,
     val targetA: Float,
-    val targetB: Float
+    val targetB: Float,
+    val pinned: Boolean = false
 )

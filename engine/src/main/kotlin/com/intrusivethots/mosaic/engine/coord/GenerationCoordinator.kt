@@ -2,13 +2,14 @@ package com.intrusivethots.mosaic.engine.coord
 
 import com.intrusivethots.mosaic.engine.EmptyLibraryException
 import com.intrusivethots.mosaic.engine.InvalidTargetException
+import com.intrusivethots.mosaic.engine.StalePlanException
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
-import com.intrusivethots.mosaic.engine.config.MosaicKind
 import com.intrusivethots.mosaic.engine.config.customSizeError
 import com.intrusivethots.mosaic.engine.config.matchFingerprint
 import com.intrusivethots.mosaic.engine.config.outputLimitError
+import com.intrusivethots.mosaic.engine.config.effectiveStack
 import com.intrusivethots.mosaic.engine.config.planCollageOutput
-import com.intrusivethots.mosaic.engine.config.planOutput
+import com.intrusivethots.mosaic.engine.config.planStackedOutput
 import com.intrusivethots.mosaic.engine.config.validated
 import com.intrusivethots.mosaic.engine.match.CollagePlacer
 import com.intrusivethots.mosaic.engine.match.CutoutPlacement
@@ -20,6 +21,7 @@ import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
 import com.intrusivethots.mosaic.engine.image.rotateClockwise
 import kotlin.math.roundToInt
 import com.intrusivethots.mosaic.engine.index.TileIndex
+import com.intrusivethots.mosaic.engine.match.MatchStats
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.match.TileMatcher
 import com.intrusivethots.mosaic.engine.progress.GenerationStage
@@ -35,6 +37,8 @@ import com.intrusivethots.mosaic.engine.tile.TileSource
 import com.intrusivethots.mosaic.engine.tile.toKey
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
+
+typealias PlanEdit = suspend (MosaicPlan, List<TileDescriptor>, PixelImage, TileIndex) -> MosaicPlan
 
 data class GenerationResult(
     val plan: MosaicPlan,
@@ -61,10 +65,12 @@ class GenerationCoordinator(
         config: MosaicConfig,
         preview: Boolean = false,
         reusePlan: MosaicPlan? = null,
+        placementEdit: PlanEdit? = null,
         sink: RowSink? = null,
         sinkFactory: ((width: Int, height: Int) -> RowSink)? = null,
         progressIntervalMs: Long = 100,
-        onProgress: (com.intrusivethots.mosaic.engine.progress.GenerationProgress) -> Unit = {}
+        onProgress: (com.intrusivethots.mosaic.engine.progress.GenerationProgress) -> Unit = {},
+        requireCurrentPlan: Boolean = false
     ): GenerationResult {
         if (target.width <= 0 || target.height <= 0) throw InvalidTargetException()
         val validated = config.validated()
@@ -84,43 +90,17 @@ class GenerationCoordinator(
 
         val tokens = descriptors.map { it.key.token() }
         val fingerprint = validated.matchFingerprint(cropped.width, cropped.height, tokens)
-        val plan: MosaicPlan
-        val comparisons: Long
-        val probes: Long
-        val solidCells: Int
-        if (reusePlan != null && reusePlan.fingerprint == fingerprint) {
-            plan = reusePlan
-            comparisons = 0
-            probes = 0
-            solidCells = reusePlan.assignments.count { it == MosaicPlan.SOLID }
-            progress.report(GenerationStage.MATCHING, 1f, "Reusing tile selection", force = true)
-        } else {
-            val collage = validated.mosaicKind == MosaicKind.COLLAGE
-            val matchLabel = if (collage) "Placing cutouts" else "Matching cells"
-            progress.report(GenerationStage.MATCHING, 0f, matchLabel, force = true)
-            val matched = if (collage) {
-                placeCutouts(
-                    cropped,
-                    descriptors,
-                    prepared.map { it.thumbnail },
-                    index,
-                    validated,
-                    tokens,
-                    fingerprint,
-                    progress
-                )
-            } else {
-                matcher.match(cropped, descriptors, index, validated, tokens) { fraction ->
-                    progress.report(GenerationStage.MATCHING, fraction, matchLabel)
-                }
-            }
-            plan = matched.first
-            comparisons = matched.second.comparisons
-            probes = matched.second.probes
-            solidCells = matched.second.solidCells
-            val done = if (collage) "Placing cutouts" else "Matching cells"
-            progress.report(GenerationStage.MATCHING, 1f, done, force = true)
+        if (requireCurrentPlan && reusePlan != null && reusePlan.fingerprint != fingerprint) {
+            throw StalePlanException()
         }
+        val matched = resolvePlan(
+            reusePlan, fingerprint, cropped, descriptors, prepared.map { it.thumbnail },
+            index, validated, tokens, progress
+        )
+        val plan = placementEdit?.invoke(matched.first, descriptors, cropped, index) ?: matched.first
+        val comparisons = matched.second.comparisons
+        val probes = matched.second.probes
+        val solidCells = matched.second.solidCells
 
         val rendered = renderOutput(
             plan,
@@ -148,6 +128,36 @@ class GenerationCoordinator(
         )
     }
 
+    private suspend fun resolvePlan(
+        reusePlan: MosaicPlan?,
+        fingerprint: String,
+        cropped: PixelImage,
+        descriptors: List<TileDescriptor>,
+        thumbnails: List<PixelImage>,
+        index: TileIndex,
+        config: MosaicConfig,
+        tokens: List<String>,
+        progress: ThrottledProgress
+    ): Pair<MosaicPlan, MatchStats> {
+        if (reusePlan != null && reusePlan.fingerprint == fingerprint) {
+            progress.report(GenerationStage.MATCHING, 1f, "Reusing tile selection", force = true)
+            val stats = MatchStats()
+            stats.solidCells = reusePlan.assignments.count { it == MosaicPlan.SOLID }
+            return reusePlan to stats
+        }
+        val stack = config.effectiveStack()
+        val label = if (stack.usesCollage()) "Placing cutouts" else "Matching cells"
+        progress.report(GenerationStage.MATCHING, 0f, label, force = true)
+        val grid = if (!stack.usesGrid()) null else matcher.match(cropped, descriptors, index, config, tokens) { fraction ->
+            progress.report(GenerationStage.MATCHING, fraction, "Matching cells")
+        }
+        val collage = if (!stack.usesCollage()) null else placeCutouts(
+            cropped, descriptors, thumbnails, index, config, tokens, fingerprint, progress
+        )
+        progress.report(GenerationStage.MATCHING, 1f, label, force = true)
+        return combinePlans(grid?.first, collage?.first) to combineStats(grid?.second, collage?.second)
+    }
+
     private suspend fun renderOutput(
         plan: MosaicPlan,
         descriptors: List<TileDescriptor>,
@@ -159,15 +169,11 @@ class GenerationCoordinator(
         sinkFactory: ((width: Int, height: Int) -> RowSink)?,
         progress: ThrottledProgress
     ): RenderedOutput {
-        val collage = config.mosaicKind == MosaicKind.COLLAGE
-        val layout = if (collage) {
-            planCollageOutput(target.width, target.height, config, preview)
-        } else {
-            planOutput(target.width, target.height, config, preview)
-        }
+        val layout = planStackedOutput(target.width, target.height, config, preview)
         if (!preview) {
-            val cellWidth = if (collage) 1 else layout.cellWidth
-            val cellHeight = if (collage) 1 else layout.cellHeight
+            val checkingGrid = config.effectiveStack().usesGrid()
+            val cellWidth = if (checkingGrid) layout.cellWidth else 1
+            val cellHeight = if (checkingGrid) layout.cellHeight else 1
             outputLimitError(layout.width, layout.height, cellWidth, cellHeight)?.let {
                 throw IllegalArgumentException(it)
             }
@@ -252,7 +258,7 @@ class GenerationCoordinator(
         tiles.forEachIndexed { index, source ->
             coroutineContext.ensureActive()
             val key = source.identity.toKey(analyzer.algorithmVersion)
-            val collage = config.mosaicKind == MosaicKind.COLLAGE
+            val collage = config.effectiveStack().usesCollage()
             val renderEdge = if (collage) maxOf(config.descriptorMaxEdge, COLLAGE_RENDER_EDGE) else config.descriptorMaxEdge
             val loaded = source.loadThumbnail(renderEdge)
             val analyzed = if (collage) loaded.downscaleLongEdge(config.descriptorMaxEdge) else loaded
@@ -300,6 +306,35 @@ class GenerationCoordinator(
         val image: PixelImage?,
         val layout: com.intrusivethots.mosaic.engine.config.OutputLayout
     )
+
+    private fun combinePlans(grid: MosaicPlan?, collage: MosaicPlan?): MosaicPlan {
+        if (grid == null) return collage ?: error("No mosaic plan was produced.")
+        if (collage == null) return grid
+        return MosaicPlan(
+            columns = grid.columns,
+            rows = grid.rows,
+            assignments = grid.assignments,
+            cellRgb = grid.cellRgb,
+            cellLab = grid.cellLab,
+            staggered = grid.staggered,
+            fingerprint = grid.fingerprint,
+            orientations = grid.orientations,
+            anchors = grid.anchors,
+            spanX = grid.spanX,
+            spanY = grid.spanY,
+            placements = collage.placements,
+            coverage = collage.coverage
+        )
+    }
+
+    private fun combineStats(grid: MatchStats?, collage: MatchStats?): MatchStats {
+        val stats = MatchStats()
+        stats.comparisons = (grid?.comparisons ?: 0L) + (collage?.comparisons ?: 0L)
+        stats.probes = (grid?.probes ?: 0L) + (collage?.probes ?: 0L)
+        stats.solidCells = grid?.solidCells ?: collage?.solidCells ?: 0
+        stats.usage = collage?.usage ?: grid?.usage ?: IntArray(0)
+        return stats
+    }
 
     companion object {
         const val MAX_IN_MEMORY_PIXELS = 2_500_000L

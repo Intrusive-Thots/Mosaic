@@ -82,87 +82,59 @@ fun StudioScreen(
     var showCrop by rememberSaveable { mutableStateOf(false) }
     var showExport by rememberSaveable { mutableStateOf(false) }
     var showEnlarge by rememberSaveable { mutableStateOf(false) }
-    val busy = state.generation is GenerationUiState.Running
-    val canGenerate = state.targetBitmap != null && state.hasTiles && !busy
-    val shownTarget = rememberRotatedBitmap(state.targetBitmap, state.config.targetQuarterTurns)
+    var advanced by rememberSaveable { mutableStateOf(false) }
     val cropSource = rememberRotatedBitmap(state.rawTargetBitmap ?: state.targetBitmap, state.config.targetQuarterTurns)
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        TargetImageCard(shownTarget, onGallery, onCamera, { showCrop = true }, onResetCrop, shapeEditor.onRotateTarget)
-        TileLibraryCard(
-            state.tileUris.size,
-            state.customStamps.size,
-            state.tileThumbs,
-            state.tileQuarterTurns,
-            onPickTiles,
-            shapeEditor.onClearTiles,
-            shapeEditor.onRotateTile,
-            state.customStamps,
-            shapeEditor.onRemoveStamp,
-            state.config.mosaicKind == com.intrusivethots.mosaic.engine.config.MosaicKind.COLLAGE
-        )
-        MosaicControlsCard(
-            config = state.config,
-            onPreset = onPreset,
-            onAspect = onAspect,
-            onStyle = onStyle,
-            onColumns = onColumns,
-            onRows = onRows,
-            onLink = onLink,
-            onRepetition = onRepetition,
-            onBlend = onBlend,
-            onRenderMode = onRenderMode,
-            onOutputMode = onOutputMode,
-            onFit = onFit,
-            onAi = onAi,
-            onSegmentation = onSegmentation,
-            targetWidth = state.targetBitmap?.width ?: 0,
-            targetHeight = state.targetBitmap?.height ?: 0,
-            onCellAspect = shapeEditor.onCellAspect,
-            onLayout = shapeEditor.onLayout,
-            onRotation = shapeEditor.onRotation,
-            onScale = shapeEditor.onScale,
-            onOutput = shapeEditor.onOutput,
-            onKind = shapeEditor.onKind,
-            onCollage = shapeEditor.onCollage
-        )
-        GenerationProgress(state.generation, onCancel)
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(
-                onClick = onPreview,
-                enabled = canGenerate,
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Preview")
+    PhoneStudioBody(
+        state = state,
+        shapeEditor = shapeEditor,
+        title = title,
+        onTitle = { title = it },
+        onGallery = onGallery,
+        onCamera = onCamera,
+        onPickTiles = onPickTiles,
+        onPreset = onPreset,
+        onPreview = onPreview,
+        onRender = { onRender(title) },
+        onCancel = onCancel,
+        onExport = { showExport = true },
+        onCrop = { showCrop = true },
+        onResetCrop = onResetCrop,
+        advanced = {
+            TextButton(onClick = { advanced = !advanced }, modifier = Modifier.height(48.dp)) {
+                Text(if (advanced) "Hide advanced controls" else "Advanced controls")
             }
-            Button(
-                onClick = { onRender(title) },
-                enabled = canGenerate,
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = AccentPurple),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(Icons.Default.DoneAll, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Render full")
+            if (advanced) {
+                MosaicControlsCard(
+                    config = state.config,
+                    onPreset = onPreset,
+                    onAspect = onAspect,
+                    onStyle = onStyle,
+                    onColumns = onColumns,
+                    onRows = onRows,
+                    onLink = onLink,
+                    onRepetition = onRepetition,
+                    onBlend = onBlend,
+                    onRenderMode = onRenderMode,
+                    onOutputMode = onOutputMode,
+                    onFit = onFit,
+                    onAi = onAi,
+                    onSegmentation = onSegmentation,
+                    targetWidth = state.targetBitmap?.width ?: 0,
+                    targetHeight = state.targetBitmap?.height ?: 0,
+                    onCellAspect = shapeEditor.onCellAspect,
+                    onLayout = shapeEditor.onLayout,
+                    onRotation = shapeEditor.onRotation,
+                    onScale = shapeEditor.onScale,
+                    onOutput = shapeEditor.onOutput,
+                    onKind = shapeEditor.onKind,
+                    onCollage = shapeEditor.onCollage
+                )
+            }
+            state.outputBitmap?.let {
+                TextButton(onClick = { showEnlarge = true }, modifier = Modifier.height(48.dp)) { Text("Enlarge") }
             }
         }
-        OutlinedTextField(
-            value = title,
-            onValueChange = { title = it },
-            label = { Text("Project title") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        state.outputBitmap?.let { bitmap ->
-            PreviewPanel(bitmap, state.hasFullRender, onExport = { showExport = true }, onEnlarge = { showEnlarge = true })
-        }
-    }
+    )
     if (showCrop) {
         val source = cropSource
         if (source != null) {
