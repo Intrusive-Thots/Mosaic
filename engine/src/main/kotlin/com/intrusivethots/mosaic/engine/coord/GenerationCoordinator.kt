@@ -2,6 +2,7 @@ package com.intrusivethots.mosaic.engine.coord
 
 import com.intrusivethots.mosaic.engine.EmptyLibraryException
 import com.intrusivethots.mosaic.engine.InvalidTargetException
+import com.intrusivethots.mosaic.engine.StalePlanException
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.customSizeError
 import com.intrusivethots.mosaic.engine.config.matchFingerprint
@@ -68,7 +69,8 @@ class GenerationCoordinator(
         sink: RowSink? = null,
         sinkFactory: ((width: Int, height: Int) -> RowSink)? = null,
         progressIntervalMs: Long = 100,
-        onProgress: (com.intrusivethots.mosaic.engine.progress.GenerationProgress) -> Unit = {}
+        onProgress: (com.intrusivethots.mosaic.engine.progress.GenerationProgress) -> Unit = {},
+        requireCurrentPlan: Boolean = false
     ): GenerationResult {
         if (target.width <= 0 || target.height <= 0) throw InvalidTargetException()
         val validated = config.validated()
@@ -88,6 +90,9 @@ class GenerationCoordinator(
 
         val tokens = descriptors.map { it.key.token() }
         val fingerprint = validated.matchFingerprint(cropped.width, cropped.height, tokens)
+        if (requireCurrentPlan && reusePlan != null && reusePlan.fingerprint != fingerprint) {
+            throw StalePlanException()
+        }
         val matched = resolvePlan(
             reusePlan, fingerprint, cropped, descriptors, prepared.map { it.thumbnail },
             index, validated, tokens, progress

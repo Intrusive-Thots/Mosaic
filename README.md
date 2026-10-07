@@ -187,7 +187,7 @@ The stack is part of the match fingerprint, so preview and export of one stack s
 
 ## Editing a result
 
-Tap the result, then regenerate that neighborhood, swap the piece under the finger, pin it, or remove it. A pin stays through a later regenerate. Undo restores the previous plan. Swap, pin, and remove reuse the existing plan. Regenerate replays the same seed for pieces outside the tap and fills only the opened cells. The undo stack and the in-progress plan are held in the view model; a process death drops them. Settings, including style and stack, are written to preferences.
+Tap the result, then regenerate that neighborhood, swap the piece under the finger, pin it, or remove it. A pin stays through a later regenerate. Undo keeps the last 16 plans, and Redo walks forward again. Swap, pin, and remove reuse the existing plan. Regenerate replays the same seed for pieces outside the tap and fills only the opened cells. The current plan, both stacks, the target URI, and the library URIs are written to app storage, so a process death restores them and redraws the preview when the pictures still match. A run killed before the first plan is saved has nothing to restore. Settings, including style and stack, stay in preferences.
 
 ## Phone Studio
 

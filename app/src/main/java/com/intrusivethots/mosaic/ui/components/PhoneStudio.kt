@@ -264,9 +264,20 @@ private fun ResultPanel(state: MosaicUiState, shapeEditor: ShapeEditor) {
                 EditChip("Remove") { shapeEditor.onEdit(CollageEdit.Remove) }
             }
         }
-        if (state.canUndoEdit) {
-            OutlinedButton(onClick = { shapeEditor.onEdit(CollageEdit.Undo) }, modifier = Modifier.height(48.dp)) {
-                Text("Undo last edit")
+        if (state.canUndoEdit || state.canRedoEdit) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                if (state.canUndoEdit) {
+                    OutlinedButton(
+                        onClick = { shapeEditor.onEdit(CollageEdit.Undo) },
+                        modifier = Modifier.weight(1f).height(48.dp)
+                    ) { Text("Undo") }
+                }
+                if (state.canRedoEdit) {
+                    OutlinedButton(
+                        onClick = { shapeEditor.onEdit(CollageEdit.Redo) },
+                        modifier = Modifier.weight(1f).height(48.dp)
+                    ) { Text("Redo") }
+                }
             }
         }
     }

@@ -7,4 +7,5 @@ sealed interface CollageEdit {
     data object Pin : CollageEdit
     data object Remove : CollageEdit
     data object Undo : CollageEdit
+    data object Redo : CollageEdit
 }

@@ -38,7 +38,10 @@ import com.intrusivethots.mosaic.engine.config.applyTo
 import com.intrusivethots.mosaic.engine.config.restyle
 import com.intrusivethots.mosaic.engine.image.unrotateNormalizedRect
 import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
+import com.intrusivethots.mosaic.engine.coord.GenerationResult
+import com.intrusivethots.mosaic.engine.match.CollageSession
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
+import com.intrusivethots.mosaic.engine.match.PlanHistory
 import com.intrusivethots.mosaic.engine.progress.GenerationStage
 import com.intrusivethots.mosaic.engine.render.StreamingPngWriter
 import com.intrusivethots.mosaic.engine.tile.FileDescriptorCache
@@ -57,6 +60,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -69,6 +74,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val bitmapCache = BitmapLruCache(maxBytes = 32 * 1024 * 1024)
     private val preferences = application.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
     private val stampStore = com.intrusivethots.mosaic.core.StampStore(File(application.filesDir, "stamps"))
+    private val sessionStore = com.intrusivethots.mosaic.core.CollageSessionStore(File(application.filesDir, "collage-session.bin"))
 
     private val _state = MutableStateFlow(MosaicUiState())
     val state = _state.asStateFlow()
@@ -79,18 +85,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var generationJob: Job? = null
     private var extractJob: Job? = null
     private var lastPlan: MosaicPlan? = null
-    private var undoPlan: MosaicPlan? = null
+    private val history = PlanHistory()
+    private val sessionLock = Mutex()
+    private var sessionTicket = 0
+    private var pendingUndo: MosaicPlan? = null
+    private var pendingEpoch = 0
+    private var runSerial = 0
+    private var strictRestore = false
     private var planEdit: com.intrusivethots.mosaic.engine.coord.PlanEdit? = null
     private var tileCount: Int = 0
 
     init {
         _state.update { it.copy(config = readMosaicConfig(preferences)) }
-        viewModelScope.launch(Dispatchers.IO) {
-            val key = repository.getApiKey()
-            val available = repository.keystoreAvailable
-            val stamps = stampStore.load()
-            _state.update { it.copy(apiKey = key, keystoreAvailable = available, customStamps = stamps.ifEmpty { it.customStamps }) }
-        }
+        viewModelScope.launch(Dispatchers.IO) { restoreWorkspace() }
         refreshProjects()
     }
 
@@ -117,13 +124,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val mapped = unrotateNormalizedRect(_state.value.config.targetQuarterTurns, left, top, right, bottom)
         val cropped = repository.cropBitmap(raw, mapped[0], mapped[1], mapped[2], mapped[3])
         _state.update { it.copy(targetBitmap = cropped, previewBitmap = null, displayBitmap = null, hasFullRender = false) }
-        lastPlan = null
+        dropPlan()
     }
 
     fun resetTargetCrop() {
         val raw = _state.value.rawTargetBitmap ?: return
         _state.update { it.copy(targetBitmap = raw, previewBitmap = null, displayBitmap = null, hasFullRender = false) }
-        lastPlan = null
+        dropPlan()
     }
 
     fun addTileImages(uris: List<Uri>) {
@@ -136,7 +143,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             state.copy(tileUris = merged, tileQuarterTurns = turns)
         }
-        lastPlan = null
+        dropPlan()
         persistTileTurns()
         refreshThumbs()
     }
@@ -149,7 +156,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             turns[index] = (turns[index] + 1) and 3
             state.copy(tileQuarterTurns = turns)
         }
-        lastPlan = null
+        dropPlan()
         persistTileTurns()
     }
 
@@ -162,7 +169,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             state.copy(tileUris = state.tileUris - uri, tileQuarterTurns = turns, tileThumbs = thumbs)
         }
         bitmapCache.remove(uri.toString())
-        lastPlan = null
+        dropPlan()
         persistTileTurns()
     }
 
@@ -172,7 +179,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         _state.update { it.copy(customStamps = it.customStamps + stamps) }
-        lastPlan = null
+        dropPlan()
         persistStamps()
     }
 
@@ -180,7 +187,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { state ->
             state.copy(customStamps = state.customStamps.filterIndexed { stampIndex, _ -> stampIndex != index })
         }
-        lastPlan = null
+        dropPlan()
         persistStamps()
     }
 
@@ -188,14 +195,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _state.value.tileThumbs.forEach { thumb -> if (thumb != null && !thumb.isRecycled) thumb.recycle() }
         _state.update { it.copy(tileUris = emptyList(), tileQuarterTurns = emptyList(), tileThumbs = emptyList(), customStamps = emptyList()) }
         bitmapCache.clear()
-        lastPlan = null
+        dropPlan()
         persistTileTurns()
         persistStamps()
     }
 
     fun clearStamps() {
         _state.update { it.copy(customStamps = emptyList()) }
-        lastPlan = null
+        dropPlan()
         persistStamps()
     }
 
@@ -208,7 +215,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (previous !== bitmap && !previous.isRecycled) previous.recycle()
             state.copy(customStamps = stamps)
         }
-        lastPlan = null
+        dropPlan()
         persistStamps()
     }
 
@@ -298,8 +305,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onCollageEdit(edit: com.intrusivethots.mosaic.ui.state.CollageEdit) {
         when (edit) {
-            is com.intrusivethots.mosaic.ui.state.CollageEdit.Tap -> _state.update { it.copy(editPoint = edit.x to edit.y) }
+            is com.intrusivethots.mosaic.ui.state.CollageEdit.Tap -> {
+                _state.update { it.copy(editPoint = edit.x to edit.y) }
+                if (lastPlan != null) persistSession()
+            }
             com.intrusivethots.mosaic.ui.state.CollageEdit.Undo -> undoEdit()
+            com.intrusivethots.mosaic.ui.state.CollageEdit.Redo -> redoEdit()
             com.intrusivethots.mosaic.ui.state.CollageEdit.Regenerate -> regenerateEdit()
             com.intrusivethots.mosaic.ui.state.CollageEdit.Swap -> mutatePiece { plan, index ->
                 com.intrusivethots.mosaic.engine.match.CollageEditor().swap(plan, index, tileCount)
@@ -321,31 +332,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _events.tryEmit(UiEvent.Message("Tap a piece on the picture first."))
             return
         }
-        undoPlan = plan
+        history.push(plan)
         lastPlan = change(plan, index)
-        _state.update { it.copy(canUndoEdit = true) }
+        publishHistory()
+        persistSession()
         generatePreview()
     }
 
-    private fun undoEdit() {
-        val previous = undoPlan ?: return
-        undoPlan = lastPlan
-        lastPlan = previous
+    private fun undoEdit() = stepHistory { current -> history.undo(current) }
+
+    private fun redoEdit() = stepHistory { current -> history.redo(current) }
+
+    private fun stepHistory(move: (MosaicPlan) -> MosaicPlan?) {
+        val plan = lastPlan ?: return
+        lastPlan = move(plan) ?: return
+        publishHistory()
+        persistSession()
         generatePreview()
     }
 
     private fun regenerateEdit() {
         val point = _state.value.editPoint ?: return
-        if (lastPlan == null) return
-        undoPlan = lastPlan
+        val plan = lastPlan ?: return
+        pendingUndo = plan
+        pendingEpoch += 1
         val config = _state.value.config
         planEdit = { current, descriptors, image, index ->
             com.intrusivethots.mosaic.engine.match.CollageEditor().regenerate(
                 image, descriptors, index, config, current, point.first, point.second, 0.14f
             )
         }
-        _state.update { it.copy(canUndoEdit = true) }
-        generatePreview()
+        runGeneration(preview = true, title = "", commitPending = true)
     }
 
     private fun persistStamps() {
@@ -470,12 +487,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun runGeneration(preview: Boolean, title: String) {
+    private fun runGeneration(preview: Boolean, title: String, commitPending: Boolean = false) {
         val snapshot = _state.value
         val target = snapshot.targetBitmap ?: return
         if (!snapshot.hasTiles) return
+        if (!commitPending) {
+            pendingUndo = null
+            pendingEpoch += 1
+        }
         generationJob?.cancel()
+        val run = ++runSerial
         generationJob = viewModelScope.launch {
+            val strict = strictRestore
+            strictRestore = false
+            val epoch = pendingEpoch
             var fullFile: File? = null
             var png: StreamingPngWriter? = null
             var stream: FileOutputStream? = null
@@ -511,10 +536,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     },
                     onProgress = { progress ->
                         publish(progress.stage, progress.fraction, progress.message, progress.preview?.toBitmap())
-                    }
+                    },
+                    requireCurrentPlan = strict
                 )
-                lastPlan = result.plan
-                tileCount = result.descriptors.size
+                if (!acceptFinishedPlan(run, epoch, result)) return@launch
                 if (preview) {
                     val bitmap = result.image?.toBitmap()
                     _state.update {
@@ -523,7 +548,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             displayBitmap = null,
                             hasFullRender = false,
                             generation = GenerationUiState.Idle,
-                            canUndoEdit = undoPlan != null
+                            canUndoEdit = history.canUndo,
+                            canRedoEdit = history.canRedo
                         )
                     }
                 } else {
@@ -531,42 +557,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     stream?.close()
                     png = null
                     stream = null
-                    publish(GenerationStage.SAVING, 0.4f, "Saving project")
-                    val display = repository.loadPreview(fullFile!!.absolutePath, 1280)
-                        ?: error("The rendered file could not be read back.")
-                    val saved = repository.saveProject(
-                        title = title.ifBlank { "Mosaic" },
-                        previewBitmap = display,
-                        fullImageFile = fullFile!!,
-                        tileCount = result.descriptors.size,
-                        columns = result.plan.columns,
-                        rows = result.plan.rows,
-                        preset = config.qualityPreset.label,
-                        targetQuarterTurns = config.targetQuarterTurns,
-                        tileRotations = encodeTileRotations(
-                            snapshot.tileUris.map { it.toString() },
-                            snapshot.tileQuarterTurns
-                        )
-                    )
+                    saveFullMosaic(title, fullFile!!, result, snapshot, config)
                     fullFile = null
-                    _state.update {
-                        it.copy(
-                            displayBitmap = display,
-                            hasFullRender = true,
-                            fullImagePath = saved.fullImagePath,
-                            generation = GenerationUiState.Complete,
-                            projects = repository.getAllProjects()
-                        )
-                    }
-                    _events.tryEmit(UiEvent.Message("Mosaic saved."))
                 }
             } catch (cancelled: CancellationException) {
-                _state.update { it.copy(generation = GenerationUiState.Idle) }
+                noteGenerationEnd(run, epoch, null)
                 throw cancelled
             } catch (failure: Exception) {
-                _state.update {
-                    it.copy(generation = GenerationUiState.Failed(failure.message ?: "Mosaic creation failed."))
-                }
+                noteGenerationEnd(run, epoch, failure.message ?: "Mosaic creation failed.")
             } finally {
                 runCatching { png?.close() }
                 runCatching { stream?.close() }
@@ -574,6 +572,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 ownedBitmaps.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
             }
         }
+    }
+
+    private fun acceptFinishedPlan(run: Int, epoch: Int, result: GenerationResult): Boolean {
+        if (run != runSerial) return false
+        if (epoch == pendingEpoch) {
+            pendingUndo?.let { history.push(it) }
+            pendingUndo = null
+        }
+        lastPlan = result.plan
+        tileCount = result.descriptors.size
+        persistSession()
+        return true
+    }
+
+    private fun noteGenerationEnd(run: Int, epoch: Int, failure: String?) {
+        if (run != runSerial) return
+        if (epoch == pendingEpoch) pendingUndo = null
+        val generation = if (failure == null) {
+            GenerationUiState.Idle
+        } else {
+            GenerationUiState.Failed(failure)
+        }
+        _state.update { it.copy(generation = generation) }
+    }
+
+    private suspend fun saveFullMosaic(
+        title: String,
+        fullFile: File,
+        result: GenerationResult,
+        snapshot: MosaicUiState,
+        config: MosaicConfig
+    ) {
+        publish(GenerationStage.SAVING, 0.4f, "Saving project")
+        val display = repository.loadPreview(fullFile.absolutePath, 1280)
+            ?: error("The rendered file could not be read back.")
+        val saved = repository.saveProject(
+            title = title.ifBlank { "Mosaic" },
+            previewBitmap = display,
+            fullImageFile = fullFile,
+            tileCount = result.descriptors.size,
+            columns = result.plan.columns,
+            rows = result.plan.rows,
+            preset = config.qualityPreset.label,
+            targetQuarterTurns = config.targetQuarterTurns,
+            tileRotations = encodeTileRotations(snapshot.tileUris.map { it.toString() }, snapshot.tileQuarterTurns)
+        )
+        _state.update {
+            it.copy(
+                displayBitmap = display,
+                hasFullRender = true,
+                fullImagePath = saved.fullImagePath,
+                generation = GenerationUiState.Complete,
+                projects = repository.getAllProjects()
+            )
+        }
+        _events.tryEmit(UiEvent.Message("Mosaic saved."))
     }
 
     private suspend fun buildSources(
@@ -669,10 +723,89 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { state ->
             val updated = transform(state.config)
             writeMosaicConfig(preferences, updated)
-            state.copy(config = updated, editPoint = null, canUndoEdit = false)
+            state.copy(config = updated)
         }
+        dropPlan()
+    }
+
+    private suspend fun restoreWorkspace() {
+        val key = repository.getApiKey()
+        val available = repository.keystoreAvailable
+        val stamps = stampStore.load()
+        val session = sessionStore.read()
+        val savedTarget = session?.targetUri?.takeIf { it.isNotEmpty() }?.let { android.net.Uri.parse(it) }
+        val target = savedTarget?.let { repository.loadBitmapFromUri(it, maxDimension = 1920) }
+        val savedTiles = session?.tileUris?.map { android.net.Uri.parse(it) }.orEmpty()
+        val savedTurns = decodeTileRotations(preferences.getString(TILE_TURNS, ""))
+        val turns = savedTiles.map { savedTurns[it.toString()] ?: 0 }
+        if (session != null) {
+            lastPlan = session.current
+            tileCount = session.tileCount
+            history.restore(session.undo, session.redo)
+        }
+        _state.update {
+            it.copy(
+                apiKey = key,
+                keystoreAvailable = available,
+                customStamps = stamps.ifEmpty { it.customStamps },
+                targetUri = savedTarget ?: it.targetUri,
+                targetBitmap = target ?: it.targetBitmap,
+                rawTargetBitmap = target ?: it.rawTargetBitmap,
+                tileUris = if (savedTiles.isEmpty()) it.tileUris else savedTiles,
+                tileQuarterTurns = if (savedTiles.isEmpty()) it.tileQuarterTurns else turns,
+                editPoint = session?.editPoint ?: it.editPoint,
+                canUndoEdit = history.canUndo,
+                canRedoEdit = history.canRedo
+            )
+        }
+        if (savedTiles.isNotEmpty()) refreshThumbs()
+        val hasLibrary = savedTiles.isNotEmpty() || stamps.isNotEmpty()
+        if (session != null && target != null && hasLibrary && !_state.value.config.extractSubjectsWithAi) {
+            strictRestore = true
+            generatePreview()
+        }
+    }
+
+    private fun publishHistory() {
+        _state.update { it.copy(canUndoEdit = history.canUndo, canRedoEdit = history.canRedo) }
+    }
+
+    private fun dropPlan() {
         lastPlan = null
-        undoPlan = null
+        history.clear()
+        pendingUndo = null
+        _state.update { it.copy(editPoint = null, canUndoEdit = false, canRedoEdit = false) }
+        clearSession()
+    }
+
+    private fun persistSession() {
+        val plan = lastPlan ?: return clearSession()
+        val state = _state.value
+        val session = CollageSession(
+            current = plan,
+            undo = history.undoList(),
+            redo = history.redoList(),
+            targetUri = state.targetUri?.toString().orEmpty(),
+            tileUris = state.tileUris.map { it.toString() },
+            editX = state.editPoint?.first ?: Float.NaN,
+            editY = state.editPoint?.second ?: Float.NaN,
+            tileCount = tileCount
+        )
+        val ticket = ++sessionTicket
+        viewModelScope.launch(Dispatchers.IO) {
+            sessionLock.withLock {
+                if (ticket == sessionTicket) sessionStore.write(session)
+            }
+        }
+    }
+
+    private fun clearSession() {
+        val ticket = ++sessionTicket
+        viewModelScope.launch(Dispatchers.IO) {
+            sessionLock.withLock {
+                if (ticket == sessionTicket) sessionStore.clear()
+            }
+        }
     }
 
     private fun refreshThumbs() {

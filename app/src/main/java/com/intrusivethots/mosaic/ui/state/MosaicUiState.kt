@@ -27,6 +27,7 @@ data class MosaicUiState(
     val keystoreAvailable: Boolean = true,
     val editPoint: Pair<Float, Float>? = null,
     val canUndoEdit: Boolean = false,
+    val canRedoEdit: Boolean = false,
     val libraryMessage: String = ""
 ) {
     val hasTiles: Boolean get() = tileUris.isNotEmpty() || customStamps.isNotEmpty()
