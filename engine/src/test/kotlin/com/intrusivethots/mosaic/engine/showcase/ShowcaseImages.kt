@@ -7,7 +7,6 @@ import java.io.File
 import java.util.ArrayDeque
 import javax.imageio.ImageIO
 import kotlin.math.min
-import kotlin.math.sqrt
 
 internal class ShowcaseLibrary(
     val target: PixelImage,
@@ -22,8 +21,11 @@ internal fun loadShowcase(directory: File, tileEdge: Int): ShowcaseLibrary {
     require(files.size >= 2) { "No showcase images in ${directory.path}. Run scripts/regenerate-showcase.py." }
     val decoded = files.map { file -> readImage(file).downscaleLongEdge(if (file.name.startsWith("000-")) 4096 else tileEdge) }
     val target = decoded.first()
-    val photos = decoded.drop(1).map { asOpaque(it) }
-    val cutouts = decoded.drop(1).map { asCutout(it) }
+    val sources = decoded.drop(1)
+    val photos = sources.mapNotNull { brightPhoto(it) }
+    val cutouts = sources.mapNotNull { asCutout(it) }
+    require(photos.size >= 8) { "Only ${photos.size} well-lit photos. The library is too dark to rebuild a face." }
+    require(cutouts.size >= 8) { "Only ${cutouts.size} subject cutouts. Dark frames were rejected." }
     return ShowcaseLibrary(target, cutouts, photos)
 }
 
@@ -41,15 +43,27 @@ internal fun asOpaque(image: PixelImage): PixelImage {
     return PixelImage(image.width, image.height, pixels)
 }
 
-internal fun asCutout(image: PixelImage): PixelImage {
-    if (clearFraction(image) >= 0.08f) return image
-    val background = flatBorder(image)
+internal fun brightPhoto(image: PixelImage): PixelImage? {
+    if (!isWellLit(image)) return null
+    return asOpaque(image)
+}
+
+/**
+ * A collage piece has to be a subject. A flat border is flooded away. A bright picture that
+ * already fills the frame is kept as a light-edged stamp. A dark frame is dropped: feathering
+ * it used to leave a soft slab, and those slabs repeated as stripes.
+ */
+internal fun asCutout(image: PixelImage): PixelImage? {
+    if (clearFraction(image) >= 0.08f) {
+        return if (isSubject(image)) image else null
+    }
+    val background = dominantBorder(image)
     if (background != null) {
         val cleared = floodClear(image, background)
-        val removed = clearFraction(cleared)
-        if (removed in 0.08f..0.7f) return cleared
+        if (isSubject(cleared)) return cleared
     }
-    return featherRim(image)
+    if (!isWellLit(image)) return null
+    return edgeStamp(image)
 }
 
 private fun clearFraction(image: PixelImage): Float {
@@ -60,38 +74,130 @@ private fun clearFraction(image: PixelImage): Float {
 
 private data class BorderColor(val red: Int, val green: Int, val blue: Int)
 
-private fun flatBorder(image: PixelImage): BorderColor? {
-    val samples = ArrayList<Int>(image.width * 2 + image.height * 2)
+private fun borderSamples(image: PixelImage): IntArray {
+    val samples = IntArray(image.width * 2 + image.height * 2)
+    var cursor = 0
     for (x in 0 until image.width) {
-        samples += image.pixel(x, 0)
-        samples += image.pixel(x, image.height - 1)
+        samples[cursor++] = image.pixel(x, 0)
+        samples[cursor++] = image.pixel(x, image.height - 1)
     }
     for (y in 1 until image.height - 1) {
-        samples += image.pixel(0, y)
-        samples += image.pixel(image.width - 1, y)
+        samples[cursor++] = image.pixel(0, y)
+        samples[cursor++] = image.pixel(image.width - 1, y)
     }
+    return samples.copyOf(cursor)
+}
+
+private fun dominantBorder(image: PixelImage): BorderColor? {
+    val samples = borderSamples(image)
+    if (samples.isEmpty()) return null
+    val buckets = HashMap<Int, Int>()
+    for (pixel in samples) {
+        val key = (((pixel ushr 16) and 255) / 32 shl 6) or ((((pixel ushr 8) and 255) / 32) shl 3) or ((pixel and 255) / 32)
+        buckets[key] = (buckets[key] ?: 0) + 1
+    }
+    val mode = buckets.maxBy { it.value }
+    if (mode.value < samples.size * 0.42f) return null
     var red = 0L
     var green = 0L
     var blue = 0L
+    var count = 0
     for (pixel in samples) {
+        val key = (((pixel ushr 16) and 255) / 32 shl 6) or ((((pixel ushr 8) and 255) / 32) shl 3) or ((pixel and 255) / 32)
+        if (key != mode.key) continue
         red += (pixel ushr 16) and 255
         green += (pixel ushr 8) and 255
         blue += pixel and 255
+        count++
     }
-    val count = samples.size.coerceAtLeast(1)
-    val meanRed = (red / count).toInt()
-    val meanGreen = (green / count).toInt()
-    val meanBlue = (blue / count).toInt()
-    var error = 0.0
-    for (pixel in samples) {
-        val dr = ((pixel ushr 16) and 255) - meanRed
-        val dg = ((pixel ushr 8) and 255) - meanGreen
-        val db = (pixel and 255) - meanBlue
-        error += dr * dr + dg * dg + db * db
+    if (count == 0) return null
+    return BorderColor((red / count).toInt(), (green / count).toInt(), (blue / count).toInt())
+}
+
+private fun isSubject(image: PixelImage): Boolean {
+    val opaque = 1f - clearFraction(image)
+    if (opaque !in 0.12f..0.78f) return false
+    val bounds = opaqueBounds(image) ?: return false
+    val spanX = bounds.width.toFloat() / image.width
+    val spanY = bounds.height.toFloat() / image.height
+    if (spanX > 0.94f && spanY > 0.94f) return false
+    if (spanY < 0.22f && spanX > 0.72f) return false
+    if (spanX < 0.16f && spanY > 0.72f) return false
+    return opaqueHasColor(image)
+}
+
+private data class Bounds(val width: Int, val height: Int)
+
+private fun opaqueBounds(image: PixelImage): Bounds? {
+    var left = image.width
+    var top = image.height
+    var right = -1
+    var bottom = -1
+    for (y in 0 until image.height) {
+        for (x in 0 until image.width) {
+            if ((image.pixel(x, y) ushr 24) < 40) continue
+            if (x < left) left = x
+            if (y < top) top = y
+            if (x > right) right = x
+            if (y > bottom) bottom = y
+        }
     }
-    val deviation = sqrt(error / count)
-    if (deviation > 28.0) return null
-    return BorderColor(meanRed, meanGreen, meanBlue)
+    if (right < left || bottom < top) return null
+    return Bounds(right - left + 1, bottom - top + 1)
+}
+
+private fun opaqueHasColor(image: PixelImage): Boolean {
+    var chroma = 0L
+    var bright = 0
+    var count = 0
+    val step = (image.width / 24).coerceAtLeast(1)
+    var y = 0
+    while (y < image.height) {
+        var x = 0
+        while (x < image.width) {
+            val pixel = image.pixel(x, y)
+            if ((pixel ushr 24) >= 40) {
+                val red = (pixel ushr 16) and 255
+                val green = (pixel ushr 8) and 255
+                val blue = pixel and 255
+                chroma += maxOf(red, green, blue) - minOf(red, green, blue)
+                if ((red * 3 + green * 4 + blue) / 8 > 70) bright++
+                count++
+            }
+            x += step
+        }
+        y += step
+    }
+    if (count == 0) return false
+    return chroma / count >= 18 || bright.toFloat() / count >= 0.2f
+}
+
+private fun isWellLit(image: PixelImage): Boolean {
+    var luma = 0L
+    var chroma = 0L
+    var bright = 0
+    var count = 0
+    val step = (image.width / 32).coerceAtLeast(1)
+    var y = 0
+    while (y < image.height) {
+        var x = 0
+        while (x < image.width) {
+            val pixel = image.pixel(x, y)
+            val red = (pixel ushr 16) and 255
+            val green = (pixel ushr 8) and 255
+            val blue = pixel and 255
+            val tone = (red * 3 + green * 4 + blue) / 8
+            luma += tone
+            chroma += maxOf(red, green, blue) - minOf(red, green, blue)
+            if (tone > 90) bright++
+            count++
+            x += step
+        }
+        y += step
+    }
+    if (count == 0) return false
+    val mean = luma / count
+    return mean in 72..225 && chroma / count >= 18 && bright.toFloat() / count >= 0.32f
 }
 
 private fun floodClear(image: PixelImage, background: BorderColor): PixelImage {
@@ -133,9 +239,9 @@ private fun near(pixel: Int, background: BorderColor): Boolean {
     return red * red + green * green + blue * blue <= 36 * 36
 }
 
-private fun featherRim(image: PixelImage): PixelImage {
+private fun edgeStamp(image: PixelImage): PixelImage {
     val pixels = image.pixels.copyOf()
-    val inset = 0.18f
+    val inset = 0.045f
     for (y in 0 until image.height) {
         val ySpan = min(y, image.height - 1 - y).toFloat() / (image.height * inset)
         for (x in 0 until image.width) {

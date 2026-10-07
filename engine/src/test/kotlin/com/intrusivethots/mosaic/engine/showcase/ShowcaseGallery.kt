@@ -39,17 +39,17 @@ internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File) 
     writeCollageRow(panelTarget, cutouts, photos, destination)
     writeShapeRow(panelTarget, cutouts, destination)
     writeHybridRow(panelTarget, cutouts, destination)
-    val fullCollage = render(fullTarget, cutouts, currentCollage(FULL_EDGE, HybridStack.CUTOUTS, 480))
+    val fullCollage = render(fullTarget, cutouts, currentCollage(FULL_EDGE, HybridStack.CUTOUTS, 720))
     writePng(fullCollage, listOf(File(destination, "cutout-collage-output.png")))
     val dense = render(fullTarget, cutouts, denseCollage(FULL_EDGE))
     writePng(dense, listOf(File(destination, "cutout-collage-dense.png")))
-    val grid = render(fullTarget, opaque, gridConfig(72, FULL_EDGE))
+    val grid = render(fullTarget, opaque, gridConfig(80, FULL_EDGE))
     writePng(grid, listOf(File(destination, "showcase-grid.png")))
     copyArtifacts(destination)
 }
 
 private suspend fun writeMatcherComparison(target: PixelImage, tiles: List<MemoryTileSource>, destination: File) {
-    val config = gridConfig(48, PANEL_EDGE)
+    val config = gridConfig(64, PANEL_EDGE)
     val modern = GenerationCoordinator().generate(target, tiles, config, preview = false)
     val modernImage = modern.image ?: error("Grid comparison produced no image.")
     val thumbs = tiles.map { it.loadThumbnail(192) }
@@ -65,22 +65,22 @@ private suspend fun writeCollageRow(
     destination: File
 ) {
     val coarse = render(target, cutouts, coarseCollage(PANEL_EDGE))
-    val current = render(target, cutouts, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 480))
-    val photo = render(target, photos, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 480))
+    val current = render(target, cutouts, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 720))
+    val photo = render(target, photos, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 720))
     val strip = rowOf(listOf(target.fitted(current), coarse, current, photo))
     writePng(strip.downscaleLongEdge(STRIP_EDGE), listOf(File(destination, "cutout-collage.png")))
     writePng(photo, listOf(File(destination, "cutout-collage-photo.png")))
 }
 
 private suspend fun writeShapeRow(target: PixelImage, cutouts: List<MemoryTileSource>, destination: File) {
-    val colorOnly = render(target, cutouts, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 320).shape(0f))
-    val shaped = render(target, cutouts, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 320).shape(0.9f))
+    val colorOnly = render(target, cutouts, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 480).shape(0f))
+    val shaped = render(target, cutouts, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 480).shape(0.85f))
     val strip = rowOf(listOf(target.fitted(shaped), colorOnly, shaped))
     writePng(strip.downscaleLongEdge(STRIP_EDGE), listOf(File(destination, "cutout-shape-compare.png")))
 }
 
 private suspend fun writeHybridRow(target: PixelImage, cutouts: List<MemoryTileSource>, destination: File) {
-    val base = currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 320)
+    val base = currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 480)
     val cutoutOnly = render(target, cutouts, base)
     val under = render(target, cutouts, base.stack(HybridStack.GRID_UNDER))
     val over = render(target, cutouts, base.stack(HybridStack.COLLAGE_UNDER))
@@ -118,21 +118,22 @@ private fun sources(images: List<PixelImage>, prefix: String): List<MemoryTileSo
 private fun gridConfig(columns: Int, edge: Int) = MosaicConfig(
     gridColumns = columns,
     linkAspectToGrid = true,
-    renderMode = RenderMode.ORIGINAL,
-    colorMatchWeight = 0f,
+    renderMode = RenderMode.COLOR_CORRECTED,
+    colorMatchWeight = 0.58f,
     randomSeed = GRID_SEED,
-    descriptorMaxEdge = 192,
+    descriptorMaxEdge = 256,
     candidateCount = 24,
     customOutputWidth = edge,
     lockOutputAspect = true,
-    mosaicKind = MosaicKind.GRID
+    mosaicKind = MosaicKind.GRID,
+    maxRepetitionDistance = 0
 )
 
-private fun coarseCollage(edge: Int) = currentCollage(edge, HybridStack.CUTOUTS, 180).let { config ->
+private fun coarseCollage(edge: Int) = currentCollage(edge, HybridStack.CUTOUTS, 220).let { config ->
     config.copy(
         collage = config.collage.copy(
-            minScale = 0.05f,
-            maxScale = 0.22f,
+            minScale = 0.06f,
+            maxScale = 0.16f,
             refineSteps = 0,
             shapeWeight = 0f,
             style = CollageStyle.SPARSE
@@ -140,32 +141,34 @@ private fun coarseCollage(edge: Int) = currentCollage(edge, HybridStack.CUTOUTS,
     )
 }
 
-private fun denseCollage(edge: Int) = currentCollage(edge, HybridStack.CUTOUTS, 1200).let { config ->
+private fun denseCollage(edge: Int) = currentCollage(edge, HybridStack.CUTOUTS, 1100).let { config ->
     config.copy(
-        collage = config.collage.copy(minScale = 0.02f, maxScale = 0.11f, refineSteps = 14, shapeWeight = 0.9f)
+        collage = config.collage.copy(minScale = 0.018f, maxScale = 0.07f, refineSteps = 12, shapeWeight = 0.45f)
     )
 }
 
 private fun currentCollage(edge: Int, stack: HybridStack, pieces: Int) = MosaicConfig(
-    gridColumns = 40,
+    gridColumns = 48,
     linkAspectToGrid = true,
-    renderMode = RenderMode.ORIGINAL,
-    colorMatchWeight = 0f,
+    renderMode = RenderMode.COLOR_CORRECTED,
+    colorMatchWeight = 0.5f,
     randomSeed = COLLAGE_SEED,
-    descriptorMaxEdge = 192,
+    descriptorMaxEdge = 256,
     candidateCount = 16,
     customOutputWidth = edge,
     lockOutputAspect = true,
     mosaicKind = MosaicKind.COLLAGE,
+    maxRepetitionDistance = 2,
+    usageBalanceWeight = 0.2f,
     collage = CollageSettings(
         pieceCount = pieces,
-        minScale = 0.03f,
-        maxScale = 0.16f,
-        rotationRangeDegrees = 20f,
-        overlap = 0.38f,
-        coverageGoal = 0.99f,
+        minScale = 0.022f,
+        maxScale = 0.09f,
+        rotationRangeDegrees = 16f,
+        overlap = 0.32f,
+        coverageGoal = 0.98f,
         background = CollageBackground.MEAN_COLOR,
-        shapeWeight = 0.9f,
+        shapeWeight = 0.45f,
         refineSteps = 8,
         style = CollageStyle.DENSE,
         stack = stack

@@ -140,29 +140,29 @@ On the 280×180 face, against the previous residual file: left-eye mean RGB erro
 
 Those scores are the synthetic portrait the benchmark measures. The pictures below are a separate showcase. `scripts/regenerate-showcase.py` downloads the sources into the gitignored `showcase-sources/` folder and rebuilds the pictures. The source stills are not in the repository. They belong to their respective owners. This showcase is a non-commercial demonstration.
 
-The target is the Naruto Wiki file *Team 7 Reunited* (Naruto, Sasuke, Sakura, Kakashi, and Sai). The library is 100 other Naruto Wiki images: 49 character pictures and 51 episode stills, listed with their URLs in [docs/showcase/sources.tsv](docs/showcase/sources.tsv). Grid renders use the stills as rectangles. Collage renders turn a flat border into a cutout and feather the rim of a busy still. Tile pixels are left uncorrected so the source colors stay visible. The collage seed is 4. The grid seed is 7.
+The target is the Naruto Wiki file *Team Kakashi*: Naruto, Sakura, Sasuke, and Kakashi on a white background, with orange, pink, blue, and silver large enough to read. Group pictures that also include Sai are night scenes or monochrome drawings, so this brighter photograph is the target. The library is 100 other Naruto Wiki images, listed with their URLs in [docs/showcase/sources.tsv](docs/showcase/sources.tsv). They are well-lit character pictures and bright scenes, chosen for orange, pink, blue, and skin tones. A dark frame is not used. A flat border is flooded away to leave the subject. A bright picture that already fills the frame stays as a light-edged stamp. The old full-frame feather, which turned night stills into soft slabs, is gone. The collage seed is 4. The grid seed is 7. Both renders color-correct tile pixels toward the cell so the figures stay recognizable.
 
 ![Target, coarser collage, current collage, and opaque photo collage](docs/images/cutout-collage.png)
 
-The collage row is the target, then 180 large pieces with no refinement and no shape weight, then 480 pieces at 3–16% scale with shape weight 0.9, then the same 480-piece settings using the opaque photos.
+The collage row is the target, then 220 larger pieces with no refinement and no shape weight, then 720 pieces at 2.2–9% scale with shape weight 0.45, then the same 720-piece settings using the opaque photos. Repetition radius is 2 so one cutout cannot tile the row beside itself. Color correction strength is 0.5.
 
 ![Target, color-only collage, and shape-aware collage](docs/images/cutout-shape-compare.png)
 
-Shape comparison: target, shape weight 0, then shape weight 0.9. Both ask for 320 pieces.
+Shape comparison: target, shape weight 0, then shape weight 0.85. Both ask for 480 pieces.
 
 ![Dense 1,200-piece collage](docs/images/cutout-collage-dense.png)
 
-The dense collage is the full-size result: 1,200 pieces, scale 2–11%, 14 refinement steps, shape weight 0.9, long edge 1680 px.
+The dense collage is a full-size result: 1,100 pieces, scale 1.8–7%, 12 refinement steps, shape weight 0.45, 1680×1380.
 
 ![Full-size grid mosaic](docs/images/showcase-grid.png)
 
-The grid is 72 columns of 23 px cells, original tile pixels, seed 7. The picture is 1656×943.
+The grid is 80 columns, color correction strength 0.58, seed 7. The picture is 1680×1365.
 
 ![Cutouts only, grid under collage, and collage under grid](docs/images/cutout-hybrid.png)
 
-Hybrid, left to right: cutouts only, grid under the collage, collage under the grid. Each asks for 320 pieces on a 40-column grid.
+Hybrid, left to right: cutouts only, grid under the collage, collage under the grid. Each asks for 480 pieces on a 48-column grid.
 
-A full-size 480-piece collage is in `docs/images/cutout-collage-output.png`. The comparison strips are scaled to a 1680 px long edge. Panel renders use an 840 px long edge before they are joined.
+A full-size 720-piece collage is in `docs/images/cutout-collage-output.png` (1680×1380). The comparison strips are scaled to a 1680 px long edge. Panel renders use an 840 px long edge before they are joined.
 
 Quality on the synthetic portrait is a separate check: a face, a gradient background, and a hard-edged flower, with 120 varied tiles, a 32×42 grid, and seed 7. Both sides are the original tile pixels through the same renderer, so neither side is helped by a color wash. Lower OKLab ΔE is closer color. Higher luminance SSIM is closer structure. `MatchingQualityTest` fails if the OKLab side stops beating average-RGB on either number.
 
@@ -173,7 +173,7 @@ Quality on the synthetic portrait is a separate check: a face, a gradient backgr
 
 ![Team 7, average-RGB selection, and OKLab selection](docs/images/matching-comparison.png)
 
-The Team 7 grid comparison is the target, then average-RGB selection, then the OKLab matcher. Both selections use the same 48-column grid, seed 7, and the original tile pixels. On the synthetic portrait the same test is a 656×420 picture: the OKLab side keeps the face, the background gradient, and the red flower, and the average-RGB side breaks those regions into blockier tiles. An earlier comparison looked worse on the OKLab side because a repetition radius of 3 and a large usage penalty were discarding the best color.
+The Team 7 grid comparison is the target, then average-RGB selection, then the OKLab matcher. Both selections use the same 64-column grid, seed 7, and color correction at strength 0.58, so the difference is which tile was chosen. On the synthetic portrait the same test is a 656×420 picture with the original tile pixels: the OKLab side keeps the face, the background gradient, and the red flower, and the average-RGB side breaks those regions into blockier tiles. An earlier comparison looked worse on the OKLab side because a repetition radius of 3 and a large usage penalty were discarding the best color.
 
 ## AI segmentation
 

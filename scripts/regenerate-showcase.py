@@ -77,13 +77,22 @@ def convert_webp(path: Path) -> None:
 
 def fetch_all(rows: list[tuple[str, str, str]]) -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    manifest_path = OUTPUT / "manifest.tsv"
+    previous: dict[int, str] = {}
+    if manifest_path.exists():
+        for line in manifest_path.read_text(encoding="utf-8").splitlines():
+            index, _, url = line.partition("\t")
+            if index.isdigit() and url:
+                previous[int(index)] = url
     for old in OUTPUT.glob("*"):
+        if old.name == "manifest.tsv":
+            continue
         if old.is_file() and not any(old.name.startswith(f"{index:03d}-") for index in range(len(rows))):
             old.unlink()
     for index, (role, _title, url) in enumerate(rows):
         edge = TARGET_EDGE if role == "target" else TILE_EDGE
-        existing = list(OUTPUT.glob(f"{index:03d}-*"))
-        if existing and existing[0].stat().st_size > 2000:
+        existing = [path for path in OUTPUT.glob(f"{index:03d}-*") if path.name != "manifest.tsv"]
+        if existing and existing[0].stat().st_size > 2000 and previous.get(index) == url:
             print(f"keep {existing[0].name}")
             continue
         for attempt in existing:
@@ -104,6 +113,10 @@ def fetch_all(rows: list[tuple[str, str, str]]) -> None:
             raise SystemExit(f"Could not download {url}: {last_error}")
     for path in OUTPUT.glob("*.webp"):
         convert_webp(path)
+    manifest_path.write_text(
+        "".join(f"{index}\t{url}\n" for index, (_role, _title, url) in enumerate(rows)),
+        encoding="utf-8",
+    )
 
 
 def main() -> None:
