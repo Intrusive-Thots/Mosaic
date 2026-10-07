@@ -223,7 +223,9 @@ class CollagePlacer {
             val penalty = session.tracker.penalty(tile)
             for (angle in angles) {
                 session.stats.comparisons++
-                val fit = field.fit(descriptors[tile], angle, cell, scale, center.first, center.second)
+                val fit = field.fit(
+                    descriptors[tile], angle, cell, scale, center.first, center.second, partial = detail
+                )
                 if (!fit.acceptable(detail)) continue
                 val shape = if (region == null) 0f else shapeAgreement(descriptors[tile].mask, angle, region, edgeDegrees)
                 val score = fit.benefit + fit.fresh * FRESH_WEIGHT + settings.shapeWeight * shape * SHAPE_GAIN - penalty
@@ -250,7 +252,7 @@ class CollagePlacer {
         for (offset in offsets) {
             val x = (center.first + offset.first).coerceIn(0f, 1f)
             val y = (center.second + offset.second).coerceIn(0f, 1f)
-            val fit = field.fit(descriptor, winner.angle, cell, scale, x, y)
+            val fit = field.fit(descriptor, winner.angle, cell, scale, x, y, partial = true)
             if (!fit.acceptable(replacing = true)) continue
             val score = fit.benefit + fit.fresh * FRESH_WEIGHT
             if (score > bestScore + 1e-5f) {
@@ -417,9 +419,11 @@ private fun better(
     return current
 }
 
+private const val DETAIL_EDGE_GROWTH = 1.1f
+
 private fun detailScale(settings: CollageSettings, edge: Float): Float {
-    val small = settings.minScale * (1.05f - 0.4f * edge.coerceIn(0f, 1f))
-    return small.coerceIn(settings.minScale * 0.65f, settings.minScale * 1.15f)
+    val grow = 1f + edge.coerceIn(0f, 1f) * DETAIL_EDGE_GROWTH
+    return (settings.minScale * grow).coerceIn(settings.minScale, settings.minScale * (1f + DETAIL_EDGE_GROWTH))
 }
 
 private fun speckScale(settings: CollageSettings): Float = settings.minScale * 0.42f

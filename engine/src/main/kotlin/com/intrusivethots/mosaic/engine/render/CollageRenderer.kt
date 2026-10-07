@@ -9,6 +9,7 @@ import com.intrusivethots.mosaic.engine.config.RenderMode
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.sampleBilinear
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
+import com.intrusivethots.mosaic.engine.match.ResidualField
 import com.intrusivethots.mosaic.engine.tile.TileAnalyzer
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
 import kotlinx.coroutines.ensureActive
@@ -32,14 +33,17 @@ class CollageRenderer {
         val mean = if (target == null) argb(24, 24, 28) else meanColor(target)
         val useTarget = config.collage.background == CollageBackground.TARGET && target != null
         val row = IntArray(width)
+        val gate = CloserGate(width, height)
+        gate.bind(target, width, height)
         var lastReported = -1
         for (y in 0 until height) {
             if (y % 8 == 0) coroutineContext.ensureActive()
             paintBackground(row, y, width, height, target, useTarget, mean)
+            gate.prepare(y, width)
             for (sprite in sprites) {
                 if (config.collage.separatePieces) paintShadow(row, y, sprite, width)
                 if (y < sprite.draw.top || y > sprite.draw.bottom) continue
-                paintSprite(row, y, sprite, config, coverage, width)
+                paintSprite(row, y, sprite, config, coverage, width, gate)
             }
             sink.writeRow(y, row)
             val percent = ((y + 1) * 100) / height
@@ -56,7 +60,8 @@ class CollageRenderer {
         sprite: Sprite,
         config: MosaicConfig,
         coverage: BooleanArray?,
-        width: Int
+        width: Int,
+        gate: CloserGate? = null
     ) {
         val start = sprite.draw.left
         val end = sprite.draw.right
@@ -64,8 +69,10 @@ class CollageRenderer {
             val sampled = sampleCutout(sprite.source, sprite.descriptor, sprite.draw, x, y)
             val styled = stylePixel(sampled, sprite, config)
             if (styled == 0) continue
+            val blended = srcOver(row[x], styled)
+            if (gate != null && !gate.allows(x, blended)) continue
             if (coverage != null) coverage[y * width + x] = true
-            row[x] = srcOver(row[x], styled)
+            row[x] = blended
         }
     }
 
@@ -174,6 +181,69 @@ class CollageRenderer {
         }
         val n = count.coerceAtLeast(1)
         return argb((red / n).toInt(), (green / n).toInt(), (blue / n).toInt())
+    }
+
+    /**
+     * The first cutout to reach a pixel always paints. A later cutout paints only when the
+     * blended color is closer to the target than what is already there.
+     */
+    internal class CloserGate(width: Int, height: Int) {
+        private val targetLab = FloatArray(width * height * 3)
+        private val currentLab = FloatArray(width * 3)
+        private val proposed = FloatArray(3)
+        private val touched = BooleanArray(width)
+        private var imageWidth = width
+        private var rowStart = 0
+        private var active = false
+
+        fun bind(target: PixelImage?, width: Int, height: Int) {
+            active = target != null
+            imageWidth = width
+            if (target == null) return
+            var cursor = 0
+            for (y in 0 until height) {
+                val sy = (y + 0.5f) * target.height / height - 0.5f
+                for (x in 0 until width) {
+                    val sx = (x + 0.5f) * target.width / width - 0.5f
+                    OkLab.writeLab(target.sampleBilinear(sx, sy), targetLab, cursor)
+                    cursor += 3
+                }
+            }
+        }
+
+        fun prepare(y: Int, width: Int) {
+            touched.fill(false, 0, width)
+            rowStart = y * imageWidth * 3
+        }
+
+        fun allows(x: Int, blended: Int): Boolean {
+            if (!active) return true
+            OkLab.writeLab(blended, proposed, 0)
+            val at = x * 3
+            if (!touched[x]) {
+                touched[x] = true
+                currentLab[at] = proposed[0]
+                currentLab[at + 1] = proposed[1]
+                currentLab[at + 2] = proposed[2]
+                return true
+            }
+            val targetAt = rowStart + at
+            val next = squared(proposed[0], proposed[1], proposed[2], targetLab, targetAt)
+            val current = squared(currentLab[at], currentLab[at + 1], currentLab[at + 2], targetLab, targetAt)
+            val slack = ResidualField.CLOSER_SLACK
+            if (next + slack * slack + 2f * slack * kotlin.math.sqrt(current) >= current) return false
+            currentLab[at] = proposed[0]
+            currentLab[at + 1] = proposed[1]
+            currentLab[at + 2] = proposed[2]
+            return true
+        }
+
+        private fun squared(l: Float, a: Float, b: Float, reference: FloatArray, offset: Int): Float {
+            val dl = l - reference[offset]
+            val da = a - reference[offset + 1]
+            val db = b - reference[offset + 2]
+            return dl * dl + da * da + db * db
+        }
     }
 
     internal class Sprite(

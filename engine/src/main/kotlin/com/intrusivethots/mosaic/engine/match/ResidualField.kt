@@ -18,8 +18,9 @@ import kotlin.math.sin
 
 /**
  * Low-resolution picture of how far the collage is from the target.
- * Uncovered pixels keep the flat background. Each accepted piece lowers the error it covers
- * and is rejected when it would make an already-close pixel worse.
+ * Uncovered pixels keep the flat background. The first piece to reach a pixel claims it.
+ * A later piece replaces that pixel only when it is closer to the target, so a small
+ * cutout can repair a feature without washing the area it already got right.
  */
 class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
     val image: PixelImage = analysisImage(target, analysisEdge)
@@ -237,23 +238,29 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
         cell: Int,
         scale: Float,
         anchorX: Float = Float.NaN,
-        anchorY: Float = Float.NaN
+        anchorY: Float = Float.NaN,
+        partial: Boolean = false
     ): Fit {
         var delta = 0.0
         var absolute = 0.0
         var harm = 0.0
         var fresh = 0.0
         var weight = 0.0
+        var total = 0.0
         visit(descriptor, angle, cell, scale, anchorX, anchorY) { index, mask, piece ->
             val next = distance(piece.l, piece.a, piece.b, targetL[index], targetA[index], targetB[index])
             val drop = error[index] - next
+            total += mask
+            if (partial && drop <= CLOSER_SLACK) return@visit
             delta += drop.toDouble() * mask
             absolute += next.toDouble() * mask
             if (drop < 0f) harm += (-drop).toDouble() * mask
             if (!covered[index]) fresh += mask
             weight += mask
         }
-        if (weight <= 1e-4) return Fit(-1f, 1f, 1f, 0f)
+        if (weight <= 1e-4 || (partial && total > 1e-4 && weight / total < PARTIAL_KEEP)) {
+            return Fit(-1f, 1f, 1f, 0f)
+        }
         val divisor = weight
         return Fit(
             (delta / divisor).toFloat(),
@@ -274,6 +281,7 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
         visit(descriptor, angle, cell, scale, anchorX, anchorY) { index, mask, piece ->
             if (mask < 0.45f) return@visit
             val next = distance(piece.l, piece.a, piece.b, targetL[index], targetA[index], targetB[index])
+            if (covered[index] && next + CLOSER_SLACK >= error[index]) return@visit
             val cellIndex = pixelCell(index % width, index / width)
             cellError[cellIndex] += next - error[index]
             errorSum += (next - error[index]).toDouble()
@@ -496,6 +504,10 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
         private const val SETTLED_ERROR = 0.05f
         private const val MAX_TRIES = 10
         private const val LAB_FLOOR = 0.02f
+        /** A later piece has to beat the pixel already there by this much before it replaces it. */
+        const val CLOSER_SLACK = 0.004f
+        /** Detail pieces may ignore pixels they would worsen, as long as this much of the cutout helps. */
+        private const val PARTIAL_KEEP = 0.16f
 
         fun analysisImage(target: PixelImage, edge: Int): PixelImage {
             val longEdge = max(target.width, target.height)

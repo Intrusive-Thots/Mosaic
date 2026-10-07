@@ -98,24 +98,24 @@ Measured with `./gradlew :engine:benchmark` on this machine (OpenJDK 21, synthet
 
 | Tiles | Grid | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full scan | Heap MB |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100 | 40×40 | 15.7 | 0.3 | 86.1 | 46.2 | 149.8 | 84,135 | 160,000 | 0.6 |
-| 500 | 60×60 | 13.1 | 0.4 | 37.2 | 109.2 | 162.1 | 233,676 | 1,800,000 | 1.9 |
-| 1,000 | 80×80 | 22.4 | 0.7 | 64.4 | 196.4 | 287.9 | 415,996 | 6,400,000 | 4.1 |
-| 5,000 | 120×120 | 114.3 | 2.7 | 141.9 | 436.0 | 707.8 | 936,000 | 72,000,000 | 13.6 |
+| 100 | 40×40 | 4.6 | 0.3 | 52.0 | 50.2 | 108.1 | 84,135 | 160,000 | 0.6 |
+| 500 | 60×60 | 13.1 | 0.4 | 38.1 | 111.1 | 164.8 | 233,676 | 1,800,000 | 1.9 |
+| 1,000 | 80×80 | 23.3 | 0.8 | 68.1 | 196.4 | 292.9 | 415,996 | 6,400,000 | 4.0 |
+| 5,000 | 120×120 | 118.5 | 3.9 | 152.4 | 447.1 | 735.9 | 936,000 | 72,000,000 | 13.5 |
 
-"Full scan" is cells × tiles, which is what the 1.x matcher did. At 5,000 tiles the index probes about 1.3% of that. Matching 14,400 cells against 5,000 tiles took 142 ms in this run. Probe counts match the previous grid run.
+"Full scan" is cells × tiles, which is what the 1.x matcher did. At 5,000 tiles the index probes about 1.3% of that. Matching 14,400 cells against 5,000 tiles took 152 ms in this run. Probe counts match the previous grid run.
 
-A separate 500-tile case uses 16:9 cells and orientation matching (250 landscape tiles, 250 portrait). The grid is 40×40. Match took 67.1 ms and 103,890 probes against a full scan of 800,000. Total time was 182.3 ms. Probes stay on the source photos; rotated copies are scored from the cached spatial grid.
+A separate 500-tile case uses 16:9 cells and orientation matching (250 landscape tiles, 250 portrait). The grid is 40×40. Match took 40.5 ms and 103,890 probes against a full scan of 800,000. Total time was 158.9 ms. Probes stay on the source photos; rotated copies are scored from the cached spatial grid. Probe counts match the previous grid run, and the grid golden image is unchanged.
 
 Cutout collage, after a discarded warmup, on a 160×100 gradient. Every requested piece was placed. The fine residual, shape re-rank, and adjustment pass make matching slower than the coarse-only placer. Probes stay far below a full scan. The 900-piece row uses the same scale range as the smaller rows, so the extra time is the larger budget.
 
 | Cutouts | Requested | Placed | Match ms | Render ms | Total ms | Probes | Full scan | Painted |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 200 | 160 | 160 | 72.7 | 2.0 | 79.0 | 5,760 | 384,000 | 43% |
-| 600 | 280 | 280 | 92.0 | 2.6 | 110.2 | 12,951 | 2,016,000 | 68% |
-| 400 | 900 | 900 | 236.6 | 5.7 | 250.9 | 79,996 | 4,320,000 | 100% |
+| 200 | 160 | 160 | 89.8 | 5.2 | 99.8 | 5,466 | 384,000 | 45% |
+| 600 | 280 | 280 | 91.7 | 5.2 | 112.4 | 12,355 | 2,016,000 | 71% |
+| 400 | 900 | 900 | 246.7 | 10.1 | 263.8 | 67,102 | 4,320,000 | 100% |
 
-A hybrid case places the same 160 pieces on a 20×12 grid under the collage, on a custom 160×100 canvas. Grid matching, collage placement, and the stacked render together took 74.2 ms and 15,562 probes.
+A hybrid case places the same 160 pieces on a 20×12 grid under the collage, on a custom 160×100 canvas. Grid matching, collage placement, and the stacked render together took 82.2 ms and 15,268 probes. Rendering checks each later cutout pixel against the target in OKLab, which is why collage render time is higher than the previous 2–6 ms.
 
 Full scan is requested pieces × cutouts × 12 angles. Painted coverage on this gradient is below the portrait sample when the piece budget is small. The portrait sample uses 240 cutouts and 320 pieces, seed 4, on a flat mean-color background, locked to 280×180 so it lines up with the previous residual file. All 320 pieces were placed. Correction is off.
 
@@ -123,24 +123,52 @@ Full scan is requested pieces × cutouts × 12 angles. Painted coverage on this 
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Underlayer sample | 0.0475 | 0.7655 | 0.0989 | 0.6873 | — | 59% |
 | Previous residual | 0.0334 | 0.6746 | 0.0477 | 0.6779 | 0.0563 | 96% |
-| This sample | 0.0338 | 0.6790 | 0.0467 | 0.6804 | 0.0555 | 93% |
-| Photo textures | 0.0338 | 0.6769 | 0.0506 | 0.6781 | 0.0520 | 94% |
+| This sample | 0.0323 | 0.7045 | 0.0447 | 0.7061 | 0.0527 | 94% |
+| Photo textures | 0.0314 | 0.6924 | 0.0476 | 0.6940 | 0.0480 | 95% |
 
 | | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Generate ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Color only | 0.0330 | 0.6795 | 0.0469 | 0.6811 | 0.0557 | 93% | 98 |
-| Shape-aware | 0.0345 | 0.6816 | 0.0475 | 0.6829 | 0.0564 | 93% | 115 |
-| Dense 1,200 | 0.0295 | 0.7368 | 0.0464 | 0.7415 | 0.0464 | 97% | 301 |
-| Grid under collage | 0.0298 | 0.7063 | 0.0455 | 0.7121 | 0.0547 | 93% | 125 |
-| Collage under grid | 0.0214 | 0.3666 | 0.0321 | 0.3371 | 0.0342 | 15% | 118 |
+| Color only | 0.0319 | 0.7017 | 0.0450 | 0.7028 | 0.0533 | 94% | 120 |
+| Shape-aware | 0.0332 | 0.7078 | 0.0452 | 0.7094 | 0.0533 | 94% | 146 |
+| Dense 1,200 | 0.0270 | 0.7560 | 0.0424 | 0.7569 | 0.0424 | 98% | 440 |
+| Grid under collage | 0.0298 | 0.6970 | 0.0481 | 0.7014 | 0.0577 | 94% | 134 |
+| Collage under grid | 0.0213 | 0.3657 | 0.0321 | 0.3373 | 0.0342 | 15% | 137 |
 
-Masked scores count only pixels a cutout painted. Edge ΔE is the mean OKLab distance on the covered pixels whose reference luminance gradient is in the top quarter. The underlayer sample looked better on whole-image scores because the target photo showed through the gaps. Shape-aware matching (weight 0.9) stays in the same color band as color-only and spends about 17 ms more; it changes which silhouette is chosen when two colors are close. The dense run asks for 1,200 pieces at the High Quality scale range on a 560×360 canvas. Whole ΔE falls from 0.0338 to 0.0295, luminance SSIM rises from 0.6790 to 0.7368, and edge ΔE falls from 0.0555 to 0.0464. Collage-under-grid paints the grid over the cutouts except for a grout gap, so its masked coverage is the grout (15%) and its whole-image SSIM follows the grid. Grid-under-collage keeps the cutout coverage and improves whole ΔE to 0.0298.
+Masked scores count only pixels a cutout painted. Edge ΔE is the mean OKLab distance on the covered pixels whose reference luminance gradient is in the top quarter. The underlayer sample looked better on whole-image scores because the target photo showed through the gaps. Shape-aware matching (weight 0.9) stays in the same color band as color-only. The dense run asks for 1,200 pieces at the High Quality scale range on a 560×360 canvas. Whole ΔE is 0.0270, luminance SSIM is 0.7560, and edge ΔE is 0.0424. Collage-under-grid paints the grid over the cutouts except for a grout gap, so its masked coverage is the grout (15%) and its whole-image SSIM follows the grid. Grid-under-collage keeps whole ΔE at 0.0298.
 
-On the 280×180 face, against the previous residual file: left-eye mean RGB error 37.1 → 31.5, right eye 45.1 → 28.5, cheek 16.2 → 15.8. The mouth window moved from 18.8 to 19.1. Those windows are a few pixels tall. A small piece has to land on the mouth for that hue to survive.
+A later cutout now replaces a pixel only when that pixel is closer to the target, and detail pieces are scored on the pixels they actually improve. Against the previous published sample (0.0338 whole ΔE, 0.6790 SSIM, 0.0555 edge ΔE, mouth window 19.1), this sample is 0.0323, 0.7045, 0.0527, and the mouth window is 16.3. On the 280×180 face, against the frozen previous residual file: left eye 37.1 → 26.7, right eye 45.1 → 22.2, mouth 18.8 → 16.3, cheek 16.2 → 14.5.
 
-Those scores are the synthetic portrait the benchmark measures. The pictures below are a separate showcase. `scripts/regenerate-showcase.py` downloads the sources into the gitignored `showcase-sources/` folder and rebuilds the pictures. The source stills are not in the repository. They belong to their respective owners. This showcase is a non-commercial demonstration.
+Those scores are the synthetic portrait the benchmark measures. The pictures below are separate showcases. `scripts/regenerate-showcase.py` rebuilds the Naruto pictures, and `scripts/regenerate-showcase.py rick` rebuilds the Rick and Morty pictures. Sources download into the gitignored `showcase-sources/` folder. The source stills are not in the repository. They belong to their respective owners. These showcases are a non-commercial demonstration.
 
-The target is the Naruto Wiki file *Team Kakashi*: Naruto, Sakura, Sasuke, and Kakashi on a white background, with orange, pink, blue, and silver large enough to read. Group pictures that also include Sai are night scenes or monochrome drawings, so this brighter photograph is the target. The library is 100 other Naruto Wiki images, listed with their URLs in [docs/showcase/sources.tsv](docs/showcase/sources.tsv). They are well-lit character pictures and bright scenes, chosen for orange, pink, blue, and skin tones. A dark frame is not used. A flat border is flooded away to leave the subject. A bright picture that already fills the frame stays as a light-edged stamp. The old full-frame feather, which turned night stills into soft slabs, is gone. The collage seed is 4. The grid seed is 7. Both renders color-correct tile pixels toward the cell so the figures stay recognizable.
+The current theme is Rick and Morty. The target is the Rick and Morty Wiki file *Smith family adult swim*: Rick and Morty standing together on a light background, Rick in the white coat with blue hair and Morty in the yellow shirt. The library is 100 other Rick and Morty Wiki images, listed with their URLs in [docs/showcase/rick-sources.tsv](docs/showcase/rick-sources.tsv). They are well-lit character pictures, including the Smith family and other bright figures, chosen for yellow, blue, white, and skin tones. A dark frame is not used. A flat border is flooded away to leave the subject. A bright picture that already fills the frame stays as a light-edged stamp. The collage seed is 4. The grid seed is 7. Both renders color-correct tile pixels toward the cell so the figures stay recognizable. These files sit beside the Naruto pictures; they do not replace them.
+
+![Rick and Morty, average-RGB selection, and OKLab selection](docs/images/rick-matching-comparison.png)
+
+The grid comparison is the target, then average-RGB selection, then the OKLab matcher. Both selections use the same 64-column grid, seed 7, and color correction at strength 0.58.
+
+![Target, coarser collage, current collage, and opaque photo collage](docs/images/rick-cutout-collage.png)
+
+The collage row is the target, then 220 larger pieces with no refinement and no shape weight, then 720 pieces at 2.2–9% scale with shape weight 0.45, then the same 720-piece settings using the opaque photos. Repetition radius is 2 so one cutout cannot tile the row beside itself. Color correction strength is 0.5.
+
+![Target, color-only collage, and shape-aware collage](docs/images/rick-cutout-shape-compare.png)
+
+Shape comparison: target, shape weight 0, then shape weight 0.85. Both ask for 480 pieces.
+
+![Dense collage](docs/images/rick-cutout-collage-dense.png)
+
+The dense collage is a full-size result: 1,100 pieces, scale 1.8–7%, 12 refinement steps, shape weight 0.45.
+
+![Full-size grid mosaic](docs/images/rick-showcase-grid.png)
+
+The grid is 80 columns, color correction strength 0.58, seed 7.
+
+![Cutouts only, grid under collage, and collage under grid](docs/images/rick-cutout-hybrid.png)
+
+Hybrid, left to right: cutouts only, grid under the collage, collage under the grid. Each asks for 480 pieces on a 48-column grid.
+
+A full-size 720-piece collage is in `docs/images/rick-cutout-collage-output.png`. The comparison strips are scaled to a 1680 px long edge. Panel renders use an 840 px long edge before they are joined.
+
+The earlier Naruto showcase is still in `docs/images/` without a prefix. The target is the Naruto Wiki file *Team Kakashi*: Naruto, Sakura, Sasuke, and Kakashi on a white background, with orange, pink, blue, and silver large enough to read. Group pictures that also include Sai are night scenes or monochrome drawings, so this brighter photograph is the target. The library is 100 other Naruto Wiki images, listed with their URLs in [docs/showcase/sources.tsv](docs/showcase/sources.tsv). The same cutout rules and seeds apply.
 
 ![Target, coarser collage, current collage, and opaque photo collage](docs/images/cutout-collage.png)
 
@@ -250,7 +278,7 @@ Do not commit that file or the keystore.
 
 ## Testing
 
-JVM tests cover OKLab conversion, histograms, cropping, descriptors, candidate indexing, repetition, usage balance, grid planning, non-square cells, cutout masks, collage placement, cancellation, atomic writes, and golden images. The grid golden digest is SHA-256 `0745027b47ef5ffb4aad0ea56cad0d5fa123d41795e750931914bd37af2194ba`. The cutout-collage golden digest is SHA-256 `ab61e2eab8b4e034d2e75dabfea952964934a80479f4a23014fcc2f2c1402a14`. The collage regression requires at least 96% of the preview painted, masked OKLab ΔE under 0.055, masked luminance SSIM above 0.60, and edge ΔE under 0.065.
+JVM tests cover OKLab conversion, histograms, cropping, descriptors, candidate indexing, repetition, usage balance, grid planning, non-square cells, cutout masks, collage placement, cancellation, atomic writes, and golden images. The grid golden digest is SHA-256 `0745027b47ef5ffb4aad0ea56cad0d5fa123d41795e750931914bd37af2194ba`. The cutout-collage golden digest is SHA-256 `503595a79f91d2dc1d5fc846f1fd6666cc0df1f5dc31db39dcca0f73db28e9ff`. The collage regression requires at least 96% of the preview painted, masked OKLab ΔE under 0.055, masked luminance SSIM above 0.60, and edge ΔE under 0.065.
 
 ```bash
 ./gradlew :engine:test :engine:detekt :app:detekt :app:lintDebug

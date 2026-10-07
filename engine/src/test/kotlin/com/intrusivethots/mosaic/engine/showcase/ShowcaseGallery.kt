@@ -28,64 +28,80 @@ internal const val STRIP_EDGE = 1680
 private const val COLLAGE_SEED = 4
 private const val GRID_SEED = 7
 
-internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File) {
+internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File, prefix: String = "") {
     destination.mkdirs()
     val panelTarget = library.target.downscaleLongEdge(PANEL_EDGE)
     val fullTarget = library.target.downscaleLongEdge(FULL_EDGE)
     val cutouts = sources(library.cutouts, "cutout")
     val photos = sources(library.photos, "photo")
     val opaque = sources(library.photos, "grid")
-    writeMatcherComparison(panelTarget, opaque, destination)
-    writeCollageRow(panelTarget, cutouts, photos, destination)
-    writeShapeRow(panelTarget, cutouts, destination)
-    writeHybridRow(panelTarget, cutouts, destination)
+    writeMatcherComparison(panelTarget, opaque, destination, prefix)
+    writeCollageRow(panelTarget, cutouts, photos, destination, prefix)
+    writeShapeRow(panelTarget, cutouts, destination, prefix)
+    writeHybridRow(panelTarget, cutouts, destination, prefix)
     val fullCollage = render(fullTarget, cutouts, currentCollage(FULL_EDGE, HybridStack.CUTOUTS, 720))
-    writePng(fullCollage, listOf(File(destination, "cutout-collage-output.png")))
+    writePng(fullCollage, listOf(File(destination, "${prefix}cutout-collage-output.png")))
     val dense = render(fullTarget, cutouts, denseCollage(FULL_EDGE))
-    writePng(dense, listOf(File(destination, "cutout-collage-dense.png")))
+    writePng(dense, listOf(File(destination, "${prefix}cutout-collage-dense.png")))
     val grid = render(fullTarget, opaque, gridConfig(80, FULL_EDGE))
-    writePng(grid, listOf(File(destination, "showcase-grid.png")))
-    copyArtifacts(destination)
+    writePng(grid, listOf(File(destination, "${prefix}showcase-grid.png")))
+    copyArtifacts(destination, prefix)
 }
 
-private suspend fun writeMatcherComparison(target: PixelImage, tiles: List<MemoryTileSource>, destination: File) {
+private suspend fun writeMatcherComparison(
+    target: PixelImage,
+    tiles: List<MemoryTileSource>,
+    destination: File,
+    prefix: String
+) {
     val config = gridConfig(64, PANEL_EDGE)
     val modern = GenerationCoordinator().generate(target, tiles, config, preview = false)
     val modernImage = modern.image ?: error("Grid comparison produced no image.")
     val thumbs = tiles.map { it.loadThumbnail(192) }
     val legacyImage = renderLegacy(target, modern.descriptors, thumbs, modern.plan, config)
     val ordered = rowOf(listOf(target.fitted(modernImage), legacyImage, modernImage))
-    writePng(ordered.downscaleLongEdge(STRIP_EDGE), listOf(File(destination, "matching-comparison.png")))
+    writePng(ordered.downscaleLongEdge(STRIP_EDGE), listOf(File(destination, "${prefix}matching-comparison.png")))
 }
 
 private suspend fun writeCollageRow(
     target: PixelImage,
     cutouts: List<MemoryTileSource>,
     photos: List<MemoryTileSource>,
-    destination: File
+    destination: File,
+    prefix: String
 ) {
     val coarse = render(target, cutouts, coarseCollage(PANEL_EDGE))
     val current = render(target, cutouts, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 720))
     val photo = render(target, photos, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 720))
     val strip = rowOf(listOf(target.fitted(current), coarse, current, photo))
-    writePng(strip.downscaleLongEdge(STRIP_EDGE), listOf(File(destination, "cutout-collage.png")))
-    writePng(photo, listOf(File(destination, "cutout-collage-photo.png")))
+    writePng(strip.downscaleLongEdge(STRIP_EDGE), listOf(File(destination, "${prefix}cutout-collage.png")))
+    writePng(photo, listOf(File(destination, "${prefix}cutout-collage-photo.png")))
 }
 
-private suspend fun writeShapeRow(target: PixelImage, cutouts: List<MemoryTileSource>, destination: File) {
+private suspend fun writeShapeRow(
+    target: PixelImage,
+    cutouts: List<MemoryTileSource>,
+    destination: File,
+    prefix: String
+) {
     val colorOnly = render(target, cutouts, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 480).shape(0f))
     val shaped = render(target, cutouts, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 480).shape(0.85f))
     val strip = rowOf(listOf(target.fitted(shaped), colorOnly, shaped))
-    writePng(strip.downscaleLongEdge(STRIP_EDGE), listOf(File(destination, "cutout-shape-compare.png")))
+    writePng(strip.downscaleLongEdge(STRIP_EDGE), listOf(File(destination, "${prefix}cutout-shape-compare.png")))
 }
 
-private suspend fun writeHybridRow(target: PixelImage, cutouts: List<MemoryTileSource>, destination: File) {
+private suspend fun writeHybridRow(
+    target: PixelImage,
+    cutouts: List<MemoryTileSource>,
+    destination: File,
+    prefix: String
+) {
     val base = currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 480)
     val cutoutOnly = render(target, cutouts, base)
     val under = render(target, cutouts, base.stack(HybridStack.GRID_UNDER))
     val over = render(target, cutouts, base.stack(HybridStack.COLLAGE_UNDER))
     val strip = rowOf(listOf(cutoutOnly, under, over))
-    writePng(strip.downscaleLongEdge(STRIP_EDGE), listOf(File(destination, "cutout-hybrid.png")))
+    writePng(strip.downscaleLongEdge(STRIP_EDGE), listOf(File(destination, "${prefix}cutout-hybrid.png")))
 }
 
 private suspend fun render(target: PixelImage, tiles: List<MemoryTileSource>, config: MosaicConfig): PixelImage {
@@ -202,7 +218,7 @@ private fun rowOf(images: List<PixelImage>, gap: Int = 12): PixelImage {
     return PixelImage(width, height, pixels)
 }
 
-private fun copyArtifacts(destination: File) {
+private fun copyArtifacts(destination: File, prefix: String) {
     val names = listOf(
         "matching-comparison.png",
         "cutout-collage.png",
@@ -212,7 +228,7 @@ private fun copyArtifacts(destination: File) {
         "cutout-shape-compare.png",
         "cutout-hybrid.png",
         "showcase-grid.png"
-    )
+    ).map { prefix + it }
     val artifacts = File("/opt/cursor/artifacts")
     names.forEach { name ->
         val source = File(destination, name)

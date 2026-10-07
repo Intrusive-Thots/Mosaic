@@ -1,6 +1,7 @@
 package com.intrusivethots.mosaic
 
 import android.app.Instrumentation
+import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
@@ -25,19 +26,19 @@ class StudioLaunchTest {
             instrumentation.waitForIdleSync()
             val screenshot = checkNotNull(instrumentation.uiAutomation.takeScreenshot())
             assertTrue(screenshot.width > 0 && screenshot.height > 0)
-            assertTrue(
-                "The Studio title was not on screen",
-                waitForLabel(instrumentation, "Mosaic") && waitForLabel(instrumentation, "Studio")
-            )
+            val missing = listOf("Mosaic", "Studio").filterNot { waitForLabel(instrumentation, it) }
+            assertTrue("The Studio title was not on screen. Missing $missing.", missing.isEmpty())
         }
     }
 }
 
 private fun waitForLabel(instrumentation: Instrumentation, label: String): Boolean {
-    repeat(8) {
+    val deadline = SystemClock.uptimeMillis() + LABEL_WAIT_MS
+    while (SystemClock.uptimeMillis() < deadline) {
         instrumentation.waitForIdleSync()
-        val root = instrumentation.uiAutomation.rootInActiveWindow ?: return@repeat
-        if (nodeContains(root, label)) return true
+        val root = instrumentation.uiAutomation.rootInActiveWindow
+        if (root != null && nodeContains(root, label)) return true
+        SystemClock.sleep(LABEL_POLL_MS)
     }
     return false
 }
@@ -51,3 +52,6 @@ private fun nodeContains(node: AccessibilityNodeInfo, label: String): Boolean {
     }
     return false
 }
+
+private const val LABEL_WAIT_MS = 8_000L
+private const val LABEL_POLL_MS = 250L
