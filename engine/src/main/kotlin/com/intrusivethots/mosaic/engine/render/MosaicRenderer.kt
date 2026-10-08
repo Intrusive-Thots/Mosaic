@@ -239,16 +239,17 @@ class MosaicRenderer(
         val useTarget = config.collage.background == CollageBackground.TARGET && target != null
         val row = IntArray(layout.width)
         val gridRow = IntArray(layout.width)
+        val locked = BooleanArray(layout.width * layout.height)
         val grout = (minOf(layout.cellWidth, layout.cellHeight) / 10).coerceAtLeast(1)
         var lastReported = -1
         for (y in 0 until layout.height) {
             if (y % 8 == 0) coroutineContext.ensureActive()
             if (collageOnTop) {
                 fillUniformRow(plan, descriptors, thumbnails, layout, config, y, row)
-                paintCutouts(row, y, sprites, config, layout, coverage, owners, field)
+                paintCutouts(row, y, sprites, config, layout, coverage, owners, field, locked)
             } else {
                 collageRenderer.paintBackground(row, y, layout.width, layout.height, target, useTarget, mean)
-                paintCutouts(row, y, sprites, config, layout, coverage, owners, field)
+                paintCutouts(row, y, sprites, config, layout, coverage, owners, field, locked)
                 fillUniformRow(plan, descriptors, thumbnails, layout, config, y, gridRow)
                 overlayGrid(row, gridRow, y, layout, grout, coverage)
             }
@@ -269,7 +270,8 @@ class MosaicRenderer(
         layout: OutputLayout,
         coverage: BooleanArray?,
         owners: IntArray?,
-        field: PixelImage?
+        field: PixelImage?,
+        locked: BooleanArray
     ) {
         val width = layout.width
         for (index in sprites.indices) {
@@ -277,7 +279,7 @@ class MosaicRenderer(
             if (sprite.placement.mask != null) {
                 paintShapeRow(
                     row, y, width, layout.height, sprite.source, sprite.base, sprite.descriptor, sprite.placement,
-                    config, coverage, owners, index, sprite.tone, field, sprite.outline
+                    config, coverage, owners, index, sprite.tone, field, sprite.outline, locked
                 )
                 continue
             }

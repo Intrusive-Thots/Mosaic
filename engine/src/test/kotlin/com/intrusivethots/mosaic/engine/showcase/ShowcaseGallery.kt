@@ -20,6 +20,7 @@ import com.intrusivethots.mosaic.engine.image.downscaleLongEdge
 import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
 import com.intrusivethots.mosaic.engine.legacy.LegacyRgbMatcher
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
+import com.intrusivethots.mosaic.engine.match.CartoonFaceFinder
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.render.MemoryRowSink
 import com.intrusivethots.mosaic.engine.render.MosaicRenderer
@@ -37,6 +38,7 @@ private const val DENSE_PIECES = 3400
 
 internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File, prefix: String = "") {
     destination.mkdirs()
+    reportFaces(prefix, library.cutouts)
     val panelTarget = library.target.downscaleLongEdge(PANEL_EDGE)
     val fullTarget = library.target.downscaleLongEdge(FULL_EDGE)
     val collageTarget = library.target.fitLongEdge(FULL_EDGE)
@@ -49,6 +51,7 @@ internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File, 
     writeHybridRow(panelTarget, cutouts, destination, prefix)
     val fullCollage = render(collageTarget, cutouts, currentCollage(FULL_EDGE, HybridStack.CUTOUTS, NORMAL_PIECES), "${prefix}full")
     writePng(fullCollage, listOf(File(destination, "${prefix}cutout-collage-output.png")))
+    writeReviewArtifacts(fullCollage, prefix)
     val dense = render(collageTarget, cutouts, denseCollage(FULL_EDGE), "${prefix}dense")
     writePng(dense, listOf(File(destination, "${prefix}cutout-collage-dense.png")))
     val grid = render(fullTarget, opaque, gridConfig(80, FULL_EDGE))
@@ -150,10 +153,20 @@ private suspend fun reportRead(
     val native = tiles.map { it.loadThumbnail(4096) }
     val fidelity = pieceContentFidelity(image, native, result.descriptors, result.plan.placements)
     val placed = result.plan.placements.size
+    val faced = result.plan.placements.count { it.faceRight > it.faceLeft }
     println(
         "SHOWCASE $label distance ${distance.deltaE} ssim ${distance.ssim} texture $texture " +
-            "placed $placed fidelity ${fidelity.median} p10 ${fidelity.lowDecile}"
+            "placed $placed fidelity ${fidelity.median} p10 ${fidelity.lowDecile} faces $faced"
     )
+}
+
+private fun reportFaces(prefix: String, images: List<PixelImage>) {
+    var detected = 0
+    for (image in images) {
+        if (CartoonFaceFinder.find(image).isNotEmpty()) detected++
+    }
+    val name = if (prefix.isEmpty()) "naruto" else prefix.removeSuffix("-")
+    println("SHOWCASE $name faces detected $detected excluded ${images.size - detected} of ${images.size}")
 }
 
 private suspend fun renderLegacy(
@@ -271,6 +284,48 @@ private fun rowOf(images: List<PixelImage>, gap: Int = 12): PixelImage {
         originX += image.width + gap
     }
     return PixelImage(width, height, pixels)
+}
+
+private fun writeReviewArtifacts(image: PixelImage, prefix: String) {
+    val artifacts = File("/opt/cursor/artifacts")
+    if (!artifacts.isDirectory && !artifacts.mkdirs()) return
+    val name = if (prefix.isEmpty()) "naruto" else prefix.trimEnd('-')
+    writeJpeg(image.downscaleLongEdge(300), File(artifacts, "thumb-$name-300.jpg"))
+    val side = minOf(image.width, image.height, 720)
+    val left = (image.width - side) / 2
+    val top = (image.height - side) / 2
+    writeJpeg(cropSquare(image, left, top, side), File(artifacts, "crop-$name-1to1.jpg"))
+    writePng(image, listOf(File(artifacts, "preview-$name-collage.png")))
+}
+
+private fun cropSquare(image: PixelImage, left: Int, top: Int, side: Int): PixelImage {
+    val pixels = IntArray(side * side)
+    for (y in 0 until side) {
+        val source = (top + y) * image.width + left
+        System.arraycopy(image.pixels, source, pixels, y * side, side)
+    }
+    return PixelImage(side, side, pixels)
+}
+
+private fun writeJpeg(image: PixelImage, file: File) {
+    val buffer = java.awt.image.BufferedImage(image.width, image.height, java.awt.image.BufferedImage.TYPE_INT_RGB)
+    val rgb = IntArray(image.pixels.size) { index -> image.pixels[index] and 0x00FFFFFF }
+    buffer.setRGB(0, 0, image.width, image.height, rgb, 0, image.width)
+    val writers = javax.imageio.ImageIO.getImageWritersByFormatName("jpg")
+    val writer = writers.next()
+    try {
+        javax.imageio.ImageIO.createImageOutputStream(file).use { stream ->
+            writer.output = stream
+            val params = writer.defaultWriteParam
+            if (params.canWriteCompressed()) {
+                params.compressionMode = javax.imageio.ImageWriteParam.MODE_EXPLICIT
+                params.compressionQuality = 0.9f
+            }
+            writer.write(null, javax.imageio.IIOImage(buffer, null, null), params)
+        }
+    } finally {
+        writer.dispose()
+    }
 }
 
 private fun copyArtifacts(destination: File, prefix: String) {
