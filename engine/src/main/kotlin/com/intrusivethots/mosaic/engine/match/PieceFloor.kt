@@ -13,7 +13,7 @@ internal class PieceFloor(val shortOfShort: Float, val areaOfImage: Float)
 
 internal class PieceMeasure(val shortOfShort: Float, val areaOfImage: Float) {
     fun meets(floor: PieceFloor): Boolean {
-        return shortOfShort + 1e-4f >= floor.shortOfShort && areaOfImage + 1e-6f >= floor.areaOfImage
+        return shortOfShort + 1e-6f >= floor.shortOfShort && areaOfImage + 1e-8f >= floor.areaOfImage
     }
 }
 
@@ -152,17 +152,22 @@ internal fun withAbsorbed(
     pieceIndex: Int,
     holes: BooleanArray,
     width: Int,
-    height: Int
+    height: Int,
+    radius: Int
 ): CutoutPlacement {
     val mask = placement.mask ?: return placement
+    val xStart = (mask.left * width).toInt() - radius
+    val yStart = (mask.top * height).toInt() - radius
+    val xEnd = (mask.right * width).toInt() + radius
+    val yEnd = (mask.bottom * height).toInt() + radius
     var minX = width
     var minY = height
     var maxX = -1
     var maxY = -1
     var extra = 0
-    for (y in 0 until height) {
+    for (y in yStart.coerceAtLeast(0)..yEnd.coerceAtMost(height - 1)) {
         val ny = (y + 0.5f) / height.toFloat()
-        for (x in 0 until width) {
+        for (x in xStart.coerceAtLeast(0)..xEnd.coerceAtMost(width - 1)) {
             val index = y * width + x
             val owned = mask.contains((x + 0.5f) / width.toFloat(), ny)
             val gained = holes[index] && assign[index] == pieceIndex

@@ -153,8 +153,9 @@ Those scores are the synthetic portrait the benchmark measures, with correction 
 | Paper detail | 0.0873 | 0.7757 | 1.03 | 0.0868 | 0.7765 | 1.02 | 0.0766 | 0.7252 | 0.53 | 0.0767 | 0.7300 | 0.53 |
 | Cut paper | 0.1152 | 0.6844 | 1.00 | 0.1133 | 0.6952 | 0.99 | 0.0917 | 0.6542 | 0.53 | 0.0925 | 0.6553 | 0.52 |
 | Small pieces | 0.1091 | 0.7037 | — | 0.1273 | 0.6413 | — | 0.0621 | 0.7694 | — | 0.0640 | 0.7750 | — |
+| Minimum piece | 0.1083 | 0.6378 | 1.02 | 0.1081 | 0.6369 | 1.02 | 0.0775 | 0.6068 | 0.94 | 0.0776 | 0.6049 | 0.94 |
 
-The paper-detail row kept line art and graded each piece most of the way to the target, so the thumbnail was tight and the photos were hard to recognize. Cut paper keeps the sharp photo and applies the bounded grade, but the pieces were large and the source frames were sampled from a 128-pixel thumb, so the texture column could read 1.00 while the photos were still a smear. Small pieces asks for 1,800 shapes (1,807 placed) at 1.2–5% scale, and 3,400 (3,403 placed) for the dense row at 0.8–3%. Each piece is a near-native crop, never upscaled more than about 1.25×, and the color grade is unchanged. Naruto's distance moves from 0.1152 to 0.1091 and its SSIM from 0.6844 to 0.7037. The dense Naruto distance moves from 0.1133 to 0.1273. Rick's distance moves from 0.0917 to 0.0621 and its SSIM from 0.6542 to 0.7694. Dense Rick moves from 0.0925 to 0.0640. The texture column is left blank because high-frequency energy versus the target was not recomputed; it is the metric that stayed near 1.00 on the smeared cut-paper render. The kept ratio is 1.040 for Naruto, 1.048 dense, 0.942 for Rick, and 0.928 dense. Piece fidelity, median and 10th percentile, is 0.536 and 0.172 for Naruto, 0.498 and 0.134 dense, 0.688 and 0.320 for Rick, and 0.617 and 0.179 dense. A blocking layer made only of global color masses was tried earlier and discarded.
+The paper-detail row kept line art and graded each piece most of the way to the target, so the thumbnail was tight and the photos were hard to recognize. Cut paper keeps the sharp photo and applies the bounded grade, but the pieces were large and the source frames were sampled from a 128-pixel thumb, so the texture column could read 1.00 while the photos were still a smear. Small pieces asks for 1,800 shapes (1,807 placed) at 1.2–5% scale, and 3,400 (3,403 placed) for the dense row at 0.8–3%. Each piece is a near-native crop, never upscaled more than about 1.25×, and the color grade is unchanged. Naruto's distance moves from 0.1152 to 0.1091 and its SSIM from 0.6844 to 0.7037. The dense Naruto distance moves from 0.1133 to 0.1273. Rick's distance moves from 0.0917 to 0.0621 and its SSIM from 0.6542 to 0.7694. Dense Rick moves from 0.0925 to 0.0640. The texture column is left blank because high-frequency energy versus the target was not recomputed; it is the metric that stayed near 1.00 on the smeared cut-paper render. The kept ratio is 1.040 for Naruto, 1.048 dense, 0.942 for Rick, and 0.928 dense. Piece fidelity, median and 10th percentile, is 0.536 and 0.172 for Naruto, 0.498 and 0.134 dense, 0.688 and 0.320 for Rick, and 0.617 and 0.179 dense. A blocking layer made only of global color masses was tried earlier and discarded. The minimum-piece row is the same request with a hard floor of 4.5% of the short side, measured on what remains visible after the mask and later overlaps. Naruto places 324 pieces in both the normal and dense renders. Rick places 374. Piece fidelity, median and 10th percentile, is 0.620 and 0.350 for Naruto, 0.633 and 0.350 dense, 0.725 and 0.416 for Rick, and 0.724 and 0.417 dense. The smallest visible short side is 4.57% for Naruto and 4.55% for Rick.
 
 The pictures below are separate showcases. `scripts/regenerate-showcase.py` rebuilds the Naruto pictures, and `scripts/regenerate-showcase.py rick` rebuilds the Rick and Morty pictures. Sources download into the gitignored `showcase-sources/` folder. The source stills are not in the repository. They belong to their respective owners. These showcases are a non-commercial demonstration.
 
@@ -166,15 +167,15 @@ The grid comparison is the target, then average-RGB selection, then the OKLab ma
 
 ![Target, coarser collage, current collage, and opaque photo collage](docs/images/rick-cutout-collage.png)
 
-The collage row is the target, then 220 larger shapes, then about 1,800 shapes at 1.2–5% scale, then the same 1,800-piece settings using the opaque photos. Repetition radius is 2 so one source cannot tile the row beside itself. Color correction strength is 0.72. Large pieces are reserved for flat areas.
+The collage row is the target, then 220 larger shapes, then the current collage, then the same settings using the opaque photos. Every visible piece is at least 4.5% of the short side, so the 1,800-piece request places a few hundred readable crops instead of slivers. Repetition radius is 2 so one source cannot tile the row beside itself. Color correction strength is 0.72. Large pieces are reserved for flat areas.
 
 ![Target, large blocking shapes, and edge-following collage](docs/images/rick-cutout-shape-compare.png)
 
-Shape row: the target, then 160 large shapes at 8–20% scale, then the 1,800-piece collage whose smaller cuts follow edges.
+Shape row: the target, then 160 large shapes at 8–20% scale, then the current collage, whose smaller cuts follow edges and still stay above the minimum piece size.
 
 ![Dense collage](docs/images/rick-cutout-collage-dense.png)
 
-The dense collage is a full-size result: 3,400 pieces at 0.8–3% scale, so more of the budget is small source crops. The picture is 1680×945.
+The dense collage is a full-size result on the same 4.5% floor, so it places 374 pieces rather than a field of slivers. The picture is 1680×945.
 
 ![Full-size grid mosaic](docs/images/rick-showcase-grid.png)
 
@@ -184,21 +185,21 @@ The grid is 80 columns, color correction strength 0.58, seed 7.
 
 Hybrid, left to right: cutouts only, grid under the collage, collage under the grid. Each asks for 480 pieces on a 48-column grid.
 
-A full-size collage of about 1,800 pieces is in `docs/images/rick-cutout-collage-output.png` (1680×945). The comparison strips are scaled to a 1680 px long edge. Panel renders use an 840 px long edge before they are joined.
+A full-size collage of 374 pieces is in `docs/images/rick-cutout-collage-output.png` (1680×945). The comparison strips are scaled to a 1680 px long edge. Panel renders use an 840 px long edge before they are joined.
 
 The earlier Naruto showcase is still in `docs/images/` without a prefix. The target is the Naruto Wiki file *Team Kakashi*: Naruto, Sakura, Sasuke, and Kakashi on a white background, with orange, pink, blue, and silver large enough to read. Group pictures that also include Sai are night scenes or monochrome drawings, so this brighter photograph is the target. The library is 100 other Naruto Wiki images, listed with their URLs in [docs/showcase/sources.tsv](docs/showcase/sources.tsv). The same cutout rules and seeds apply.
 
 ![Target, coarser collage, current collage, and opaque photo collage](docs/images/cutout-collage.png)
 
-The collage row is the target, then 220 larger shapes, then about 1,800 shapes at 1.2–5% scale, then the same 1,800-piece settings using the opaque photos. Repetition radius is 2 so one source cannot tile the row beside itself. Color correction strength is 0.72. Large pieces are reserved for flat areas.
+The collage row is the target, then 220 larger shapes, then the current collage, then the same settings using the opaque photos. Every visible piece is at least 4.5% of the short side, so the 1,800-piece request places a few hundred readable crops instead of slivers. Repetition radius is 2 so one source cannot tile the row beside itself. Color correction strength is 0.72. Large pieces are reserved for flat areas.
 
 ![Target, large blocking shapes, and edge-following collage](docs/images/cutout-shape-compare.png)
 
-Shape row: the target, then 160 large shapes at 8–20% scale, then the 1,800-piece collage whose smaller cuts follow edges.
+Shape row: the target, then 160 large shapes at 8–20% scale, then the current collage, whose smaller cuts follow edges and still stay above the minimum piece size.
 
 ![Dense collage](docs/images/cutout-collage-dense.png)
 
-The dense collage is a full-size result: 3,400 pieces at 0.8–3% scale, so more of the budget is small source crops. The picture is 1680×1379.
+The dense collage is a full-size result on the same 4.5% floor, so it places 324 pieces rather than a field of slivers. The picture is 1680×1379.
 
 ![Full-size grid mosaic](docs/images/showcase-grid.png)
 
@@ -208,7 +209,7 @@ The grid is 80 columns, color correction strength 0.58, seed 7. The picture is 1
 
 Hybrid, left to right: cutouts only, grid under the collage, collage under the grid. Each asks for 480 pieces on a 48-column grid.
 
-A full-size collage of about 1,800 pieces is in `docs/images/cutout-collage-output.png` (1680×1379). The comparison strips are scaled to a 1680 px long edge. Panel renders use an 840 px long edge before they are joined.
+A full-size collage of 324 pieces is in `docs/images/cutout-collage-output.png` (1680×1379). The comparison strips are scaled to a 1680 px long edge. Panel renders use an 840 px long edge before they are joined.
 
 Quality on the synthetic portrait is a separate check: a face, a gradient background, and a hard-edged flower, with 120 varied tiles, a 32×42 grid, and seed 7. Both sides are the original tile pixels through the same renderer, so neither side is helped by a color wash. Lower OKLab ΔE is closer color. Higher luminance SSIM is closer structure. `MatchingQualityTest` fails if the OKLab side stops beating average-RGB on either number.
 

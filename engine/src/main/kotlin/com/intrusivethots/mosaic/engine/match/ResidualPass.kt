@@ -47,7 +47,7 @@ internal suspend fun assembleCollage(
     refine(plane, config, fit, canvas, pieces, correct)
     coroutineContext.ensureActive()
     relax(fit, canvas, pieces, correct, config.colorMatchWeight)
-    sealToFloor(plane, config, fit, pieces, correct)
+    sealToFloor(plane, target.width, target.height, config, fit, pieces, correct)
     onSnapshot(pieces.map { it.placement }, "Cutting edge shapes")
     onProgress(1f, "Cutting edge shapes")
     return Assembled(pieces.map { it.placement }, statsOf(fit, probes, descriptors.size, pieces))
@@ -156,34 +156,40 @@ private fun tryBlob(
 
 private fun sealToFloor(
     plane: LabPlane,
+    measureWidth: Int,
+    measureHeight: Int,
     config: MosaicConfig,
     fit: ShapeFit,
     pieces: MutableList<PlacedPiece>,
     correct: Boolean
 ) {
-    val floor = pieceFloor(config.collage.minPiece, plane.width, plane.height)
-    val radius = (floor.shortOfShort * min(plane.width, plane.height)).toInt().coerceAtLeast(2)
+    val floor = pieceFloor(config.collage.minPiece, measureWidth, measureHeight)
+    val radius = (floor.shortOfShort * min(measureWidth, measureHeight)).toInt().coerceAtLeast(2)
     repeat(4) {
-        val buried = findBuried(pieces.map { it.placement.mask }, plane.width, plane.height, floor) ?: return
+        val buried = findBuried(pieces.map { it.placement.mask }, measureWidth, measureHeight, floor) ?: return
         var index = pieces.lastIndex
         while (index >= 0) {
             if (buried.drop[index]) pieces.removeAt(index)
             index--
         }
         val masks = pieces.map { it.placement.mask }
-        val assign = nearestPiece(masks, buried.holes, plane.width, plane.height, radius)
+        val assign = nearestPiece(masks, buried.holes, measureWidth, measureHeight, radius)
         for (pieceIndex in pieces.indices) {
             val piece = pieces[pieceIndex]
-            piece.placement = withAbsorbed(piece.placement, assign, pieceIndex, buried.holes, plane.width, plane.height)
+            piece.placement = withAbsorbed(
+                piece.placement, assign, pieceIndex, buried.holes, measureWidth, measureHeight, radius
+            )
         }
         val leftover = BooleanArray(buried.holes.size) { hole -> buried.holes[hole] && assign[hole] < 0 }
-        coverHoles(plane, leftover, config, fit, pieces, correct, floor)
+        coverHoles(plane, leftover, measureWidth, measureHeight, config, fit, pieces, correct, floor)
     }
 }
 
 private fun coverHoles(
     plane: LabPlane,
     holes: BooleanArray,
+    measureWidth: Int,
+    measureHeight: Int,
     config: MosaicConfig,
     fit: ShapeFit,
     pieces: MutableList<PlacedPiece>,
@@ -196,8 +202,8 @@ private fun coverHoles(
     val occupied = BooleanArray(columns * ((plane.height + cell - 1) / cell))
     for (index in holes.indices) {
         if (!holes[index]) continue
-        val x = index % plane.width
-        val y = index / plane.width
+        val x = index % measureWidth * plane.width / measureWidth
+        val y = index / measureWidth * plane.height / measureHeight
         occupied[(x / cell) + (y / cell) * columns] = true
     }
     val claimed = BooleanArray(occupied.size)
