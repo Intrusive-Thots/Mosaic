@@ -40,6 +40,20 @@ fun ExportDialog(initialTitle: String, onDismiss: () -> Unit, onExport: (String)
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                val library = LocalLibraryExport.current
+                if (library != null && library.driveConnected) {
+                    TextButton(onClick = { library.onCopyToDrive(title.ifBlank { "Mosaic" }); onDismiss() }) {
+                        Text("Copy to the Mosaic folder in Drive", color = AccentPurple)
+                    }
+                    TextButton(onClick = { library.onBrowseDrive(title.ifBlank { "Mosaic" }); onDismiss() }) {
+                        Text("Save in a Drive folder", color = AccentPurple)
+                    }
+                }
+                if (library != null) {
+                    TextButton(onClick = { library.onSaveToFolder(title.ifBlank { "Mosaic" }); onDismiss() }) {
+                        Text("Save to a folder…", color = AccentPurple)
+                    }
+                }
             }
         },
         confirmButton = {
