@@ -1,16 +1,21 @@
 package com.intrusivethots.mosaic.ui.inspect
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.onSizeChanged
@@ -25,12 +30,18 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.intrusivethots.mosaic.engine.match.RegionShape
 import com.intrusivethots.mosaic.ui.theme.AccentAmber
-import kotlinx.coroutines.Dispatchers
+import com.intrusivethots.mosaic.ui.theme.TextPrimary
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.math.hypot
 import kotlin.math.roundToInt
+
+private class InspectBitmaps {
+    var base by mutableStateOf<Bitmap?>(null)
+    var tiles by mutableStateOf<List<PlacedTile>>(emptyList())
+    var error by mutableStateOf<String?>(null)
+}
 
 @Composable
 internal fun InspectorCanvas(
@@ -45,60 +56,109 @@ internal fun InspectorCanvas(
 ) {
     val decoder = remember(path, token) { TiledDecoder(path) }
     val cache = remember(path, token) { TileCache() }
-    var frame by remember(path, token) { mutableStateOf(TileFrame(null, emptyList())) }
+    val images = remember(path, token) { InspectBitmaps() }
     val scope = rememberCoroutineScope()
     var draft by remember { mutableStateOf<List<Offset>>(emptyList()) }
+    var knownWidth by remember { mutableFloatStateOf(0f) }
+    var knownHeight by remember { mutableFloatStateOf(0f) }
+    InspectLoading(decoder, cache, camera, images, knownWidth, knownHeight)
+    Box(modifier = Modifier.fillMaxSize()) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .onSizeChanged { size ->
+                    knownWidth = size.width.toFloat()
+                    knownHeight = size.height.toFloat()
+                    camera.bindView(knownWidth, knownHeight)
+                }
+                .semantics { contentDescription = "Mosaic inspector" }
+                .pointerInput(selecting, tool) {
+                    detectInspectorGestures(
+                        selecting = selecting,
+                        onPanZoom = { focal, pan, zoom ->
+                            camera.panBy(pan.x, pan.y)
+                            if (zoom != 1f) camera.zoom(focal.x, focal.y, zoom)
+                        },
+                        onFling = { velocity -> scope.launch { fling(camera, velocity) } },
+                        onDoubleTap = { point -> camera.toggleOneToOne(point.x, point.y) },
+                        onLongPress = { point ->
+                            val image = camera.screenToImage(point.x, point.y)
+                            onLongPress(image.x / camera.imageWidth, image.y / camera.imageHeight)
+                        },
+                        onSelectStart = { point -> draft = listOf(camera.screenToImage(point.x, point.y)) },
+                        onSelectMove = { point ->
+                            draft = extendDraft(tool, draft, camera.screenToImage(point.x, point.y))
+                        },
+                        onSelectEnd = {
+                            onShape(shapeFrom(tool, draft, camera.imageWidth, camera.imageHeight))
+                            draft = emptyList()
+                        }
+                    )
+                }
+        ) {
+            drawFrame(camera, TileFrame(images.base, images.tiles))
+            drawRegion(camera, shape, draft, tool)
+        }
+        images.error?.let { message ->
+            Text(
+                text = message,
+                color = TextPrimary,
+                modifier = Modifier.align(Alignment.Center).semantics { contentDescription = "Inspector error" }
+            )
+        }
+    }
+}
+
+@Composable
+private fun InspectLoading(
+    decoder: TiledDecoder,
+    cache: TileCache,
+    camera: InspectorCamera,
+    images: InspectBitmaps,
+    knownWidth: Float,
+    knownHeight: Float
+) {
     DisposableEffect(decoder) {
-        camera.bindImage(decoder.width, decoder.height)
-        onDispose {
-            cache.clear()
-            frame.base?.let { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
-            decoder.close()
+        camera.attach(knownWidth, knownHeight, decoder.width, decoder.height)
+        onDispose { releaseInspect(cache, images, decoder) }
+    }
+    LaunchedEffect(decoder) {
+        val decoded = decodeOnIo { decodeBase(decoder) }
+        if (!isActive) {
+            decoded?.let { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+            return@LaunchedEffect
         }
+        if (decoded == null) images.error = "The mosaic could not be shown." else images.base = decoded
     }
-    LaunchedEffect(path, token, camera.scale, camera.offsetX, camera.offsetY, camera.viewWidth, camera.viewHeight) {
-        val scale = camera.scale
-        val offsetX = camera.offsetX
-        val offsetY = camera.offsetY
-        val viewWidth = camera.viewWidth
-        val viewHeight = camera.viewHeight
-        val next = withContext(Dispatchers.IO) {
-            loadFrame(decoder, scale, offsetX, offsetY, viewWidth, viewHeight, cache, frame.base)
-        }
-        if (isActive) frame = next
+    LaunchedEffect(camera.scale, camera.offsetX, camera.offsetY, camera.viewWidth, camera.viewHeight) {
+        delay(TILE_DEBOUNCE_MS)
+        refineTiles(
+            decoder,
+            camera.scale,
+            camera.offsetX,
+            camera.offsetY,
+            camera.viewWidth,
+            camera.viewHeight,
+            cache
+        ) { next -> images.tiles = next }
     }
-    Canvas(
-        modifier = Modifier
-            .fillMaxSize()
-            .onSizeChanged { camera.bindView(it.width.toFloat(), it.height.toFloat()) }
-            .semantics { contentDescription = "Mosaic inspector" }
-            .pointerInput(selecting, tool) {
-                detectInspectorGestures(
-                    selecting = selecting,
-                    onPanZoom = { focal, pan, zoom ->
-                        camera.panBy(pan.x, pan.y)
-                        if (zoom != 1f) camera.zoom(focal.x, focal.y, zoom)
-                    },
-                    onFling = { velocity -> scope.launch { fling(camera, velocity) } },
-                    onDoubleTap = { point -> camera.toggleOneToOne(point.x, point.y) },
-                    onLongPress = { point ->
-                        val image = camera.screenToImage(point.x, point.y)
-                        onLongPress(image.x / camera.imageWidth, image.y / camera.imageHeight)
-                    },
-                    onSelectStart = { point -> draft = listOf(camera.screenToImage(point.x, point.y)) },
-                    onSelectMove = { point ->
-                        draft = extendDraft(tool, draft, camera.screenToImage(point.x, point.y))
-                    },
-                    onSelectEnd = {
-                        onShape(shapeFrom(tool, draft, camera.imageWidth, camera.imageHeight))
-                        draft = emptyList()
-                    }
-                )
-            }
-    ) {
-        drawFrame(camera, frame)
-        drawRegion(camera, shape, draft, tool)
-    }
+}
+
+private fun decodeBase(decoder: TiledDecoder): Bitmap? {
+    if (decoder.width <= 0 || decoder.height <= 0) return null
+    return decoder.decode(0, 0, decoder.width, decoder.height, baseSample(decoder.width, decoder.height))
+}
+
+private fun releaseInspect(cache: TileCache, images: InspectBitmaps, decoder: TiledDecoder) {
+    val live = LinkedHashSet<Bitmap>()
+    images.base?.let { live.add(it) }
+    images.tiles.forEach { tile -> live.add(tile.bitmap) }
+    cache.pin(live)
+    cache.clear()
+    live.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+    images.base = null
+    images.tiles = emptyList()
+    decoder.close()
 }
 
 private fun extendDraft(tool: InspectTool, current: List<Offset>, point: Offset): List<Offset> {
@@ -138,7 +198,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPlaced(
     top: Int,
     right: Int,
     bottom: Int,
-    bitmap: android.graphics.Bitmap
+    bitmap: Bitmap
 ) {
     val start = camera.imageToScreen(left.toFloat(), top.toFloat())
     val end = camera.imageToScreen(right.toFloat(), bottom.toFloat())

@@ -6,6 +6,7 @@ import com.intrusivethots.mosaic.core.PixelHistory
 import com.intrusivethots.mosaic.core.RegionEdit
 import com.intrusivethots.mosaic.core.RegionProduct
 import com.intrusivethots.mosaic.core.spliceWindow
+import com.intrusivethots.mosaic.core.sweepInspectScratch
 import com.intrusivethots.mosaic.core.writeBitmapPng
 import com.intrusivethots.mosaic.data.ProjectRepository
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
@@ -187,6 +188,7 @@ internal class MosaicInspector(
     private fun stop(run: Int, epoch: Int, message: String?) {
         if (!isCurrent(run)) return
         disarm(epoch)
+        sweepInspectScratch(inspectDir)
         val generation = if (message == null) GenerationUiState.Idle else GenerationUiState.Failed(message)
         state.update { it.copy(generation = generation) }
     }

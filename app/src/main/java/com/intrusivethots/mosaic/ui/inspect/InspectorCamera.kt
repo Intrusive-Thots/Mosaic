@@ -28,6 +28,12 @@ class InspectorCamera {
         if (first && imageWidth > 1) fit()
     }
 
+    /** Applies a canvas size that survived a token change, then fits the image into it. */
+    fun attach(viewW: Float, viewH: Float, imageW: Int, imageH: Int) {
+        if (viewW > 1f && viewH > 1f) bindView(viewW, viewH)
+        if (imageW > 0 && imageH > 0) bindImage(imageW, imageH)
+    }
+
     fun bindImage(width: Int, height: Int) {
         if (width <= 0 || height <= 0) return
         imageWidth = width

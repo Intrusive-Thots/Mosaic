@@ -75,27 +75,30 @@ internal class RegionEdit(
         val window = request.shape.pixelWindow(size.first, size.second, REGION_BLEND_MARGIN)
         scratch.mkdirs()
         val backup = File(scratch, "window-${System.nanoTime()}.png")
-        val copied = copyWindowPng(image, window.x, window.y, window.width, window.height, backup)
-        if (!copied) error("Not enough memory to remember this region for undo.")
-        val spliced = spliceEdited(image, pass, window.x, window.y, window.width, window.height, onProgress)
-        if (!spliced) {
-            backup.delete()
-            error("The region could not be saved.")
+        var spliced = false
+        try {
+            if (!copyWindowPng(image, window.x, window.y, window.width, window.height, backup)) {
+                error("Not enough memory to remember this region for undo.")
+            }
+            spliced = spliceEdited(image, pass, window.x, window.y, window.width, window.height, onProgress)
+            if (!spliced) error("The region could not be saved.")
+            val display = repository.loadPreview(image.absolutePath, 1280)
+                ?: error("The updated mosaic could not be shown.")
+            return RegionProduct(
+                plan = pass.plan,
+                tileCount = tiles.size,
+                display = display,
+                inspectPath = image.absolutePath,
+                editedFullFile = fullFile,
+                backup = backup,
+                originX = window.x,
+                originY = window.y,
+                windowWidth = window.width,
+                windowHeight = window.height
+            )
+        } finally {
+            if (!spliced) backup.delete()
         }
-        val display = repository.loadPreview(image.absolutePath, 1280)
-            ?: error("The updated mosaic could not be shown.")
-        return RegionProduct(
-            plan = pass.plan,
-            tileCount = tiles.size,
-            display = display,
-            inspectPath = image.absolutePath,
-            editedFullFile = fullFile,
-            backup = backup,
-            originX = window.x,
-            originY = window.y,
-            windowWidth = window.width,
-            windowHeight = window.height
-        )
     }
 
     private suspend fun spliceEdited(
@@ -113,10 +116,12 @@ internal class RegionEdit(
             patch.delete()
             return false
         }
-        coroutineContext.ensureActive()
-        val replaced = spliceWindow(image, patch, originX, originY)
-        patch.delete()
-        return replaced
+        return try {
+            coroutineContext.ensureActive()
+            spliceWindow(image, patch, originX, originY)
+        } finally {
+            patch.delete()
+        }
     }
 
     private suspend fun writeEditedWindow(

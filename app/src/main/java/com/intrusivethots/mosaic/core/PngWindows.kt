@@ -79,6 +79,15 @@ internal fun spliceWindow(source: File, patch: File, originX: Int, originY: Int)
     }
 }
 
+/** Drops undo backups and patches left behind when a region job is cancelled. Keeps preview.png. */
+internal fun sweepInspectScratch(directory: File) {
+    val files = directory.listFiles() ?: return
+    for (file in files) {
+        val name = file.name
+        if (name.startsWith("window-") || name.startsWith("patch-")) file.delete()
+    }
+}
+
 internal fun writeBitmapPng(bitmap: Bitmap, dest: File) {
     dest.parentFile?.mkdirs()
     FileOutputStream(dest).use { stream -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream) }
