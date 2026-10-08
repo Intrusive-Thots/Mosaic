@@ -47,6 +47,29 @@ class FacePlacementTest {
     }
 
     @Test
+    fun aLibraryWithNoFacesStillPlacesPieces() = runBlocking {
+        val tiles = listOf(
+            argb(220, 40, 40),
+            argb(40, 40, 220),
+            argb(240, 220, 60),
+            argb(40, 180, 80),
+            argb(200, 120, 40),
+            argb(80, 80, 90)
+        ).mapIndexed { index, color ->
+            val image = solid(32, 32, color)
+            assertTrue(CartoonFaceFinder.find(image).isEmpty(), "solid $index looked like a face")
+            MemoryTileSource(image, "flat-$index")
+        }
+        val result = GenerationCoordinator().generate(
+            scene(72, 48),
+            tiles,
+            collageConfig(pieceCount = 10, seed = 4),
+            preview = true
+        )
+        assertTrue(result.plan.placements.isNotEmpty(), "faceless library placed nothing")
+    }
+
+    @Test
     fun everyPlacedPieceShowsAFace() = runBlocking {
         val tiles = (0 until 8).map { index ->
             MemoryTileSource(shapedCutout(index, 8, 28), "face-$index")

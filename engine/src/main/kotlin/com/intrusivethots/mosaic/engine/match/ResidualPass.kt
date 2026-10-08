@@ -33,11 +33,12 @@ internal suspend fun assembleCollage(
     val probes = ProbeCounter()
     val edges = IntArray(thumbnails.size) { index -> maxOf(thumbnails[index].width, thumbnails[index].height) }
     val library = faceLibrary(thumbnails, descriptors, knownFaces)
+    val requireFaces = library.any { it.isNotEmpty() }
     val fit = ShapeFit(
         swatches, index, config,
         UsageTracker(descriptors.size, config.maxRepetitionDistance, config.allowTileRepetition, config.usageBalanceWeight),
         probes, TopK(config.candidateCount.coerceAtLeast(1)),
-        edges, target.width, target.height, library
+        edges, target.width, target.height, library, requireFaces
     )
     val correct = config.renderMode != RenderMode.ORIGINAL && config.colorMatchWeight > 0f
     val canvas = WorkCanvas(plane, luminanceGradient(plane))
@@ -537,7 +538,17 @@ private fun faceLibrary(
 ): List<List<FaceBox>> {
     return List(thumbnails.size) { index ->
         val given = knownFaces?.getOrNull(index).orEmpty()
-        val boxes = if (given.isNotEmpty()) given else CartoonFaceFinder.find(thumbnails[index])
+        val boxes = if (given.isNotEmpty()) {
+            given
+        } else {
+            try {
+                CartoonFaceFinder.find(thumbnails[index])
+            } catch (failure: Exception) {
+                emptyList()
+            } catch (oom: OutOfMemoryError) {
+                emptyList()
+            }
+        }
         boxes.mapNotNull { faceInContent(it, descriptors.getOrNull(index)) }
     }
 }
@@ -553,7 +564,9 @@ private fun cullHiddenFaces(pieces: MutableList<PlacedPiece>, width: Int, height
     val locked = BooleanArray(owners.size)
     for (index in pieces.indices) paintOwners(pieces[index].placement, index, owners, locked, width, height)
     val keep = pieces.filterIndexed { index, piece ->
-        ownedFaceFraction(owners, width, height, index, faceOf(piece.placement)) >= FACE_VISIBLE
+        val face = faceOf(piece.placement)
+        if (face.right <= face.left || face.bottom <= face.top) true
+        else ownedFaceFraction(owners, width, height, index, face) >= FACE_VISIBLE
     }
     if (keep.size != pieces.size) {
         pieces.clear()

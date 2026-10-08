@@ -37,7 +37,8 @@ internal class ShapeFit(
     private val sourceEdges: IntArray,
     private val outputWidth: Int,
     private val outputHeight: Int,
-    private val faces: List<List<FaceBox>> = emptyList()
+    private val faces: List<List<FaceBox>> = emptyList(),
+    private val requireFaces: Boolean = true
 ) {
     private val handful = HandfulPenalty()
     private val reserved = ArrayList<FaceBox>()
@@ -65,7 +66,10 @@ internal class ShapeFit(
             cut.meanB,
             config.candidateCount,
             config.maxRepetitionDistance,
-            { tile -> tile !in swatches.indices || refused(tile) || faces.getOrNull(tile).isNullOrEmpty() },
+            { tile ->
+                tile !in swatches.indices || refused(tile) ||
+                    (requireFaces && faces.getOrNull(tile).isNullOrEmpty())
+            },
             topK,
             probes
         )
@@ -78,27 +82,15 @@ internal class ShapeFit(
         var bestScore = Float.POSITIVE_INFINITY
         for (slot in 0 until topK.size) {
             val tile = topK.ids[slot]
-            if (tile == avoid || tile in taken) continue
-            val library = faces.getOrNull(tile).orEmpty()
-            if (library.isEmpty()) continue
-            val penalty = tracker.penalty(tile) + jitter(config.randomSeed, ordinal, tile)
-            val edge = sourceEdges.getOrElse(tile) { maxOf(outputWidth, outputHeight) }
-            val piecePx = piecePixels(cut, outputWidth, outputHeight)
-            var span = cropSpan(cut, edge, outputWidth, outputHeight)
-            val need = library.minOf { minimumSpan(it, piecePx, edge) }
-            if (need > span) span = need.coerceAtMost(1f)
-            val scored = scoreTile(swatches[tile], cut, UPRIGHT, span, penalty, solve, config.collage.shapeWeight)
-            val seated = seatOnFace(cut, scored, span, library, stackFaces) ?: continue
-            val diverse = scored.score + seated.drift * DRIFT +
-                handful.cost(tile, cut.centerX, cut.centerY, seated.u, seated.v)
-            comparisons++
-            if (diverse < bestScore) {
-                bestScore = diverse
+            if (tile == avoid || tile in taken || tile !in swatches.indices) continue
+            val offer = offer(cut, tile, ordinal, solve, stackFaces) ?: continue
+            if (offer.score < bestScore) {
+                bestScore = offer.score
                 bestTile = tile
-                bestU = seated.u
-                bestV = seated.v
-                bestSpan = span
-                bestFace = seated.face
+                bestU = offer.u
+                bestV = offer.v
+                bestSpan = offer.span
+                bestFace = offer.face
             }
         }
         if (bestTile < 0) return null
@@ -119,6 +111,42 @@ internal class ShapeFit(
             faceTop = bestFace.top,
             faceRight = bestFace.right,
             faceBottom = bestFace.bottom
+        )
+    }
+
+    /**
+     * A library with no detected face still builds the collage from color.
+     * Face lock stays on when at least one source has a face.
+     */
+    private fun offer(cut: ShapeCut, tile: Int, ordinal: Int, solve: Boolean, stackFaces: Boolean): Offer? {
+        val library = faces.getOrNull(tile).orEmpty()
+        if (requireFaces && library.isEmpty()) return null
+        val penalty = tracker.penalty(tile) + jitter(config.randomSeed, ordinal, tile)
+        val edge = sourceEdges.getOrElse(tile) { maxOf(outputWidth, outputHeight) }
+        val piecePx = piecePixels(cut, outputWidth, outputHeight)
+        var span = cropSpan(cut, edge, outputWidth, outputHeight)
+        if (requireFaces) {
+            val need = library.minOf { minimumSpan(it, piecePx, edge) }
+            if (need > span) span = need.coerceAtMost(1f)
+        }
+        val scored = scoreTile(swatches[tile], cut, UPRIGHT, span, penalty, solve, config.collage.shapeWeight)
+        comparisons++
+        if (!requireFaces) {
+            return Offer(
+                scored.score + handful.cost(tile, cut.centerX, cut.centerY, scored.u, scored.v),
+                scored.u,
+                scored.v,
+                span,
+                FaceBox(-1f, -1f, -1f, -1f)
+            )
+        }
+        val seated = seatOnFace(cut, scored, span, library, stackFaces) ?: return null
+        return Offer(
+            scored.score + seated.drift * DRIFT + handful.cost(tile, cut.centerX, cut.centerY, seated.u, seated.v),
+            seated.u,
+            seated.v,
+            span,
+            seated.face
         )
     }
 
@@ -201,6 +229,8 @@ internal class ShapeFit(
 private class Scored(val score: Float, val angle: Float, val u: Float, val v: Float)
 
 private class Seated(val u: Float, val v: Float, val face: FaceBox, val drift: Float)
+
+private class Offer(val score: Float, val u: Float, val v: Float, val span: Float, val face: FaceBox)
 
 private fun piecePixels(cut: ShapeCut, outputWidth: Int, outputHeight: Int): Float {
     val mask = cut.mask

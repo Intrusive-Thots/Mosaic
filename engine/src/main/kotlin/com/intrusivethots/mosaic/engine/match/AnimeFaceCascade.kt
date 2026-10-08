@@ -12,6 +12,7 @@ import kotlin.math.roundToInt
  */
 internal object AnimeFaceCascade {
     fun find(image: PixelImage): List<FaceBox> {
+        val model = cascade ?: return emptyList()
         val fitted = image.downscaleLongEdge(DETECT_EDGE)
         if (fitted.width < WIN || fitted.height < WIN) return emptyList()
         val gray = grayOf(fitted)
@@ -22,16 +23,15 @@ internal object AnimeFaceCascade {
             val height = (fitted.height / factor).roundToInt()
             if (width < WIN || height < WIN) break
             val small = if (factor == 1f) gray else shrink(gray, fitted.width, fitted.height, width, height)
-            collect(integral(small, width, height), width, height, factor, raw)
+            collect(integral(small, width, height), width, height, factor, raw, model)
             factor *= SCALE
         }
         return group(raw, fitted.width, fitted.height)
     }
 
-    private fun collect(sum: IntArray, width: Int, height: Int, factor: Float, into: MutableList<Raw>) {
+    private fun collect(sum: IntArray, width: Int, height: Int, factor: Float, into: MutableList<Raw>, model: Model) {
         val stride = width + 1
         val step = if (factor >= 2f) 1 else 2
-        val model = cascade
         var y = 0
         while (y + WIN <= height) {
             var x = 0
@@ -195,20 +195,31 @@ internal object AnimeFaceCascade {
         return sum
     }
 
-    private val cascade: Model by lazy { load() }
+    private val cascade: Model? by lazy { load() }
 
-    private fun load(): Model {
-        val bytes = AnimeFaceCascade::class.java.getResourceAsStream("/animeface.cascade")
-            ?: error("animeface.cascade is missing")
-        val buffer = ByteBuffer.wrap(bytes.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
-        val magic = ByteArray(4)
-        buffer.get(magic)
-        buffer.int
-        val featureCount = buffer.int
-        val stageCount = buffer.int
-        val features = Array(featureCount) { Feature(buffer.short.toInt(), buffer.short.toInt(), buffer.short.toInt(), buffer.short.toInt()) }
-        val stages = Array(stageCount) { readStage(buffer) }
-        return Model(features, stages)
+    private fun load(): Model? {
+        val bytes = try {
+            AnimeFaceCascade::class.java.getResourceAsStream("/animeface.cascade")?.use { it.readBytes() }
+        } catch (failure: Exception) {
+            null
+        } ?: return null
+        if (bytes.size < 16) return null
+        return try {
+            val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            val magic = ByteArray(4)
+            buffer.get(magic)
+            buffer.int
+            val featureCount = buffer.int
+            val stageCount = buffer.int
+            if (featureCount !in 1..10_000 || stageCount !in 1..64) return null
+            val features = Array(featureCount) {
+                Feature(buffer.short.toInt(), buffer.short.toInt(), buffer.short.toInt(), buffer.short.toInt())
+            }
+            val stages = Array(stageCount) { readStage(buffer) }
+            Model(features, stages)
+        } catch (failure: Exception) {
+            null
+        }
     }
 
     private fun readStage(buffer: ByteBuffer): Stage {

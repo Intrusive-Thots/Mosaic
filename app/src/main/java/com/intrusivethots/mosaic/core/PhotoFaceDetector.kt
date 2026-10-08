@@ -27,7 +27,11 @@ object PhotoFaceDetector {
         return try {
             val faces = detector.process(InputImage.fromBitmap(bitmap, 0)).await()
             faces.mapNotNull { face -> boxOf(face.boundingBox, bitmap.width, bitmap.height) }
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
+            emptyList()
+        } catch (failure: LinkageError) {
+            emptyList()
+        } catch (oom: OutOfMemoryError) {
             emptyList()
         }
     }

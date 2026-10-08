@@ -6,11 +6,10 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.intrusivethots.mosaic.cache.BitmapLruCache
-import com.intrusivethots.mosaic.core.BitmapTileSource
+import com.intrusivethots.mosaic.core.GenerationLoader
 import com.intrusivethots.mosaic.core.SubjectSegmenterHelper
-import com.intrusivethots.mosaic.core.bitmapIdentity
-import com.intrusivethots.mosaic.core.rotateBitmap
-import com.intrusivethots.mosaic.core.scaleToLongEdge
+import com.intrusivethots.mosaic.core.generationFailureMessage
+import com.intrusivethots.mosaic.core.skippedImageMessage
 import com.intrusivethots.mosaic.core.tightenSubject
 import com.intrusivethots.mosaic.core.toBitmap
 import com.intrusivethots.mosaic.core.toPixelImage
@@ -45,7 +44,6 @@ import com.intrusivethots.mosaic.engine.match.PlanHistory
 import com.intrusivethots.mosaic.engine.progress.GenerationStage
 import com.intrusivethots.mosaic.engine.render.StreamingPngWriter
 import com.intrusivethots.mosaic.engine.tile.FileDescriptorCache
-import com.intrusivethots.mosaic.engine.tile.TileSource
 import com.intrusivethots.mosaic.ui.state.GenerationUiState
 import com.intrusivethots.mosaic.ui.state.MosaicUiState
 import com.intrusivethots.mosaic.ui.state.UiEvent
@@ -72,6 +70,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val descriptorCache = FileDescriptorCache(File(application.filesDir, "descriptor-cache.bin"))
     private val coordinator = GenerationCoordinator(cache = descriptorCache)
     private val bitmapCache = BitmapLruCache(maxBytes = 32 * 1024 * 1024)
+    private val libraryLoader = GenerationLoader(repository, bitmapCache)
     private val preferences = application.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
     private val stampStore = com.intrusivethots.mosaic.core.StampStore(File(application.filesDir, "stamps"))
     private val sessionStore = com.intrusivethots.mosaic.core.CollageSessionStore(File(application.filesDir, "collage-session.bin"))
@@ -508,18 +507,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 publish(GenerationStage.LOADING, 0f, "Loading images")
                 val targetImage = withContext(Dispatchers.Default) { target.toPixelImage() }
-                val sources = withContext(Dispatchers.IO) {
-                    buildSources(snapshot, ownedBitmaps) { label, fraction ->
+                val loaded = withContext(Dispatchers.IO) {
+                    libraryLoader.load(snapshot, ownedBitmaps) { label, fraction ->
                         publish(GenerationStage.LOADING, fraction, label)
                     }
                 }
+                if (loaded.skipped > 0) _events.tryEmit(UiEvent.Message(skippedImageMessage(loaded.skipped)))
+                val sources = loaded.tiles
                 if (sources.isEmpty()) throw EmptyLibraryException()
                 val config = snapshot.config
                 if (!preview && !repository.hasSpace(estimateBytes(targetImage.width, targetImage.height, config))) {
                     throw InsufficientStorageException()
                 }
                 if (!preview) fullFile = repository.newFullImageFile()
-                val result = coordinator.generate(
+                val result = withContext(Dispatchers.Default) {
+                    coordinator.generate(
                     target = targetImage,
                     tiles = sources,
                     config = config,
@@ -538,7 +540,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         publish(progress.stage, progress.fraction, progress.message, progress.preview?.toBitmap())
                     },
                     requireCurrentPlan = strict
-                )
+                    )
+                }
                 if (!acceptFinishedPlan(run, epoch, result)) return@launch
                 if (preview) {
                     val bitmap = result.image?.toBitmap()
@@ -564,7 +567,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 noteGenerationEnd(run, epoch, null)
                 throw cancelled
             } catch (failure: Exception) {
-                noteGenerationEnd(run, epoch, failure.message ?: "Mosaic creation failed.")
+                noteGenerationEnd(run, epoch, generationFailureMessage(failure))
+            } catch (failure: OutOfMemoryError) {
+                noteGenerationEnd(run, epoch, "Not enough memory to build this mosaic. Try fewer photos.")
+            } catch (failure: LinkageError) {
+                noteGenerationEnd(run, epoch, "This device is missing a library the mosaic needs.")
             } finally {
                 runCatching { png?.close() }
                 runCatching { stream?.close() }
@@ -628,79 +635,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         _events.tryEmit(UiEvent.Message("Mosaic saved."))
-    }
-
-    private suspend fun buildSources(
-        snapshot: MosaicUiState,
-        owned: MutableList<Bitmap>,
-        onLoad: (String, Float) -> Unit
-    ): List<TileSource> {
-        val sources = mutableListOf<TileSource>()
-        val collage = snapshot.config.mosaicKind == MosaicKind.COLLAGE
-        if (!collage || snapshot.config.collage.includeSourcePhotos) {
-            appendLibraryPhotos(snapshot, sources, owned, onLoad)
-        }
-        snapshot.customStamps.forEachIndexed { index, stamp ->
-            sources += BitmapTileSource(bitmapIdentity(stamp, "stamp-$index"), stamp)
-        }
-        if (snapshot.config.extractSubjectsWithAi && snapshot.tileUris.isNotEmpty()) {
-            val originals = sources.size
-            snapshot.tileUris.forEachIndexed { index, uri ->
-                coroutineContext.ensureActive()
-                onLoad("Extracting subjects ${index + 1} of ${snapshot.tileUris.size}", index.toFloat() / snapshot.tileUris.size)
-                val large = repository.loadBitmapFromUri(uri, 1024) ?: return@forEachIndexed
-                try {
-                    val subjects = SubjectSegmenterHelper.extractForLibrary(large, originals, snapshot.config.segmentation)
-                    subjects.forEachIndexed { subjectIndex, subject ->
-                        val thumb = scaleToLongEdge(subject, 128)
-                        if (thumb !== subject) subject.recycle()
-                        owned += thumb
-                        sources += BitmapTileSource(
-                            bitmapIdentity(thumb, "subject-$index-$subjectIndex"),
-                            thumb
-                        )
-                    }
-                } finally {
-                    if (!large.isRecycled) large.recycle()
-                }
-            }
-        }
-        if (sources.isEmpty() && snapshot.tileUris.isNotEmpty()) {
-            appendLibraryPhotos(snapshot, sources, owned, onLoad)
-        }
-        if (sources.isEmpty() && snapshot.tileUris.isNotEmpty()) {
-            _events.tryEmit(UiEvent.Message("Some images could not be read and were skipped."))
-        }
-        return sources
-    }
-
-    private suspend fun appendLibraryPhotos(
-        snapshot: MosaicUiState,
-        sources: MutableList<TileSource>,
-        owned: MutableList<Bitmap>,
-        onLoad: (String, Float) -> Unit
-    ) {
-        val edge = snapshot.config.descriptorMaxEdge.coerceAtLeast(96)
-        snapshot.tileUris.forEachIndexed { index, uri ->
-            coroutineContext.ensureActive()
-            onLoad("Loading images", index.toFloat() / snapshot.tileUris.size.coerceAtLeast(1))
-            val cached = bitmapCache.get(uri.toString())
-            val bitmap = cached ?: repository.loadBitmapFromUri(uri, edge)?.also { bitmapCache.put(uri.toString(), it) }
-            if (bitmap == null) return@forEachIndexed
-            val turns = snapshot.tileQuarterTurns.getOrElse(index) { 0 } and 3
-            val oriented = if (turns == 0) bitmap else rotateBitmap(bitmap, turns).also { owned += it }
-            val token = if (turns == 0) uri.toString() else "${uri}#q$turns"
-            sources += BitmapTileSource(
-                identity = com.intrusivethots.mosaic.engine.tile.TileIdentity(
-                    uri = token,
-                    width = oriented.width,
-                    height = oriented.height,
-                    byteSize = repository.contentSize(uri),
-                    modifiedTimeMs = repository.contentModified(uri)
-                ),
-                bitmap = oriented
-            )
-        }
     }
 
     private fun estimateBytes(width: Int, height: Int, config: MosaicConfig): Long {
