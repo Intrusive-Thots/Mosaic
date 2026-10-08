@@ -81,11 +81,13 @@ internal fun paintShapeRow(
     owner: Int,
     tone: RegionTone? = null,
     field: PixelImage? = null,
-    outline: PieceOutline? = null
+    outline: PieceOutline? = null,
+    lockedPixels: BooleanArray? = null
 ) {
     val mask = placement.mask ?: return
     val ny = (y + 0.5f) / outputHeight
-    val edge = if (outline != null && paperRim(config)) paperEdge(outline, ny, outputWidth, outputHeight) else null
+    val edge = if (outline != null && paperRim(config)) paperEdge(outline, mask, ny, outputWidth, outputHeight) else null
+    val locked = lockedPixels
     val pad = if (edge != null) RIM_PAD / outputHeight.toFloat() else 0.002f
     if (ny < mask.top - pad || ny > mask.bottom + pad) return
     val extra = if (edge != null) RIM_PAD else 0
@@ -98,12 +100,15 @@ internal fun paintShapeRow(
     val low = FloatArray(3)
     val crossings = if (outline == null) null else outlineCrossings(outline, ny)
     for (x in left..right) {
+        val index = y * outputWidth + x
+        if (locked != null && locked[index]) continue
         val color = cutPixel(
             source, base, descriptor, placement, mask, config, field, tone,
             x, y, outputWidth, outputHeight, turnCos, turnSin, lab, low, crossings
         )
         if (color != 0) {
             stampCut(row, y, x, outputWidth, color, coverage, owners, owner)
+            if (locked != null && inFace(placement, (x + 0.5f) / outputWidth, ny)) locked[index] = true
             continue
         }
         val fiber = if (edge == null) 0 else fiberColor(edge, outputWidth, x, y)
@@ -125,37 +130,44 @@ private fun stampCut(
     val index = y * outputWidth + x
     val alpha = color ushr 24
     if (alpha > 40 && coverage != null) coverage[index] = true
-    if (alpha > 140 && owners != null) owners[index] = owner
+    if (alpha > 40 && owners != null) owners[index] = owner
 }
 
 private fun paperRim(config: MosaicConfig): Boolean {
     return config.collage.separatePieces || config.collage.style == CollageStyle.PAPER
 }
 
-private class PaperEdge(val near: Array<FloatArray>, val shadow: FloatArray)
+private class PaperEdge(val near: Array<FloatArray>, val shadow: FloatArray, val alpha: Int, val shift: Int)
 
-private fun paperEdge(outline: PieceOutline, ny: Float, outputWidth: Int, outputHeight: Int): PaperEdge {
-    val depth = rimDepth(outputWidth)
+private fun paperEdge(outline: PieceOutline, mask: PieceMask, ny: Float, outputWidth: Int, outputHeight: Int): PaperEdge {
+    val piecePx = maxOf((mask.right - mask.left) * outputWidth, (mask.bottom - mask.top) * outputHeight)
+    val depth = rimDepth(outputWidth, piecePx)
     val near = Array(depth * 2 + 1) { slot ->
         outlineCrossings(outline, ny + (slot - depth) / outputHeight.toFloat())
     }
-    val shadowDy = (outputWidth * 4f / RIM_REFERENCE).roundToInt().coerceIn(2, 5)
-    val shadow = outlineCrossings(outline, ny - shadowDy / outputHeight.toFloat())
-    return PaperEdge(near, shadow)
+    val shadow = outlineCrossings(outline, ny - depth / outputHeight.toFloat())
+    val alpha = if (depth <= 1) 150 else 200
+    return PaperEdge(near, shadow, alpha, depth)
 }
 
 private fun fiberColor(edge: PaperEdge, outputWidth: Int, x: Int, y: Int): Int {
     val depth = (edge.near.size - 1) / 2
     val reach = tornReach(x, y, depth)
-    if (reach > 0 && touchesInterior(edge.near, outputWidth, x, reach, depth)) return fiberShade(x, y)
-    val shadowX = x + (outputWidth * 4f / RIM_REFERENCE).roundToInt().coerceIn(2, 5)
+    if (reach > 0 && touchesInterior(edge.near, outputWidth, x, reach, depth)) return fiberShade(x, y, edge.alpha)
+    val shadowX = x + edge.shift
     if (shadowX !in 0 until outputWidth) return 0
     return if (outlineCoverage(edge.shadow, outputWidth, shadowX) >= SOLID) SHADOW else 0
 }
 
-/** About 3–4 px at a 1680-wide collage, and at least a pixel on a small preview. */
-private fun rimDepth(outputWidth: Int): Int {
-    return (outputWidth * 3.5f / RIM_REFERENCE).roundToInt().coerceIn(1, 4)
+/** Rim width follows the piece. A small piece stays near one pixel so the thumbnail is not a white mesh. */
+private fun rimDepth(outputWidth: Int, piecePx: Float): Int {
+    val cap = (outputWidth * 2.4f / RIM_REFERENCE).roundToInt().coerceIn(1, 3)
+    return (piecePx / 40f).roundToInt().coerceIn(1, cap)
+}
+
+private fun inFace(placement: CutoutPlacement, nx: Float, ny: Float): Boolean {
+    if (placement.faceRight <= placement.faceLeft) return false
+    return nx >= placement.faceLeft && nx <= placement.faceRight && ny >= placement.faceTop && ny <= placement.faceBottom
 }
 
 /** Uneven torn fiber, never thinner than a visible edge. */
@@ -165,12 +177,12 @@ private fun tornReach(x: Int, y: Int, depth: Int): Int {
     return (depth - 1 + band / 2).coerceIn(1, depth)
 }
 
-private fun fiberShade(x: Int, y: Int): Int {
+private fun fiberShade(x: Int, y: Int, alpha: Int): Int {
     val wobble = ((x * 17 + y * 31) and 7) - 3
     val red = (250 + wobble).coerceIn(236, 255)
     val green = (246 + wobble).coerceIn(230, 255)
     val blue = (236 + wobble).coerceIn(220, 250)
-    return (235 shl 24) or (red shl 16) or (green shl 8) or blue
+    return (alpha shl 24) or (red shl 16) or (green shl 8) or blue
 }
 
 private fun touchesInterior(rows: Array<FloatArray>, outputWidth: Int, x: Int, reach: Int, depth: Int): Boolean {
@@ -207,13 +219,24 @@ private fun cutPixel(
     val nx = (x + 0.5f) / outputWidth
     val ny = (y + 0.5f) / outputHeight
     val traced = if (crossings == null) -1 else outlineCoverage(crossings, outputWidth, x)
-    val cover = if (traced >= 0) traced else maskCoverage(mask, nx, ny)
+    val maskCover = maskCoverage(mask, nx, ny)
+    var cover = if (maskCover >= 128) 255 else if (traced >= 12) traced else maskCover
+    if (cover < 12 && besideMask(mask, nx, ny, outputWidth, outputHeight)) cover = 180
     if (cover < 12) return 0
     val sampled = sourceColor(source, descriptor, placement, mask, nx, ny, turnCos, turnSin)
     if ((sampled ushr 24) < 128) return 0
     val basePx = sourceColor(base, descriptor, placement, mask, nx, ny, turnCos, turnSin)
     val painted = harmonize(sampled, basePx, field, tone, config, x, y, outputWidth, outputHeight, lab, low)
     return (painted and 0x00FFFFFF) or (cover shl 24)
+}
+
+private fun besideMask(mask: PieceMask, nx: Float, ny: Float, outputWidth: Int, outputHeight: Int): Boolean {
+    val dx = 1f / outputWidth.toFloat()
+    val dy = 1f / outputHeight.toFloat()
+    return maskCoverage(mask, nx + dx, ny) >= 128 ||
+        maskCoverage(mask, nx - dx, ny) >= 128 ||
+        maskCoverage(mask, nx, ny + dy) >= 128 ||
+        maskCoverage(mask, nx, ny - dy) >= 128
 }
 
 private fun maskCoverage(mask: PieceMask, nx: Float, ny: Float): Int {

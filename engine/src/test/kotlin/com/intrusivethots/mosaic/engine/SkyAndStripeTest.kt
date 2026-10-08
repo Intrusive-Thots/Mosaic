@@ -9,6 +9,7 @@ import com.intrusivethots.mosaic.engine.config.RenderMode
 import com.intrusivethots.mosaic.engine.config.OutputLayout
 import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
 import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.match.CartoonFaceFinder
 import com.intrusivethots.mosaic.engine.quality.pieceBoundaryAlignment
 import com.intrusivethots.mosaic.engine.render.MemoryRowSink
 import com.intrusivethots.mosaic.engine.render.MosaicRenderer
@@ -80,6 +81,10 @@ class SkyAndStripeTest {
             config = config,
             preview = true
         )
+        println(
+            "orange ${CartoonFaceFinder.find(blob(orange, 0)).size} " +
+                "blue ${CartoonFaceFinder.find(blob(blue, 4)).size}"
+        )
         val top = result.plan.placements.filter { it.y < 0.42f }
         val bottom = result.plan.placements.filter { it.y > 0.58f }
         val note = result.plan.placements.joinToString { "${it.tileIndex}@${"%.2f".format(it.y)}" }
@@ -137,5 +142,6 @@ private fun blob(color: Int, salt: Int): PixelImage {
             )
         }
     }
+    stampCartoonFace(pixels, size, size)
     return PixelImage(size, size, pixels)
 }

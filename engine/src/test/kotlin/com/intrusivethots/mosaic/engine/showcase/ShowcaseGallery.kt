@@ -20,6 +20,7 @@ import com.intrusivethots.mosaic.engine.image.downscaleLongEdge
 import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
 import com.intrusivethots.mosaic.engine.legacy.LegacyRgbMatcher
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
+import com.intrusivethots.mosaic.engine.match.CartoonFaceFinder
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.match.pieceFloor
 import com.intrusivethots.mosaic.engine.match.visibleSizes
@@ -39,6 +40,7 @@ private const val DENSE_PIECES = 3400
 
 internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File, prefix: String = "") {
     destination.mkdirs()
+    reportFaces(prefix, library.cutouts)
     val panelTarget = library.target.downscaleLongEdge(PANEL_EDGE)
     val fullTarget = library.target.downscaleLongEdge(FULL_EDGE)
     val collageTarget = library.target.fitLongEdge(FULL_EDGE)
@@ -51,7 +53,7 @@ internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File, 
     writeHybridRow(panelTarget, cutouts, destination, prefix)
     val fullCollage = render(collageTarget, cutouts, currentCollage(FULL_EDGE, HybridStack.CUTOUTS, NORMAL_PIECES), "${prefix}full")
     writePng(fullCollage, listOf(File(destination, "${prefix}cutout-collage-output.png")))
-    writeReviewArtifacts(fullCollage, prefix)
+    writeReviewArtifacts(fullCollage, collageTarget, destination, prefix)
     val dense = render(collageTarget, cutouts, denseCollage(FULL_EDGE), "${prefix}dense")
     writePng(dense, listOf(File(destination, "${prefix}cutout-collage-dense.png")))
     val grid = render(fullTarget, opaque, gridConfig(80, FULL_EDGE))
@@ -157,11 +159,21 @@ private suspend fun reportRead(
     val sizes = visibleSizes(result.plan.placements.map { it.mask }, image.width, image.height)
     val shortMin = sizes.minOfOrNull { it.shortOfShort } ?: 0f
     val areaMin = sizes.minOfOrNull { it.areaOfImage } ?: 0f
+    val faced = result.plan.placements.count { it.faceRight > it.faceLeft }
     println(
         "SHOWCASE $label distance ${distance.deltaE} ssim ${distance.ssim} texture $texture " +
-            "placed $placed fidelity ${fidelity.median} p10 ${fidelity.lowDecile} " +
+            "placed $placed fidelity ${fidelity.median} p10 ${fidelity.lowDecile} faces $faced " +
             "visibleShort $shortMin visibleArea $areaMin floorShort ${floor.shortOfShort} floorArea ${floor.areaOfImage}"
     )
+}
+
+private fun reportFaces(prefix: String, images: List<PixelImage>) {
+    var detected = 0
+    for (image in images) {
+        if (CartoonFaceFinder.find(image).isNotEmpty()) detected++
+    }
+    val name = if (prefix.isEmpty()) "naruto" else prefix.removeSuffix("-")
+    println("SHOWCASE $name faces detected $detected excluded ${images.size - detected} of ${images.size}")
 }
 
 private suspend fun renderLegacy(
@@ -281,13 +293,15 @@ private fun rowOf(images: List<PixelImage>, gap: Int = 12): PixelImage {
     return PixelImage(width, height, pixels)
 }
 
-private fun writeReviewArtifacts(image: PixelImage, prefix: String) {
+private fun writeReviewArtifacts(image: PixelImage, target: PixelImage, destination: File, prefix: String) {
     val theme = if (prefix.isEmpty()) "naruto" else prefix.removeSuffix("-")
     val artifacts = File("/opt/cursor/artifacts")
     artifacts.mkdirs()
     writeJpeg(image.downscaleLongEdge(300), File(artifacts, "thumb-$theme-300.jpg"))
     writeJpeg(centerSquare(image, 720), File(artifacts, "crop-$theme-1to1.jpg"))
     writePng(image, listOf(File(artifacts, "preview-$theme-collage.png")))
+    val strip = rowOf(listOf(target.fitted(image), image)).downscaleLongEdge(STRIP_EDGE)
+    writePng(strip, listOf(File(artifacts, "compare-$theme-strip.png"), File(destination, "${prefix}target-collage.png")))
 }
 
 private fun centerSquare(image: PixelImage, maxEdge: Int): PixelImage {

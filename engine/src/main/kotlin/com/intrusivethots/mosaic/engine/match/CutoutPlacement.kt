@@ -13,5 +13,9 @@ class CutoutPlacement(
     val mask: PieceMask? = null,
     val cropU: Float = 0.5f,
     val cropV: Float = 0.5f,
-    val cropSpan: Float = 0.55f
+    val cropSpan: Float = 0.55f,
+    val faceLeft: Float = -1f,
+    val faceTop: Float = -1f,
+    val faceRight: Float = -1f,
+    val faceBottom: Float = -1f
 )

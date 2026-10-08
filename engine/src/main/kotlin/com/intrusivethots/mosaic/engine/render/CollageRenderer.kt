@@ -35,6 +35,7 @@ class CollageRenderer {
         val mean = if (target == null) argb(24, 24, 28) else meanColor(target)
         val useTarget = config.collage.background == CollageBackground.TARGET && target != null
         val row = IntArray(width)
+        val locked = BooleanArray(width * height)
         val gate = CloserGate(width, height)
         gate.bind(target, width, height)
         var lastReported = -1
@@ -47,7 +48,7 @@ class CollageRenderer {
                 if (sprite.placement.mask != null) {
                     paintShapeRow(
                         row, y, width, height, sprite.source, sprite.base, sprite.descriptor, sprite.placement,
-                        config, coverage, owners, index, sprite.tone, field, sprite.outline
+                        config, coverage, owners, index, sprite.tone, field, sprite.outline, locked
                     )
                     continue
                 }

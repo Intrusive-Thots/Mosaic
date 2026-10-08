@@ -4,6 +4,7 @@ import com.intrusivethots.mosaic.engine.color.OkLab
 import com.intrusivethots.mosaic.engine.config.CollageSettings
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
+import com.intrusivethots.mosaic.engine.render.curveHits
 import com.intrusivethots.mosaic.engine.render.traceOutline
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -190,7 +191,10 @@ private fun largestPerArea(cuts: List<ShapeCut>, budget: Int): List<ShapeCut> {
 private fun detailStep(plane: LabPlane, budget: Int): Int {
     val pixels = plane.width * plane.height
     val safe = budget.coerceAtLeast(1)
-    return sqrt(pixels.toFloat() / safe.toFloat()).toInt().coerceIn(3, 24)
+    val fromBudget = sqrt(pixels.toFloat() / safe.toFloat()).toInt()
+    val longEdge = maxOf(plane.width, plane.height)
+    val face = (longEdge * FACE_PX / REFERENCE_EDGE).toInt()
+    return maxOf(fromBudget, face).coerceIn(4, 24)
 }
 
 internal class LabPlane(
@@ -643,7 +647,8 @@ internal fun shapeCut(
     plane: LabPlane,
     count: Int
 ): ShapeCut {
-    val packed = packMask(hits, box.width, box.height)
+    val curved = curveHits(hits, box.width, box.height)
+    val packed = packMask(curved, box.width, box.height)
     val left = box.x.toFloat() / plane.width
     val top = box.y.toFloat() / plane.height
     val right = (box.right + 1).toFloat() / plane.width
@@ -927,6 +932,8 @@ private fun gradientAt(l: FloatArray, width: Int, height: Int, x: Int, y: Int): 
 }
 
 private const val WORK_EDGE = 360
+private const val FACE_PX = 44f
+private const val REFERENCE_EDGE = 1680f
 private const val SLIC_PASSES = 4
 private const val COARSE_COMPACT = 0.0012f
 private const val FINE_COMPACT = 0.004f

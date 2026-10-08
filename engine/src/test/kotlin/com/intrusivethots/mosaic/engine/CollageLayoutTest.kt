@@ -12,6 +12,7 @@ import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.cleanupCutout
 import com.intrusivethots.mosaic.engine.match.CutoutPlacement
+import com.intrusivethots.mosaic.engine.match.FaceBox
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.progress.GenerationStage
 import com.intrusivethots.mosaic.engine.quality.distanceReadability
@@ -201,14 +202,20 @@ class CollageLayoutTest {
     @Test
     fun cutoutsRebuildThePicture() = runBlocking {
         val count = 200
-        val tiles = (0 until count).map { MemoryTileSource(organicCutout(it, count, 36), "organic-$it") }
+        // Color swatches have no drawn face. The labeled center is the region every crop must keep,
+        // the same hook a device detector uses. Cartoon detection is covered in FacePlacementTest.
+        val images = (0 until count).map { organicCutout(it, count, 36, markFace = false) }
+        val tiles = images.mapIndexed { index, image -> MemoryTileSource(image, "organic-$index") }
+        val knownFaces = images.map { listOf(FaceBox(0.40f, 0.38f, 0.60f, 0.56f)) }
         val target = portrait(120, 80)
         val config = collageConfig(pieceCount = 340, seed = 4).copy(
             candidateCount = 12,
             renderMode = RenderMode.COLOR_CORRECTED,
             colorMatchWeight = 0.72f
         )
-        val result = GenerationCoordinator().generate(target, tiles, config, preview = true)
+        val result = GenerationCoordinator().generate(
+            target, tiles, config, preview = true, knownFaces = knownFaces
+        )
         val image = result.image ?: error("missing collage")
         val covered = BooleanArray(image.width * image.height)
         val thumbs = tiles.map { it.loadThumbnail(96) }
@@ -227,8 +234,9 @@ class CollageLayoutTest {
         val placed = result.plan.placements.size
         val fidelity = pieceContentFidelity(image, thumbs, result.descriptors, result.plan.placements)
         println(
-            "distance ΔE ${distance.deltaE} SSIM ${distance.ssim} texture $texture " +
-                "fidelity ${fidelity.median} p10 ${fidelity.lowDecile} pieces ${fidelity.pieces}"
+            "distance ΔE ${distance.deltaE} SSIM ${distance.ssim} masked $delta/$ssim edge $edge texture $texture painted $painted " +
+                "fidelity ${fidelity.median} p10 ${fidelity.lowDecile} pieces ${fidelity.pieces} placed $placed " +
+                "span ${result.plan.placements.map { it.cropSpan }.average()}"
         )
         assertTrue(
             fidelity.median > 0.70 && fidelity.lowDecile > 0.10,
@@ -323,8 +331,8 @@ class CollageLayoutTest {
     @Test
     fun aMismatchedCutoutDoesNotCoverARegionItRuins() = runBlocking {
         val tiles = listOf(
-            MemoryTileSource(disk(argb(210, 40, 40), argb(0, 0, 0, alpha = 0)), "red"),
-            MemoryTileSource(disk(argb(40, 40, 210), argb(0, 0, 0, alpha = 0)), "blue")
+            MemoryTileSource(faced(disk(argb(210, 40, 40), argb(0, 0, 0, alpha = 0))), "red"),
+            MemoryTileSource(faced(disk(argb(40, 40, 210), argb(0, 0, 0, alpha = 0))), "blue")
         )
         val target = solid(64, 64, argb(200, 32, 32))
         val result = GenerationCoordinator().generate(target, tiles, collageConfig(pieceCount = 8, seed = 2), preview = true)
@@ -458,6 +466,12 @@ private fun shadingDisk(): PixelImage {
         }
     }
     return PixelImage(size, size, pixels)
+}
+
+private fun faced(image: PixelImage): PixelImage {
+    val pixels = image.pixels.copyOf()
+    stampCartoonFace(pixels, image.width, image.height)
+    return PixelImage(image.width, image.height, pixels)
 }
 
 private fun disk(inside: Int, outside: Int, size: Int = 28): PixelImage {
