@@ -9,6 +9,9 @@ import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
 import com.intrusivethots.mosaic.engine.image.sampleBilinear
 import com.intrusivethots.mosaic.engine.match.CutoutPlacement
 import com.intrusivethots.mosaic.engine.match.PieceMask
+import com.intrusivethots.mosaic.engine.match.TONE_LIMIT_C
+import com.intrusivethots.mosaic.engine.match.TONE_LIMIT_L
+import com.intrusivethots.mosaic.engine.match.boundedDelta
 import com.intrusivethots.mosaic.engine.match.fitPaired
 import com.intrusivethots.mosaic.engine.match.meanFit
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
@@ -103,7 +106,7 @@ internal fun paintShapeRow(
             stampCut(row, y, x, outputWidth, color, coverage, owners, owner)
             continue
         }
-        val fiber = if (edge == null) 0 else fiberColor(edge, outputWidth, x)
+        val fiber = if (edge == null) 0 else fiberColor(edge, outputWidth, x, y)
         if (fiber != 0) row[x] = srcOver(row[x], fiber)
     }
 }
@@ -139,16 +142,34 @@ private fun paperEdge(outline: PieceOutline, ny: Float, outputHeight: Int): Pape
     return PaperEdge(near, shadow)
 }
 
-private fun fiberColor(edge: PaperEdge, outputWidth: Int, x: Int): Int {
-    if (touchesInterior(edge.near, outputWidth, x)) return FIBER
+private fun fiberColor(edge: PaperEdge, outputWidth: Int, x: Int, y: Int): Int {
+    val reach = tornReach(x, y)
+    if (reach > 0 && touchesInterior(edge.near, outputWidth, x, reach)) return fiberShade(x, y)
     val shadowX = x + SHADOW_DX
     if (shadowX !in 0 until outputWidth) return 0
     return if (outlineCoverage(edge.shadow, outputWidth, shadowX) >= SOLID) SHADOW else 0
 }
 
-private fun touchesInterior(rows: Array<FloatArray>, outputWidth: Int, x: Int): Boolean {
-    for (row in rows) {
-        for (dx in -RIM_REACH..RIM_REACH) {
+/** Zero leaves a gap; one or two pixels is an uneven torn fiber. */
+private fun tornReach(x: Int, y: Int): Int {
+    val mixed = (x * 374761393) xor (y * 668265263)
+    val band = (if (mixed < 0) -mixed else mixed) % 7
+    if (band < 2) return 0
+    return if (band < 5) 1 else 2
+}
+
+private fun fiberShade(x: Int, y: Int): Int {
+    val wobble = ((x * 17 + y * 31) and 15) - 6
+    val red = (245 + wobble / 2).coerceIn(220, 255)
+    val green = (236 + wobble).coerceIn(210, 255)
+    val blue = (220 + wobble).coerceIn(190, 250)
+    return (210 shl 24) or (red shl 16) or (green shl 8) or blue
+}
+
+private fun touchesInterior(rows: Array<FloatArray>, outputWidth: Int, x: Int, reach: Int): Boolean {
+    for (dy in -reach..reach) {
+        val row = rows[RIM_REACH + dy]
+        for (dx in -reach..reach) {
             val px = x + dx
             if (px !in 0 until outputWidth) continue
             if (outlineCoverage(row, outputWidth, px) >= SOLID) return true
@@ -320,11 +341,9 @@ private fun harmonize(
     val sharpB = lab[2]
     OkLab.writeLab(basePx, lab, 0)
     writeLow(low, field, tone, x, y, outputWidth, outputHeight)
-    val center = 1f - (1f - strength) * (1f - strength)
-    val keep = tone.kappa.coerceIn(0.85f, 1f)
-    val l = lab[0] + (low[0] - lab[0]) * center + (sharpL - lab[0]) * keep
-    val a = lab[1] + (low[1] - lab[1]) * center + (sharpA - lab[1]) * keep
-    val b = lab[2] + (low[2] - lab[2]) * center + (sharpB - lab[2]) * keep
+    val l = sharpL + boundedDelta(lab[0], low[0], strength, TONE_LIMIT_L)
+    val a = sharpA + boundedDelta(lab[1], low[1], strength, TONE_LIMIT_C)
+    val b = sharpB + boundedDelta(lab[2], low[2], strength, TONE_LIMIT_C)
     return OkLab.toArgb(l.coerceIn(0f, 1f), a.coerceIn(-0.5f, 0.5f), b.coerceIn(-0.5f, 0.5f))
 }
 
@@ -521,7 +540,6 @@ private const val RIM_REACH = 2
 private const val SHADOW_DX = 3
 private const val SHADOW_DY = 3
 private const val SOLID = 200
-private const val FIBER = (210 shl 24) or (245 shl 16) or (236 shl 8) or 220
 private const val SHADOW = 48 shl 24
-private const val BASE_RADIUS = 14
+private const val BASE_RADIUS = 12
 private const val BASE_PASSES = 2

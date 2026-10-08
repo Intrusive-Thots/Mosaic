@@ -121,3 +121,12 @@ private const val GAIN_C_LO = 0.5f
 private const val GAIN_C_HI = 1.2f
 private const val OFFSET_L = 0.25f
 private const val OFFSET_C = 0.08f
+
+internal const val TONE_PULL = 0.9f
+internal const val TONE_LIMIT_L = 0.18f
+internal const val TONE_LIMIT_C = 0.10f
+
+/** A capped step from [source] toward [target]. The photo keeps its own picture. */
+internal fun boundedDelta(source: Float, target: Float, strength: Float, limit: Float): Float {
+    return ((target - source) * strength * TONE_PULL).coerceIn(-limit, limit)
+}

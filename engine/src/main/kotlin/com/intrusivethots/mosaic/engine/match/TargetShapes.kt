@@ -4,6 +4,7 @@ import com.intrusivethots.mosaic.engine.color.OkLab
 import com.intrusivethots.mosaic.engine.config.CollageSettings
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
+import com.intrusivethots.mosaic.engine.render.traceOutline
 import kotlin.math.min
 import kotlin.math.sqrt
 
@@ -25,7 +26,9 @@ internal class ShapeCut(
     val sampleA: FloatArray,
     val sampleB: FloatArray,
     val spread: Float,
-    val blocking: Boolean
+    val blocking: Boolean,
+    val gridL: FloatArray = FloatArray(0),
+    val harmonics: FloatArray = FloatArray(0)
 )
 
 internal fun cutTargetShapes(target: PixelImage, settings: CollageSettings): List<ShapeCut> {
@@ -539,8 +542,32 @@ internal fun shapeCut(
     val scale = sqrt(count.toFloat() / (plane.width * plane.height).toFloat()).coerceAtLeast(0.02f)
     return ShapeCut(
         mask, stats.centerX, stats.centerY, scale, stats.meanL, stats.meanA, stats.meanB,
-        stats.u, stats.v, stats.l, stats.a, stats.b, stats.spread, scale >= BLOCKING_SCALE
+        stats.u, stats.v, stats.l, stats.a, stats.b, stats.spread, scale >= BLOCKING_SCALE,
+        luminanceGrid(core, box, plane),
+        cutHarmonics(mask)
     )
+}
+
+private fun luminanceGrid(hits: BooleanArray, box: Box, plane: LabPlane): FloatArray {
+    val grid = FloatArray(PATCH * PATCH)
+    val width = box.width.coerceAtLeast(1)
+    val height = box.height.coerceAtLeast(1)
+    for (y in 0 until PATCH) {
+        val localY = (y * height / PATCH).coerceIn(0, height - 1)
+        val py = (box.y + localY).coerceIn(0, plane.height - 1)
+        for (x in 0 until PATCH) {
+            val localX = (x * width / PATCH).coerceIn(0, width - 1)
+            val px = (box.x + localX).coerceIn(0, plane.width - 1)
+            val inside = localY * width + localX < hits.size && hits[localY * width + localX]
+            grid[y * PATCH + x] = if (inside) plane.l[py * plane.width + px] else 0f
+        }
+    }
+    return grid
+}
+
+private fun cutHarmonics(mask: PieceMask): FloatArray {
+    val outline = traceOutline(mask) ?: return FloatArray(0)
+    return contourHarmonics(outline.x, outline.y)
 }
 
 internal fun cutFromMask(
@@ -824,6 +851,7 @@ private const val SLIC_PASSES = 4
 private const val COARSE_COMPACT = 0.0012f
 private const val FINE_COMPACT = 0.004f
 private const val SAMPLE_LIMIT = 5
+private const val PATCH = 16
 private const val COLOR_MERGE = 0.0032f
 private const val EDGE_BLOCK = 0.07f
 private const val BLOCKING_SCALE = 0.055f

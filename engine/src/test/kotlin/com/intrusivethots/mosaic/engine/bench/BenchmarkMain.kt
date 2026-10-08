@@ -717,7 +717,7 @@ private suspend fun featureNote(
         appendLine()
         appendLine("Same portrait and 240 organic cutouts, seed 4, correction off, mean-color background.")
         appendLine("Color-only and shape-aware both cut the same target shapes at 280×180 and 320 pieces.")
-        appendLine("Shape weight stays in saved sessions. The cut follows the target either way.")
+        appendLine("Shape weight changes the score. The shape-aware row pays a Fourier penalty the color-only row does not.")
         appendLine("engine/build/reports/benchmarks/images/cutout-shape-compare.png is the target, color-only, then shape-aware.")
         appendLine("Dense coverage asks for 1,200 pieces at the High Quality scale range (2–11%) on a 560×360 canvas.")
         appendLine("engine/build/reports/benchmarks/images/cutout-hybrid.png is cutouts only, grid under collage, then collage under grid, all 280×180.")

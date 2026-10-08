@@ -63,13 +63,10 @@ private suspend fun blockIn(
     correct: Boolean
 ) {
     val ordered = cutTargetShapes(target, config.collage).sortedByDescending { it.scale }
-    val used = HashSet<Int>()
     for (ordinal in ordered.indices) {
         coroutineContext.ensureActive()
         val cut = ordered[ordinal]
-        val reserved = if (cut.blocking) used else emptySet()
-        val chosen = fit.choose(cut, ordinal, taken = reserved) ?: continue
-        if (cut.blocking) used.add(chosen.tileIndex)
+        val chosen = fit.choose(cut, ordinal) ?: continue
         val tone = paintTone(cut, chosen, fit, correct, config.colorMatchWeight)
         pieces.add(PlacedPiece(cut, chosen, tone[0], tone[1], tone[2]))
         canvas.paint(cut, tone[0], tone[1], tone[2])
@@ -175,8 +172,7 @@ private fun swapIfBetter(
     pull: Float
 ) {
     val piece = pieces[index]
-    val reserved = if (piece.cut.blocking) blockingTiles(pieces, index) else emptySet()
-    val alternate = fit.choose(piece.cut, index, piece.placement.tileIndex, commit = false, taken = reserved) ?: return
+    val alternate = fit.choose(piece.cut, index, piece.placement.tileIndex, commit = false) ?: return
     val tone = paintTone(piece.cut, alternate, fit, correct, pull)
     canvas.rebuild(pieces, index)
     val swapped = canvas.predictedError(piece.cut, tone[0], tone[1], tone[2])
@@ -190,15 +186,6 @@ private fun swapIfBetter(
     piece.b = tone[2]
 }
 
-private fun blockingTiles(pieces: List<PlacedPiece>, skip: Int): Set<Int> {
-    val used = HashSet<Int>()
-    for (index in pieces.indices) {
-        if (index == skip || !pieces[index].cut.blocking) continue
-        used.add(pieces[index].placement.tileIndex)
-    }
-    return used
-}
-
 private fun paintTone(
     cut: ShapeCut,
     placement: CutoutPlacement,
@@ -208,11 +195,10 @@ private fun paintTone(
 ): FloatArray {
     val src = fit.colorAt(placement)
     if (!correct) return src
-    val center = 1f - (1f - pull) * (1f - pull)
     return floatArrayOf(
-        src[0] + (cut.meanL - src[0]) * center,
-        src[1] + (cut.meanA - src[1]) * center,
-        src[2] + (cut.meanB - src[2]) * center
+        src[0] + boundedDelta(src[0], cut.meanL, pull, TONE_LIMIT_L),
+        src[1] + boundedDelta(src[1], cut.meanA, pull, TONE_LIMIT_C),
+        src[2] + boundedDelta(src[2], cut.meanB, pull, TONE_LIMIT_C)
     )
 }
 
@@ -328,9 +314,17 @@ private class WorkCanvas(val plane: LabPlane, private val edges: FloatArray) {
         val mixed = FloatArray(l.size)
         for (index in mixed.indices) {
             val err = fine[index] * 0.35f + blurred[index] * 0.65f
-            mixed[index] = err * (0.2f + 2.2f * edges[index] / scale)
+            mixed[index] = err * (0.2f + 2.2f * edges[index] / scale) * skinBoost(index)
         }
         return mixed
+    }
+
+    private fun skinBoost(index: Int): Float {
+        val tone = plane.l[index]
+        if (tone !in 0.4f..0.9f) return 1f
+        val greenRed = plane.a[index]
+        val blueYellow = plane.b[index]
+        return if (greenRed in 0f..0.1f && blueYellow in -0.02f..0.1f) 1.7f else 1f
     }
 
     private fun edgeScale(): Float {

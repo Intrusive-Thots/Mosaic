@@ -16,7 +16,10 @@ internal class TileSwatch(
     val l: FloatArray,
     val a: FloatArray,
     val b: FloatArray,
-    val spread: FloatArray
+    val spread: FloatArray,
+    val salientU: Float,
+    val salientV: Float,
+    val harmonics: FloatArray
 )
 
 internal fun buildSwatches(thumbnails: List<PixelImage>, descriptors: List<TileDescriptor>): List<TileSwatch> {
@@ -32,6 +35,7 @@ internal class ShapeFit(
     private val probes: ProbeCounter,
     private val topK: TopK
 ) {
+    private val handful = HandfulPenalty()
     var comparisons: Long = 0
 
     fun choose(
@@ -73,10 +77,11 @@ internal class ShapeFit(
             val tile = topK.ids[slot]
             if (tile == avoid || tile in taken) continue
             val penalty = tracker.penalty(tile) + jitter(config.randomSeed, ordinal, tile)
-            val scored = scoreTile(swatches[tile], cut, angles, span, penalty, solve)
+            val scored = scoreTile(swatches[tile], cut, angles, span, penalty, solve, config.collage.shapeWeight)
+            val diverse = scored.score + handful.cost(tile, cut.centerX, cut.centerY, scored.u, scored.v)
             comparisons++
-            if (scored.score < bestScore) {
-                bestScore = scored.score
+            if (diverse < bestScore) {
+                bestScore = diverse
                 bestTile = tile
                 bestAngle = scored.angle
                 bestU = scored.u
@@ -104,6 +109,7 @@ internal class ShapeFit(
         val column = (placement.x * GRID).toInt().coerceIn(0, GRID - 1)
         val row = (placement.y * GRID).toInt().coerceIn(0, GRID - 1)
         tracker.record(placement.tileIndex, column, row)
+        handful.note(placement.tileIndex, placement.x, placement.y, placement.cropU, placement.cropV)
     }
 
     fun colorAt(placement: CutoutPlacement): FloatArray {
@@ -121,9 +127,28 @@ private fun scoreTile(
     angles: FloatArray,
     span: Float,
     penalty: Float,
-    solve: Boolean
+    solve: Boolean,
+    shapeWeight: Float
 ): Scored {
-    if (cut.blocking && cut.spread < BUSY_SPREAD) return scoreFlat(swatch, cut, penalty, solve)
+    val shape = harmonicDistance(cut.harmonics, swatch.harmonics) * shapeWeight * SHAPE_SCALE
+    val coarse = if (cut.blocking && cut.spread < BUSY_SPREAD) {
+        scoreFlat(swatch, cut, penalty, solve, shape)
+    } else {
+        val searched = searchAnchors(swatch, cut, angles, span, penalty, solve, shape)
+        refineCrop(swatch, cut, searched, span, penalty, solve, shape)
+    }
+    return phaseSlide(swatch, cut, coarse, span, penalty, solve, shape)
+}
+
+private fun searchAnchors(
+    swatch: TileSwatch,
+    cut: ShapeCut,
+    angles: FloatArray,
+    span: Float,
+    penalty: Float,
+    solve: Boolean,
+    shape: Float
+): Scored {
     var best = Scored(Float.POSITIVE_INFINITY, 0f, 0.5f, 0.5f)
     for (angle in angles) {
         val radians = Math.toRadians(angle.toDouble())
@@ -131,12 +156,14 @@ private fun scoreTile(
         val turnSin = sin(radians).toFloat()
         for (anchorV in ANCHORS) {
             for (anchorU in ANCHORS) {
-                val score = sampleError(swatch, cut, turnCos, turnSin, anchorU, anchorV, span, solve) + penalty
-                if (score < best.score) best = Scored(score, angle, anchorU, anchorV)
+                val score = anchorScore(swatch, cut, turnCos, turnSin, anchorU, anchorV, span, penalty, solve, shape)
+                best = prefer(best, score, angle, anchorU, anchorV)
             }
         }
+        val face = anchorScore(swatch, cut, turnCos, turnSin, swatch.salientU, swatch.salientV, span, penalty, solve, shape)
+        best = prefer(best, face, angle, swatch.salientU, swatch.salientV)
     }
-    return refineCrop(swatch, cut, best, span, penalty, solve)
+    return best
 }
 
 /** Slides the winning crop so the piece shows the matching part of the source, not a flat patch. */
@@ -146,7 +173,8 @@ private fun refineCrop(
     best: Scored,
     span: Float,
     penalty: Float,
-    solve: Boolean
+    solve: Boolean,
+    shape: Float
 ): Scored {
     if (best.score == Float.POSITIVE_INFINITY) return best
     val radians = Math.toRadians(best.angle.toDouble())
@@ -155,13 +183,79 @@ private fun refineCrop(
     var chosen = best
     for (shiftV in CROP_SHIFTS) {
         for (shiftU in CROP_SHIFTS) {
-            val score = sampleError(
-                swatch, cut, turnCos, turnSin, best.u + shiftU, best.v + shiftV, span, solve
-            ) + penalty
-            if (score < chosen.score) chosen = Scored(score, best.angle, best.u + shiftU, best.v + shiftV)
+            val u = best.u + shiftU
+            val v = best.v + shiftV
+            val score = anchorScore(swatch, cut, turnCos, turnSin, u, v, span, penalty, solve, shape)
+            if (score < chosen.score) chosen = Scored(score, best.angle, u, v)
         }
     }
     return chosen
+}
+
+/**
+ * After the coarse color, scale, and rotation pick, slide the crop by the phase-correlation
+ * peak so the patch lines up with something recognizable in the source.
+ */
+private fun phaseSlide(
+    swatch: TileSwatch,
+    cut: ShapeCut,
+    best: Scored,
+    span: Float,
+    penalty: Float,
+    solve: Boolean,
+    shape: Float
+): Scored {
+    if (best.score == Float.POSITIVE_INFINITY || cut.gridL.size < PATCH_EDGE * PATCH_EDGE) return best
+    val (shiftU, shiftV) = phaseOffset(cut.gridL, sourcePatch(swatch, best.u, best.v, span))
+    if (shiftU == 0f && shiftV == 0f) return best
+    val u = (best.u + shiftU * span).coerceIn(0.08f, 0.92f)
+    val v = (best.v + shiftV * span).coerceIn(0.08f, 0.92f)
+    val radians = Math.toRadians(best.angle.toDouble())
+    val turnCos = cos(radians).toFloat()
+    val turnSin = sin(radians).toFloat()
+    val score = anchorScore(swatch, cut, turnCos, turnSin, u, v, span, penalty, solve, shape)
+    return if (score < best.score) Scored(score, best.angle, u, v) else best
+}
+
+private fun sourcePatch(swatch: TileSwatch, anchorU: Float, anchorV: Float, span: Float): FloatArray {
+    val patch = FloatArray(PATCH_EDGE * PATCH_EDGE)
+    val step = span / PATCH_EDGE.toFloat()
+    val originU = anchorU - span * 0.5f
+    val originV = anchorV - span * 0.5f
+    for (y in 0 until PATCH_EDGE) {
+        for (x in 0 until PATCH_EDGE) {
+            val color = swatchAt(swatch, originU + (x + 0.5f) * step, originV + (y + 0.5f) * step)
+            patch[y * PATCH_EDGE + x] = color[0]
+        }
+    }
+    return patch
+}
+
+private fun anchorScore(
+    swatch: TileSwatch,
+    cut: ShapeCut,
+    turnCos: Float,
+    turnSin: Float,
+    anchorU: Float,
+    anchorV: Float,
+    span: Float,
+    penalty: Float,
+    solve: Boolean,
+    shape: Float
+): Float {
+    val color = sampleError(swatch, cut, turnCos, turnSin, anchorU, anchorV, span, solve)
+    if (color == Float.POSITIVE_INFINITY) return color
+    val subject = subjectCost(swatch.salientU, swatch.salientV, anchorU, anchorV, span, sourceBusy(swatch))
+    return color + penalty + shape + subject
+}
+
+private fun prefer(best: Scored, score: Float, angle: Float, anchorU: Float, anchorV: Float): Scored {
+    if (score >= best.score) return best
+    return Scored(score, angle, anchorU, anchorV)
+}
+
+private fun sourceBusy(swatch: TileSwatch): Boolean {
+    return swatch.spread[swatchCell(swatch, swatch.salientU, swatch.salientV)] > SUBJECT_SPREAD
 }
 
 private fun sampleError(
@@ -222,16 +316,32 @@ private fun rawError(
 
 private class WindowColor(val l: Float, val a: Float, val b: Float, val spread: Float)
 
-private fun scoreFlat(swatch: TileSwatch, cut: ShapeCut, penalty: Float, solve: Boolean): Scored {
+private fun scoreFlat(swatch: TileSwatch, cut: ShapeCut, penalty: Float, solve: Boolean, shape: Float): Scored {
     var best = Scored(Float.POSITIVE_INFINITY, 0f, 0.5f, 0.5f)
+    val busy = sourceBusy(swatch)
     for (anchorV in FLAT_ANCHORS) {
         for (anchorU in FLAT_ANCHORS) {
-            val window = windowColor(swatch, anchorU, anchorV)
-            val score = flatScore(window, cut, penalty, solve)
-            if (score < best.score) best = Scored(score, 0f, anchorU, anchorV)
+            best = preferFlat(best, swatch, cut, anchorU, anchorV, penalty, solve, shape, busy)
         }
     }
-    return best
+    return preferFlat(best, swatch, cut, swatch.salientU, swatch.salientV, penalty, solve, shape, busy)
+}
+
+private fun preferFlat(
+    best: Scored,
+    swatch: TileSwatch,
+    cut: ShapeCut,
+    anchorU: Float,
+    anchorV: Float,
+    penalty: Float,
+    solve: Boolean,
+    shape: Float,
+    busy: Boolean
+): Scored {
+    val window = windowColor(swatch, anchorU, anchorV)
+    val score = flatScore(window, cut, penalty, solve) + shape +
+        subjectCost(swatch.salientU, swatch.salientV, anchorU, anchorV, FLAT_SPAN, busy)
+    return prefer(best, score, 0f, anchorU, anchorV)
 }
 
 private fun flatScore(window: WindowColor, cut: ShapeCut, penalty: Float, solve: Boolean): Float {
@@ -327,7 +437,10 @@ private fun swatchOf(image: PixelImage, descriptor: TileDescriptor): TileSwatch 
     }
     val spread = FloatArray(grid * grid)
     fillSwatch(l, a, b, l2, spread, weight, grid, descriptor)
-    return TileSwatch(grid, l, a, b, spread)
+    val focus = focusCell(spread, l, a, b)
+    val salientU = (focus % grid).toFloat() / (grid - 1).toFloat()
+    val salientV = (focus / grid).toFloat() / (grid - 1).toFloat()
+    return TileSwatch(grid, l, a, b, spread, salientU, salientV, blobHarmonics(spread, l, a, b, grid, focus))
 }
 
 private fun fillSwatch(
@@ -404,6 +517,8 @@ private const val GRID = 12
 private const val FLAT_SPAN = 0.2f
 private const val FLAT_TEXTURE = 1.2f
 private const val BUSY_SPREAD = 0.04f
+private const val SUBJECT_SPREAD = 0.004f
+private const val SHAPE_SCALE = 0.08f
 private val ANCHORS = floatArrayOf(0.34f, 0.5f, 0.66f)
 private val CROP_SHIFTS = floatArrayOf(-0.10f, -0.05f, 0f, 0.05f, 0.10f)
 private val FLAT_ANCHORS = floatArrayOf(0.24f, 0.4f, 0.56f, 0.72f)
