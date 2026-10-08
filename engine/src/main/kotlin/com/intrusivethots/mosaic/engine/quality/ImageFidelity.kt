@@ -6,6 +6,8 @@ import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
 import com.intrusivethots.mosaic.engine.image.sampleBilinear
 import com.intrusivethots.mosaic.engine.match.CutoutPlacement
 import com.intrusivethots.mosaic.engine.match.PieceMask
+import com.intrusivethots.mosaic.engine.match.cropFrame
+import com.intrusivethots.mosaic.engine.match.sourceSample
 import com.intrusivethots.mosaic.engine.render.solidPaper
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
 import kotlin.math.abs
@@ -516,7 +518,9 @@ private fun pieceStructure(
             }
             inside++
             drawn[index] = renderedLuma(rendered, nx, ny)
-            sharp[index] = sourceLuma(source, descriptor, placement, u, v, turnCos, turnSin)
+            sharp[index] = sourceLuma(
+                source, descriptor, placement, rendered.width, rendered.height, nx, ny, turnCos, turnSin
+            )
         }
     }
     if (inside < 12 || maskSamples == 0 || inside < maskSamples * 0.4f) return null
@@ -533,21 +537,19 @@ private fun sourceLuma(
     source: PixelImage,
     descriptor: TileDescriptor,
     placement: CutoutPlacement,
-    u: Float,
-    v: Float,
+    outputWidth: Int,
+    outputHeight: Int,
+    nx: Float,
+    ny: Float,
     turnCos: Float,
     turnSin: Float
 ): Float {
-    val localX = u - 0.5f
-    val localY = v - 0.5f
-    val rotatedX = localX * turnCos - localY * turnSin
-    val rotatedY = localX * turnSin + localY * turnCos
-    val su = (placement.cropU + rotatedX * placement.cropSpan).coerceIn(0f, 1f)
-    val sv = (placement.cropV + rotatedY * placement.cropSpan).coerceIn(0f, 1f)
-    val spanX = (descriptor.contentRight - descriptor.contentLeft).coerceAtLeast(0.01f)
-    val spanY = (descriptor.contentBottom - descriptor.contentTop).coerceAtLeast(0.01f)
-    val sx = (descriptor.contentLeft + su * spanX) * (source.width - 1).coerceAtLeast(1)
-    val sy = (descriptor.contentTop + sv * spanY) * (source.height - 1).coerceAtLeast(1)
+    val mask = placement.mask ?: return 0f
+    val frame = cropFrame(placement, descriptor, source.width, source.height, outputWidth, outputHeight)
+    val (sx, sy) = sourceSample(
+        frame, descriptor, source.width, source.height, mask,
+        outputWidth, outputHeight, nx * outputWidth, ny * outputHeight, turnCos, turnSin
+    )
     return OkLab.fromArgb(source.sampleBilinear(sx, sy)).l
 }
 

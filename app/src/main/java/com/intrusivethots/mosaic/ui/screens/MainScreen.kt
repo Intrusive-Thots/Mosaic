@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -53,6 +54,9 @@ import com.intrusivethots.mosaic.ui.components.SettingsDialog
 import com.intrusivethots.mosaic.ui.components.ShapeEditor
 import com.intrusivethots.mosaic.ui.components.StampsScreen
 import com.intrusivethots.mosaic.ui.components.StudioScreen
+import com.intrusivethots.mosaic.ui.inspect.ResultInspector
+import com.intrusivethots.mosaic.ui.state.CollageEdit
+import com.intrusivethots.mosaic.ui.state.GenerationUiState
 import com.intrusivethots.mosaic.ui.theme.AccentAmber
 import com.intrusivethots.mosaic.ui.theme.AccentPink
 import com.intrusivethots.mosaic.ui.theme.AccentPurple
@@ -140,7 +144,7 @@ fun MainScreen(viewModel: MainViewModel) {
         snackbarHost = { SnackbarHost(snackbar) },
         containerColor = DeepBackground,
         topBar = {
-            TopAppBar(
+            if (!state.inspectOpen) TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
@@ -156,10 +160,12 @@ fun MainScreen(viewModel: MainViewModel) {
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
             )
         },
-        bottomBar = { MosaicBottomBar(tab, onSelect = { selected ->
-            tab = selected
-            if (selected == 2) viewModel.refreshProjects()
-        }) }
+        bottomBar = {
+            if (!state.inspectOpen) MosaicBottomBar(tab, onSelect = { selected ->
+                tab = selected
+                if (selected == 2) viewModel.refreshProjects()
+            })
+        }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when (tab) {
@@ -211,8 +217,38 @@ fun MainScreen(viewModel: MainViewModel) {
                 2 -> ProjectLibraryScreen(state.projects, viewModel::deleteProject, viewModel::exportProjectToGallery)
                 else -> SettingsDialog(state.apiKey, state.keystoreAvailable, viewModel::saveApiKey)
             }
+            if (state.inspectOpen) InspectorOverlay(state, viewModel)
         }
     }
+}
+
+@Composable
+private fun InspectorOverlay(state: com.intrusivethots.mosaic.ui.state.MosaicUiState, viewModel: MainViewModel) {
+    val path = state.inspectPath
+    if (path == null) {
+        Box(Modifier.fillMaxSize().background(DeepBackground), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = AccentAmber)
+        }
+        return
+    }
+    val running = state.generation as? GenerationUiState.Running
+    ResultInspector(
+        imagePath = path,
+        imageToken = state.inspectToken,
+        busy = running != null,
+        progress = running?.fraction ?: 0f,
+        progressLabel = running?.label ?: "",
+        seed = state.config.randomSeed,
+        colorStrength = state.config.colorMatchWeight,
+        canUndo = state.canUndoEdit,
+        canRedo = state.canRedoEdit,
+        onClose = viewModel::closeInspector,
+        onRegenerate = viewModel::regenerateRegion,
+        onCancel = viewModel::cancelGeneration,
+        onUndo = { viewModel.onCollageEdit(CollageEdit.Undo) },
+        onRedo = { viewModel.onCollageEdit(CollageEdit.Redo) },
+        sourceAt = viewModel::sourceLabel
+    )
 }
 
 private fun shapeEditor(viewModel: MainViewModel) = ShapeEditor(
@@ -229,5 +265,6 @@ private fun shapeEditor(viewModel: MainViewModel) = ShapeEditor(
     onRemoveStamp = viewModel::removeCustomStamp,
     onCollageStyle = viewModel::applyCollageStyle,
     onStack = viewModel::applyStack,
-    onEdit = viewModel::onCollageEdit
+    onEdit = viewModel::onCollageEdit,
+    onInspect = viewModel::openInspector
 )
