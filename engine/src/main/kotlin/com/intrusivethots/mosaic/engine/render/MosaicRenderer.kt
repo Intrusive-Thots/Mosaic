@@ -143,7 +143,7 @@ class MosaicRenderer(
         }
     }
 
-    private fun pixelAt(
+    internal fun pixelAt(
         plan: MosaicPlan,
         descriptors: List<TileDescriptor>,
         thumbnails: List<PixelImage>,
@@ -354,7 +354,7 @@ class MosaicRenderer(
         return ((red / n).toInt() shl 16) or ((green / n).toInt() shl 8) or (blue / n).toInt() or OPAQUE
     }
 
-    private fun orientationCode(plan: MosaicPlan, cell: Int): Int {
+    internal fun orientationCode(plan: MosaicPlan, cell: Int): Int {
         if (plan.orientations.isEmpty() || cell !in plan.orientations.indices) return 0
         return plan.orientations[cell].toInt() and 0xFF
     }
