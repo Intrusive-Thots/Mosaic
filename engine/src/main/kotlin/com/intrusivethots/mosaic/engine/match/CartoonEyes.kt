@@ -19,6 +19,7 @@ internal object CartoonEyes {
         val found = ArrayList<Hit>()
         pairKind(luma, fitted.width, fitted.height, dark = true, found)
         pairKind(luma, fitted.width, fitted.height, dark = false, found)
+        found.addAll(dotPairs(image))
         found.sortByDescending { it.score }
         val kept = ArrayList<FaceBox>()
         for (hit in found) {
@@ -29,6 +30,78 @@ internal object CartoonEyes {
             if (kept.size == MAX_FACES) break
         }
         return kept
+    }
+
+/**
+     * Full-body western cartoons shrink to a couple of black pupils.
+     * Those dots are smaller than a blob eye, so they are paired on their own.
+     */
+    private fun dotPairs(image: PixelImage): List<Hit> {
+        val fitted = image.downscaleLongEdge(DOT_EDGE)
+        val luma = lumaOf(fitted)
+        val width = fitted.width
+        val height = fitted.height
+        val dots = ArrayList<Eye>()
+        val yLimit = (height * 0.45f).toInt().coerceAtMost(height - 2)
+        for (y in 1 until yLimit) {
+            val row = y * width
+            for (x in 1 until width - 1) {
+                val value = luma[row + x]
+                if (value < 0f || value > DOT_LUMA) continue
+                if (value > luma[row + x - 1] || value > luma[row + x + 1]) continue
+                if (value > luma[row - width + x] || value > luma[row + width + x]) continue
+                if (darkRun(luma, width, height, x, y) > 3) continue
+                dots.add(Eye(x.toFloat(), y.toFloat(), 2f, 1, value))
+            }
+        }
+        val hits = ArrayList<Hit>()
+        for (i in dots.indices) {
+            for (j in i + 1 until dots.size) {
+                val hit = dotPair(luma, width, height, dots[i], dots[j]) ?: continue
+                hits.add(hit)
+            }
+        }
+        return hits
+    }
+
+    private fun dotPair(luma: FloatArray, width: Int, height: Int, left: Eye, right: Eye): Hit? {
+        val first = if (left.x <= right.x) left else right
+        val second = if (left.x <= right.x) right else left
+        val dx = second.x - first.x
+        val dy = abs(first.y - second.y)
+        if (dx < 4f || dx > width * 0.36f || dy > 3f) return null
+        val bridgeX = ((first.x + second.x) * 0.5f).toInt().coerceIn(0, width - 1)
+        val bridgeY = ((first.y + second.y) * 0.5f).toInt().coerceIn(0, height - 1)
+        val bridge = luma[bridgeY * width + bridgeX]
+        val eyes = (first.tone + second.tone) * 0.5f
+        if (bridge < eyes + 0.18f || bridge < 0.35f) return null
+        val padX = dx * 0.5f
+        val padY = max(dx * 0.65f, 4f)
+        val face = FaceBox(
+            ((first.x - padX) / width).coerceIn(0f, 1f),
+            ((first.y - padY) / height).coerceIn(0f, 1f),
+            ((second.x + padX) / width).coerceIn(0f, 1f),
+            ((second.y + padY * 0.8f) / height).coerceIn(0f, 1f)
+        )
+        if (face.width < 0.025f || face.height < 0.02f) return null
+        return Hit(0.55f + (DOT_LUMA - eyes), face)
+    }
+
+    private fun darkRun(luma: FloatArray, width: Int, height: Int, x: Int, y: Int): Int {
+        var run = 1
+        var left = x - 1
+        while (left >= 0 && luma[y * width + left] in 0f..DOT_LUMA) {
+            run++
+            left--
+        }
+        var right = x + 1
+        while (right < width && luma[y * width + right] in 0f..DOT_LUMA) {
+            run++
+            right++
+        }
+        if (y > 0 && luma[(y - 1) * width + x] in 0f..DOT_LUMA) run++
+        if (y + 1 < height && luma[(y + 1) * width + x] in 0f..DOT_LUMA) run++
+        return run
     }
 
     private fun pairKind(luma: FloatArray, width: Int, height: Int, dark: Boolean, into: MutableList<Hit>) {
@@ -287,6 +360,8 @@ internal object CartoonEyes {
     private class Hit(val score: Float, val box: FaceBox)
 
     private const val DETECT_EDGE = 150
+    private const val DOT_EDGE = 240
+    private const val DOT_LUMA = 0.2f
     private const val SYMMETRY = 0.35f
     private const val MAX_FACES = 2
 }

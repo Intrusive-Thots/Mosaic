@@ -48,16 +48,17 @@ internal class ShapeFit(
         ordinal: Int,
         avoid: Int = -1,
         commit: Boolean = true,
-        taken: Set<Int> = emptySet()
+        taken: Set<Int> = emptySet(),
+        stackFaces: Boolean = false
     ): CutoutPlacement? {
-        val placement = select(cut, ordinal, avoid, taken)
-            ?: if (taken.isEmpty()) null else select(cut, ordinal, avoid, emptySet())
+        val placement = select(cut, ordinal, avoid, taken, stackFaces)
+            ?: if (taken.isEmpty()) null else select(cut, ordinal, avoid, emptySet(), stackFaces)
         if (placement == null) return null
         if (commit) keep(placement)
         return placement
     }
 
-    private fun select(cut: ShapeCut, ordinal: Int, avoid: Int, taken: Set<Int>): CutoutPlacement? {
+    private fun select(cut: ShapeCut, ordinal: Int, avoid: Int, taken: Set<Int>, stackFaces: Boolean): CutoutPlacement? {
         index.fillCandidates(
             cut.meanL,
             cut.meanA,
@@ -87,7 +88,7 @@ internal class ShapeFit(
             val need = library.minOf { minimumSpan(it, piecePx, edge) }
             if (need > span) span = need.coerceAtMost(1f)
             val scored = scoreTile(swatches[tile], cut, UPRIGHT, span, penalty, solve, config.collage.shapeWeight)
-            val seated = seatOnFace(cut, scored, span, library) ?: continue
+            val seated = seatOnFace(cut, scored, span, library, stackFaces) ?: continue
             val diverse = scored.score + seated.drift * DRIFT +
                 handful.cost(tile, cut.centerX, cut.centerY, seated.u, seated.v)
             comparisons++
@@ -121,13 +122,19 @@ internal class ShapeFit(
         )
     }
 
-    private fun seatOnFace(cut: ShapeCut, scored: Scored, span: Float, library: List<FaceBox>): Seated? {
+    private fun seatOnFace(
+        cut: ShapeCut,
+        scored: Scored,
+        span: Float,
+        library: List<FaceBox>,
+        stackFaces: Boolean
+    ): Seated? {
         var best: Seated? = null
         for (face in library) {
             val clamped = clampToFace(scored.u, scored.v, span, face) ?: continue
             if (!maskCoversFace(cut.mask, face, clamped.first, clamped.second, span)) continue
             val placed = outputFace(cut.mask, face, clamped.first, clamped.second, span)
-            if (crowded(placed)) continue
+            if (!stackFaces && crowded(placed)) continue
             val du = clamped.first - scored.u
             val dv = clamped.second - scored.v
             val drift = du * du + dv * dv

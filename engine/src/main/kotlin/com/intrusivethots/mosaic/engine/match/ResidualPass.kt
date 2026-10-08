@@ -8,6 +8,7 @@ import com.intrusivethots.mosaic.engine.index.TileIndex
 import com.intrusivethots.mosaic.engine.index.TopK
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
 import kotlinx.coroutines.ensureActive
+import java.util.ArrayDeque
 import kotlin.coroutines.coroutineContext
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -177,24 +178,166 @@ private fun sealToFloor(
 ) {
     val floor = pieceFloor(config.collage.minPiece, measureWidth, measureHeight)
     val radius = (floor.shortOfShort * min(measureWidth, measureHeight)).toInt().coerceAtLeast(2)
-    repeat(4) {
-        val buried = findBuried(pieces.map { it.placement.mask }, measureWidth, measureHeight, floor) ?: return
-        var index = pieces.lastIndex
-        while (index >= 0) {
-            if (buried.drop[index]) pieces.removeAt(index)
-            index--
+    var attempt = 0
+    while (attempt < 4) {
+        attempt++
+        val buried = findBuried(pieces.map { it.placement.mask }, measureWidth, measureHeight, floor)
+        if (buried != null) {
+            var index = pieces.lastIndex
+            while (index >= 0) {
+                if (buried.drop[index]) pieces.removeAt(index)
+                index--
+            }
+            val masks = pieces.map { it.placement.mask }
+            val assign = nearestPiece(masks, buried.holes, measureWidth, measureHeight, radius)
+            for (pieceIndex in pieces.indices) {
+                val piece = pieces[pieceIndex]
+                piece.placement = withAbsorbed(
+                    piece.placement, assign, pieceIndex, buried.holes, measureWidth, measureHeight, radius
+                )
+            }
+            val leftover = BooleanArray(buried.holes.size) { hole -> buried.holes[hole] && assign[hole] < 0 }
+            coverHoles(plane, leftover, measureWidth, measureHeight, config, fit, pieces, correct, floor)
+        } else {
+            break
         }
-        val masks = pieces.map { it.placement.mask }
-        val assign = nearestPiece(masks, buried.holes, measureWidth, measureHeight, radius)
-        for (pieceIndex in pieces.indices) {
-            val piece = pieces[pieceIndex]
-            piece.placement = withAbsorbed(
-                piece.placement, assign, pieceIndex, buried.holes, measureWidth, measureHeight, radius
-            )
-        }
-        val leftover = BooleanArray(buried.holes.size) { hole -> buried.holes[hole] && assign[hole] < 0 }
-        coverHoles(plane, leftover, measureWidth, measureHeight, config, fit, pieces, correct, floor)
     }
+    coverOpen(plane, measureWidth, measureHeight, config, fit, pieces, correct, floor)
+    mendSeams(plane, pieces, floor)
+}
+
+private fun mendSeams(plane: LabPlane, pieces: MutableList<PlacedPiece>, floor: PieceFloor) {
+    if (pieces.isEmpty()) return
+    val reach = (floor.shortOfShort * min(plane.width, plane.height)).toInt().coerceIn(2, 6)
+    val (holes, assign) = matchingSeams(plane, pieces.map { it.placement.mask }, reach, SEAM_LIMIT)
+    for (pieceIndex in pieces.indices) {
+        val piece = pieces[pieceIndex]
+        piece.placement = withAbsorbed(piece.placement, assign, pieceIndex, holes, plane.width, plane.height, reach)
+    }
+}
+
+private fun coverOpen(
+    plane: LabPlane,
+    measureWidth: Int,
+    measureHeight: Int,
+    config: MosaicConfig,
+    fit: ShapeFit,
+    pieces: MutableList<PlacedPiece>,
+    correct: Boolean,
+    floor: PieceFloor
+) {
+    if (pieces.isEmpty() || measureWidth < 1 || measureHeight < 1) return
+    val open = BooleanArray(plane.width * plane.height)
+    for (piece in pieces) {
+        val mask = piece.placement.mask ?: continue
+        val x0 = (mask.left * plane.width).toInt().coerceIn(0, plane.width - 1)
+        val x1 = (mask.right * plane.width).toInt().coerceIn(x0, plane.width - 1)
+        val y0 = (mask.top * plane.height).toInt().coerceIn(0, plane.height - 1)
+        val y1 = (mask.bottom * plane.height).toInt().coerceIn(y0, plane.height - 1)
+        for (y in y0..y1) {
+            val row = y * plane.width
+            val ny = (y + 0.5f) / plane.height
+            for (x in x0..x1) {
+                if (mask.contains((x + 0.5f) / plane.width, ny)) open[row + x] = true
+            }
+        }
+    }
+    for (index in open.indices) open[index] = !open[index]
+    val seen = BooleanArray(open.size)
+    val pull = config.colorMatchWeight
+    for (start in open.indices) {
+        if (!open[start] || seen[start]) continue
+        val region = floodOpen(open, seen, start, plane.width, plane.height)
+        val boxArea = (region.maxX - region.minX + 1) * (region.maxY - region.minY + 1)
+        if (region.points.size * 20 < boxArea * 9) continue
+        val cut = holeCut(plane, region.points, region.minX, region.minY, region.maxX, region.maxY)
+        if (cut != null && cut.scale > COVER_SCALE) continue
+        placeCover(plane, cut, fit, pieces, correct, pull, floor)
+    }
+}
+
+private class OpenRegion(val points: ArrayDeque<Int>, val minX: Int, val minY: Int, val maxX: Int, val maxY: Int)
+
+private fun floodOpen(open: BooleanArray, seen: BooleanArray, start: Int, width: Int, height: Int): OpenRegion {
+    val points = ArrayDeque<Int>()
+    val queue = ArrayDeque<Int>()
+    queue.add(start)
+    seen[start] = true
+    var minX = width
+    var minY = height
+    var maxX = 0
+    var maxY = 0
+    while (queue.isNotEmpty()) {
+        val index = queue.removeFirst()
+        points.add(index)
+        val x = index % width
+        val y = index / width
+        if (x < minX) minX = x
+        if (y < minY) minY = y
+        if (x > maxX) maxX = x
+        if (y > maxY) maxY = y
+        offerOpen(open, seen, queue, x + 1, y, width, height)
+        offerOpen(open, seen, queue, x - 1, y, width, height)
+        offerOpen(open, seen, queue, x, y + 1, width, height)
+        offerOpen(open, seen, queue, x, y - 1, width, height)
+    }
+    return OpenRegion(points, minX, minY, maxX, maxY)
+}
+
+private fun offerOpen(
+    open: BooleanArray,
+    seen: BooleanArray,
+    queue: ArrayDeque<Int>,
+    x: Int,
+    y: Int,
+    width: Int,
+    height: Int
+) {
+    if (x !in 0 until width || y !in 0 until height) return
+    val next = y * width + x
+    if (seen[next] || !open[next]) return
+    seen[next] = true
+    queue.add(next)
+}
+
+private fun placeCover(
+    plane: LabPlane,
+    cut: ShapeCut?,
+    fit: ShapeFit,
+    pieces: MutableList<PlacedPiece>,
+    correct: Boolean,
+    pull: Float,
+    floor: PieceFloor
+) {
+    if (cut == null || !measureMask(cut.mask, plane.width, plane.height).meets(floor)) return
+    val chosen = fit.choose(cut, pieces.size, commit = false)
+        ?: fit.choose(cut, pieces.size, commit = false, stackFaces = true)
+        ?: return
+    val tone = paintTone(cut, chosen, fit, correct, pull)
+    if (!correct && toneGap(tone, cut) > RUIN_GAP) return
+    fit.keep(chosen)
+    pieces.add(PlacedPiece(cut, chosen, tone[0], tone[1], tone[2], required = true))
+}
+
+private fun toneGap(tone: FloatArray, cut: ShapeCut): Float {
+    val dl = tone[0] - cut.meanL
+    val da = tone[1] - cut.meanA
+    val db = tone[2] - cut.meanB
+    return sqrt(dl * dl + da * da + db * db)
+}
+
+private fun holeCut(plane: LabPlane, points: ArrayDeque<Int>, minX: Int, minY: Int, maxX: Int, maxY: Int): ShapeCut? {
+    val boxW = maxX - minX + 1
+    val boxH = maxY - minY + 1
+    if (boxW < 1 || boxH < 1) return null
+    val hits = BooleanArray(boxW * boxH)
+    for (index in points) {
+        val x = index % plane.width - minX
+        val y = index / plane.width - minY
+        if (x in 0 until boxW && y in 0 until boxH) hits[y * boxW + x] = true
+    }
+    val box = Box(minX, minY, maxX, maxY)
+    return shapeCut(hits, hits, box, plane, points.size)
 }
 
 private fun coverHoles(
@@ -206,30 +349,33 @@ private fun coverHoles(
     fit: ShapeFit,
     pieces: MutableList<PlacedPiece>,
     correct: Boolean,
-    floor: PieceFloor
+    floor: PieceFloor,
+    minFill: Float = 0f
 ) {
     val short = min(plane.width, plane.height)
     val cell = kotlin.math.ceil((floor.shortOfShort * short).toDouble()).toInt().coerceIn(1, short)
     val columns = (plane.width + cell - 1) / cell
-    val occupied = BooleanArray(columns * ((plane.height + cell - 1) / cell))
+    val rows = (plane.height + cell - 1) / cell
+    val holeCount = IntArray(columns * rows)
+    val seen = IntArray(holeCount.size)
     for (index in holes.indices) {
-        if (!holes[index]) continue
         val x = index % measureWidth * plane.width / measureWidth
         val y = index / measureWidth * plane.height / measureHeight
-        occupied[(x / cell) + (y / cell) * columns] = true
+        val bin = (x / cell).coerceIn(0, columns - 1) + (y / cell).coerceIn(0, rows - 1) * columns
+        seen[bin]++
+        if (holes[index]) holeCount[bin]++
     }
-    val claimed = BooleanArray(occupied.size)
+    val claimed = BooleanArray(holeCount.size)
     val pull = config.colorMatchWeight
-    for (bin in occupied.indices) {
-        if (!occupied[bin] || claimed[bin]) continue
+    for (bin in holeCount.indices) {
+        if (seen[bin] == 0 || holeCount[bin].toFloat() / seen[bin] < minFill) continue
+        if (minFill <= 0f && holeCount[bin] == 0) continue
+        if (claimed[bin]) continue
         val originX = ((bin % columns) * cell).coerceAtMost(plane.width - cell)
         val originY = ((bin / columns) * cell).coerceAtMost(plane.height - cell)
         claimCells(claimed, columns, originX, originY, cell, plane.width, plane.height)
         val cut = cellCut(plane, originX + cell / 2, originY + cell / 2, cell)
-        if (!measureMask(cut.mask, plane.width, plane.height).meets(floor)) continue
-        val chosen = fit.choose(cut, pieces.size) ?: continue
-        val tone = paintTone(cut, chosen, fit, correct, pull)
-        pieces.add(PlacedPiece(cut, chosen, tone[0], tone[1], tone[2], required = true))
+        placeCover(plane, cut, fit, pieces, correct, pull, floor)
     }
 }
 
@@ -650,6 +796,9 @@ private fun meanOf(values: FloatArray): Float {
 
 private class Peak(val index: Int, val score: Float)
 
+private const val COVER_SCALE = 0.07f
+private const val RUIN_GAP = 0.18f
+private const val SEAM_LIMIT = 0.08f
 private const val ACCEPT = 0.012f
 private const val PEAK = 0.035f
 private const val FACE_PX = 44f

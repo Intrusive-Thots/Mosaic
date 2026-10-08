@@ -3,6 +3,7 @@ package com.intrusivethots.mosaic.engine.match
 import com.intrusivethots.mosaic.engine.config.CollageSettings
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sqrt
 
 /**
  * The smallest piece that may remain visible.
@@ -185,12 +186,48 @@ internal fun withAbsorbed(
     return CutoutPlacement(
         placement.tileIndex, placement.x, placement.y, placement.angleDegrees, placement.scale,
         placement.targetL, placement.targetA, placement.targetB, placement.pinned,
-        rebuilt, shifted.first, shifted.second, shifted.third
+        rebuilt, shifted.first, shifted.second, shifted.third,
+        placement.faceLeft, placement.faceTop, placement.faceRight, placement.faceBottom
     )
 }
 
 internal fun cellCut(plane: LabPlane, centerX: Int, centerY: Int, side: Int): ShapeCut {
     return squareCut(plane, centerX, centerY, side)
+}
+
+/** Open pixels within [radius] join a neighbor when the target color stays close. */
+internal fun matchingSeams(
+    plane: LabPlane,
+    masks: List<PieceMask?>,
+    radius: Int,
+    limit: Float
+): Pair<BooleanArray, IntArray> {
+    val width = plane.width
+    val height = plane.height
+    val count = width * height
+    val assign = IntArray(count) { -1 }
+    val dist = IntArray(count) { radius + 1 }
+    val queue = ArrayDeque<Int>()
+    for (index in masks.indices) {
+        val mask = masks[index] ?: continue
+        seedPiece(assign, dist, queue, mask, index, width, height)
+    }
+    while (queue.isNotEmpty()) {
+        val index = queue.removeFirst()
+        val next = dist[index] + 1
+        if (next > radius) continue
+        val x = index % width
+        val y = index / width
+        if (x > 0) offerSeam(plane, assign, dist, queue, index, index - 1, next, limit)
+        if (x + 1 < width) offerSeam(plane, assign, dist, queue, index, index + 1, next, limit)
+        if (y > 0) offerSeam(plane, assign, dist, queue, index, index - width, next, limit)
+        if (y + 1 < height) offerSeam(plane, assign, dist, queue, index, index + width, next, limit)
+    }
+    val holes = BooleanArray(count)
+    for (index in assign.indices) {
+        if (dist[index] in 1..radius) holes[index] = true else assign[index] = -1
+    }
+    return holes to assign
 }
 
 private fun indexBelow(cuts: List<ShapeCut>, plane: LabPlane, floor: PieceFloor): Int {
@@ -321,6 +358,29 @@ private fun offerPiece(assign: IntArray, dist: IntArray, queue: ArrayDeque<Int>,
     dist[index] = next
     assign[index] = owner
     queue.add(index)
+}
+
+private fun offerSeam(
+    plane: LabPlane,
+    assign: IntArray,
+    dist: IntArray,
+    queue: ArrayDeque<Int>,
+    from: Int,
+    index: Int,
+    next: Int,
+    limit: Float
+) {
+    if (dist[index] <= next || labGap(plane, from, index) > limit) return
+    dist[index] = next
+    assign[index] = assign[from]
+    queue.add(index)
+}
+
+private fun labGap(plane: LabPlane, left: Int, right: Int): Float {
+    val dl = plane.l[left] - plane.l[right]
+    val da = plane.a[left] - plane.a[right]
+    val db = plane.b[left] - plane.b[right]
+    return sqrt(dl * dl + da * da + db * db)
 }
 
 private fun rebuildMask(
