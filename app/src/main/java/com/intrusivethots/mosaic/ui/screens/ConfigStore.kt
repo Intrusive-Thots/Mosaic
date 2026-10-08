@@ -84,6 +84,7 @@ internal fun writeMosaicConfig(preferences: SharedPreferences, config: MosaicCon
         .putString("kind", config.mosaicKind.name)
         .putInt("pieces", config.collage.pieceCount)
         .putFloat("smin", config.collage.minScale)
+        .putFloat("mpiece", config.collage.minPiece)
         .putFloat("smax", config.collage.maxScale)
         .putFloat("rdeg", config.collage.rotationRangeDegrees)
         .putFloat("overlap", config.collage.overlap)
@@ -105,6 +106,7 @@ internal fun writeMosaicConfig(preferences: SharedPreferences, config: MosaicCon
 private fun readCollage(preferences: SharedPreferences, base: CollageSettings): CollageSettings = base.copy(
     pieceCount = preferences.getInt("pieces", base.pieceCount),
     minScale = preferences.getFloat("smin", base.minScale),
+    minPiece = preferences.getFloat("mpiece", base.minPiece),
     maxScale = preferences.getFloat("smax", base.maxScale),
     rotationRangeDegrees = preferences.getFloat("rdeg", base.rotationRangeDegrees),
     overlap = preferences.getFloat("overlap", base.overlap),

@@ -38,14 +38,15 @@ internal fun cutTargetShapes(target: PixelImage, settings: CollageSettings): Lis
     val short = min(plane.width, plane.height).toFloat()
     val flatStep = (short * FLAT_FRACTION).toInt().coerceIn(14, (short / 3f).toInt().coerceAtLeast(14))
     val flat = flatCuts(plane, flatStep, budgets.coarse)
-    val detailStep = detailStep(plane, budgets.fine)
-    val detail = if (detailStep < flatStep) {
-        coveredCuts(slic(plane, detailStep, FINE_COMPACT), plane, budgets.fine, DETAIL_GROW, emptyList())
+    val floorPx = (short * sanitizedMinPiece(settings.minPiece)).toInt().coerceAtLeast(4)
+    val detailSize = maxOf(detailStep(plane, budgets.fine), floorPx)
+    val detail = if (detailSize < flatStep) {
+        coveredCuts(slic(plane, detailSize, FINE_COMPACT), plane, budgets.fine, DETAIL_GROW, emptyList())
     } else {
         emptyList()
     }
     val edges = edgeCuts(plane, budgets.edge, DETAIL_GROW)
-    return flat + detail + edges
+    return raiseCuts(flat + detail + edges, plane, settings.minPiece)
 }
 
 private class Budgets(val coarse: Int, val fine: Int, val edge: Int)
