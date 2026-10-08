@@ -11,7 +11,7 @@ internal fun errorBlob(plane: LabPlane, x: Int, y: Int, radius: Int): ShapeCut? 
     val seedL = plane.l[index]
     val seedA = plane.a[index]
     val seedB = plane.b[index]
-    val reach = radius.coerceIn(2, 16)
+    val reach = radius.coerceIn(2, 64)
     val x0 = (x - reach).coerceAtLeast(0)
     val y0 = (y - reach).coerceAtLeast(0)
     val x1 = (x + reach).coerceAtMost(plane.width - 1)

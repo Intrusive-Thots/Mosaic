@@ -77,7 +77,7 @@ Rendering writes scanlines. The default background is the target's mean color, n
 
 A final collage is scaled so its long edge is at least 1600 px on Standard, 2200 on High, and 2800 on Ultra, then clamped to 24 million pixels. Preview and a custom width or height skip that floor. Output above 2.5 million pixels is streamed to a PNG. A size that would break the cell or pixel cap is rejected with the limit on screen. There is no `android:largeHeap`.
 
-Limits: 4 to 4,000 placements, scale from 1.5% to 90% of the target's short side, rotation from 0° to ±180°. The default asks for 480 pieces, from 3% to 16% of the short side. The coarse shapes cover the picture, and the rest of the budget is smaller edge shapes. Quality presets set the collage budget, scale range, and correction strength along with the grid knobs. A style then sets overlap, rotation, and color. Advanced sliders stay behind an Advanced section. Collage mode uses the cutout pool and automatic extraction. Full photos are included only when you turn that on, or when no cutout could be loaded. After a mask is cropped, alpha below 24 is dropped, enclosed holes are filled from the nearest opaque color, specks smaller than 24 pixels are removed, and the outer edge is softened. On the stamp itself, Trim raises the alpha cutoff and crops to the remaining subject. Edit can erase with a finger and apply that soft edge again. The refined mask is stored with the pool. You can add many photos at once; extraction reports progress and can be cancelled. ML Kit still has no person or object labels, and it still needs the on-device model.
+Limits: 4 to 4,000 placements, scale from 1.5% to 90% of the target's short side, rotation from 0° to ±180°. The default asks for 480 pieces, from 3% to 16% of the short side. A piece whose visible short side, after the mask and later overlaps, is under the minimum is not kept: that region is merged into a neighbor or covered by a larger piece. The default minimum is 4.5% of the short side (about 62 px on a 1380 px side), the visible area must cover at least 62% of that square, and the Studio slider runs from 2.5% to 12%. The coarse shapes cover the picture, and the rest of the budget is smaller edge shapes. Quality presets set the collage budget, scale range, and correction strength along with the grid knobs. A style then sets overlap, rotation, and color. Advanced sliders stay behind an Advanced section. Collage mode uses the cutout pool and automatic extraction. Full photos are included only when you turn that on, or when no cutout could be loaded. After a mask is cropped, alpha below 24 is dropped, enclosed holes are filled from the nearest opaque color, specks smaller than 24 pixels are removed, and the outer edge is softened. On the stamp itself, Trim raises the alpha cutoff and crops to the remaining subject. Edit can erase with a finger and apply that soft edge again. The refined mask is stored with the pool. You can add many photos at once; extraction reports progress and can be cancelled. ML Kit still has no person or object labels, and it still needs the on-device model.
 
 ## Quality presets
 
@@ -113,13 +113,13 @@ Cutout collage, after a discarded warmup, on a 160×100 gradient. The coarse pas
 
 | Cutouts | Requested | Placed | Match ms | Render ms | Total ms | Probes | Full scan | Painted |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 200 | 160 | 163 | 415.2 | 21.4 | 439.8 | 13,184 | 384,000 | 100% |
-| 600 | 280 | 259 | 455.4 | 19.6 | 484.6 | 25,310 | 2,016,000 | 100% |
-| 400 | 900 | 807 | 992.2 | 31.6 | 1,031.5 | 74,118 | 4,320,000 | 100% |
+| 200 | 160 | 154 | 449.6 | 20.4 | 474.6 | 13,151 | 384,000 | 100% |
+| 600 | 280 | 240 | 489.7 | 16.4 | 517.4 | 25,228 | 2,016,000 | 100% |
+| 400 | 900 | 283 | 1,119.4 | 16.0 | 1,142.8 | 73,437 | 4,320,000 | 100% |
 
-A hybrid case on the same gradient, 200 cutouts, 160 requested pieces, and a 20×12 grid under the collage, took 387.3 ms and 22,802 probes. It placed 160 shapes.
+A hybrid case on the same gradient, 200 cutouts, 160 requested pieces, and a 20×12 grid under the collage, took 410.2 ms and 22,778 probes. It placed 155 shapes.
 
-Full scan is requested pieces × cutouts × 12 angles. The portrait sample uses 240 cutouts and 320 requested pieces, seed 4, on a flat mean-color background, locked to 280×180 so it lines up with the previous residual file. Correction is off. The shaped run placed 340 pieces and painted 97% of the pixels. The stamp row is the previous placer on this same portrait. Its edge-alignment figure used the edge pixel itself, and its distance scores were not stored. The previous shaped row is the run before flat crops and tone transfer. Its distance was not stored either. The shaped figure is the mean target-edge strength within two pixels of a piece boundary, divided by the picture average. Above 1 means the cuts follow edges. Distance ΔE and distance SSIM compare both images after area-averaging to 64 pixels wide.
+Full scan is requested pieces × cutouts × 12 angles. The portrait sample uses 240 cutouts and 320 requested pieces, seed 4, on a flat mean-color background, locked to 280×180 so it lines up with the previous residual file. Correction is off. The shaped run placed 279 pieces and painted 97% of the pixels. The minimum piece size keeps that count below the request when the budget would otherwise stamp slivers. The stamp row is the previous placer on this same portrait. Its edge-alignment figure used the edge pixel itself, and its distance scores were not stored. The previous shaped row is the run before flat crops and tone transfer. Its distance was not stored either. The shaped figure is the mean target-edge strength within two pixels of a piece boundary, divided by the picture average. Above 1 means the cuts follow edges. Distance ΔE and distance SSIM compare both images after area-averaging to 64 pixels wide.
 
 | | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Alignment | Distance ΔE | Distance SSIM |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -127,20 +127,20 @@ Full scan is requested pieces × cutouts × 12 angles. The portrait sample uses 
 | Previous residual | 0.0334 | 0.6746 | 0.0477 | 0.6779 | 0.0563 | 96% | — | 0.0444 | 0.8026 |
 | Stamp collage | 0.0323 | 0.7045 | 0.0447 | 0.7061 | 0.0527 | 94% | 3.211 | — | — |
 | Previous shaped | 0.0341 | 0.7417 | 0.0488 | 0.7417 | 0.0556 | 100% | 10.4693 | — | — |
-| Shaped collage | 0.0409 | 0.7166 | 0.0563 | 0.7178 | 0.0655 | 97% | 13.9716 | 0.0530 | 0.7313 |
-| Photo textures | 0.0555 | 0.6677 | 0.0820 | 0.6704 | 0.0906 | 97% | 14.3810 | 0.0763 | 0.6041 |
+| Shaped collage | 0.0422 | 0.6960 | 0.0585 | 0.6965 | 0.0672 | 97% | 10.8283 | 0.0550 | 0.7096 |
+| Photo textures | 0.0577 | 0.6724 | 0.0829 | 0.6747 | 0.0904 | 97% | 10.6809 | 0.0773 | 0.6073 |
 
 | | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Alignment | Distance ΔE | Distance SSIM | Generate ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Color only | 0.0422 | 0.7256 | 0.0562 | 0.7266 | 0.0655 | 97% | 13.8355 | 0.0527 | 0.7516 | 1,210 |
-| Shape-aware | 0.0420 | 0.7148 | 0.0569 | 0.7143 | 0.0650 | 97% | 13.8518 | 0.0532 | 0.7339 | 1,176 |
-| Dense 1,200 | 0.0395 | 0.7498 | 0.0565 | 0.7498 | 0.0565 | 100% | 10.7299 | 0.0492 | 0.8182 | 2,631 |
-| Grid under collage | 0.0385 | 0.7192 | 0.0559 | 0.7242 | 0.0653 | 97% | 13.9716 | 0.0503 | 0.7523 | 1,177 |
-| Collage under grid | 0.0217 | 0.3642 | 0.0357 | 0.3301 | 0.0398 | 16% | 13.9716 | 0.0354 | 0.7979 | 1,173 |
+| Color only | 0.0419 | 0.7094 | 0.0566 | 0.7100 | 0.0652 | 97% | 10.7203 | 0.0530 | 0.7423 | 1,197 |
+| Shape-aware | 0.0418 | 0.6989 | 0.0578 | 0.6982 | 0.0659 | 97% | 10.7502 | 0.0539 | 0.7199 | 1,204 |
+| Dense 1,200 | 0.0478 | 0.6763 | 0.0659 | 0.6768 | 0.0652 | 95% | 12.3516 | 0.0606 | 0.6586 | 2,210 |
+| Grid under collage | 0.0399 | 0.7019 | 0.0580 | 0.7060 | 0.0668 | 97% | 10.8283 | 0.0525 | 0.7260 | 1,204 |
+| Collage under grid | 0.0219 | 0.3637 | 0.0357 | 0.3299 | 0.0399 | 16% | 10.8283 | 0.0358 | 0.7940 | 1,200 |
 
-Masked scores count only pixels a cutout painted. Edge ΔE is the mean OKLab distance on the covered pixels whose reference luminance gradient is in the top quarter. On this correction-off portrait, whole ΔE is 0.0409, masked ΔE is 0.0563, luminance SSIM is 0.7166, and distance SSIM is 0.7313 at a distance ΔE of 0.0530. Coverage is 97%. The dense run asks for 1,200 pieces at the High Quality scale range on a 560×360 canvas: whole ΔE 0.0395, SSIM 0.7498, distance ΔE 0.0492, distance SSIM 0.8182, coverage 100%. Shape weight now changes the score. The shape-aware row pays a Fourier penalty the color-only row does not, so the numbers differ. Both still cut the same target shapes. Collage-under-grid paints the grid over the shapes except for a grout gap, so its masked coverage is the grout (16%) and its whole-image SSIM follows the grid.
+Masked scores count only pixels a cutout painted. Edge ΔE is the mean OKLab distance on the covered pixels whose reference luminance gradient is in the top quarter. On this correction-off portrait, whole ΔE is 0.0422, masked ΔE is 0.0585, luminance SSIM is 0.6960, and distance SSIM is 0.7096 at a distance ΔE of 0.0550. Coverage is 97%. The dense run asks for 1,200 pieces at the High Quality scale range on a 560×360 canvas: whole ΔE 0.0478, SSIM 0.6763, distance ΔE 0.0606, distance SSIM 0.6586, coverage 95%. The minimum piece size is why that dense run no longer reaches 1,200 stamps. Shape weight now changes the score. The shape-aware row pays a Fourier penalty the color-only row does not, so the numbers differ. Both still cut the same target shapes. Collage-under-grid paints the grid over the shapes except for a grout gap, so its masked coverage is the grout (16%) and its whole-image SSIM follows the grid.
 
-On the 280×180 face, against the frozen previous residual file: left eye 37.1 → 18.1, right eye 45.1 → 12.8, mouth 18.8 → 19.3, cheek 16.2 → 15.2. Correction is off in this sample, so a small window still picks up source texture. The eyes and the cheek are closer than the residual. The mouth is slightly farther.
+On the 280×180 face, against the frozen previous residual file: left eye 37.1 → 25.8, right eye 45.1 → 21.6, mouth 18.8 → 20.0, cheek 16.2 → 14.8. Correction is off in this sample, so a small window still picks up source texture. The eyes and the cheek are closer than the residual. The mouth is slightly farther.
 
 Those scores are the synthetic portrait the benchmark measures, with correction off. The showcases below use color-corrected mode at strength 0.72. Distance readability area-averages both images to 64 pixels wide. Texture is high-frequency energy, the mean absolute OKLab luminance deviation from a 3×3 box, divided by the same measure on the target. That ratio stays near 1 when a sharp photo and a smeared thumb have similar energy, so it does not say whether a source frame is still recognizable. Piece fidelity does. For each placed piece it compares the rendered pixels to the sharp, ungraded source crop at that crop's own size, using the SSIM contrast and structure terms, and reports the median and the 10th percentile. A smooth grade does not count as lost detail. A blur or an upscale does. The closed-loop row is the previous committed collage. Kept is the engine gate: high-frequency energy of the color-corrected render divided by the same plan rendered with correction off.
 

@@ -21,6 +21,8 @@ import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
 import com.intrusivethots.mosaic.engine.legacy.LegacyRgbMatcher
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
+import com.intrusivethots.mosaic.engine.match.pieceFloor
+import com.intrusivethots.mosaic.engine.match.visibleSizes
 import com.intrusivethots.mosaic.engine.render.MemoryRowSink
 import com.intrusivethots.mosaic.engine.render.MosaicRenderer
 import com.intrusivethots.mosaic.engine.tile.MemoryTileSource
@@ -49,6 +51,7 @@ internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File, 
     writeHybridRow(panelTarget, cutouts, destination, prefix)
     val fullCollage = render(collageTarget, cutouts, currentCollage(FULL_EDGE, HybridStack.CUTOUTS, NORMAL_PIECES), "${prefix}full")
     writePng(fullCollage, listOf(File(destination, "${prefix}cutout-collage-output.png")))
+    writeReviewArtifacts(fullCollage, prefix)
     val dense = render(collageTarget, cutouts, denseCollage(FULL_EDGE), "${prefix}dense")
     writePng(dense, listOf(File(destination, "${prefix}cutout-collage-dense.png")))
     val grid = render(fullTarget, opaque, gridConfig(80, FULL_EDGE))
@@ -150,9 +153,14 @@ private suspend fun reportRead(
     val native = tiles.map { it.loadThumbnail(4096) }
     val fidelity = pieceContentFidelity(image, native, result.descriptors, result.plan.placements)
     val placed = result.plan.placements.size
+    val floor = pieceFloor(config.collage.minPiece, image.width, image.height)
+    val sizes = visibleSizes(result.plan.placements.map { it.mask }, image.width, image.height)
+    val shortMin = sizes.minOfOrNull { it.shortOfShort } ?: 0f
+    val areaMin = sizes.minOfOrNull { it.areaOfImage } ?: 0f
     println(
         "SHOWCASE $label distance ${distance.deltaE} ssim ${distance.ssim} texture $texture " +
-            "placed $placed fidelity ${fidelity.median} p10 ${fidelity.lowDecile}"
+            "placed $placed fidelity ${fidelity.median} p10 ${fidelity.lowDecile} " +
+            "visibleShort $shortMin visibleArea $areaMin floorShort ${floor.shortOfShort} floorArea ${floor.areaOfImage}"
     )
 }
 
@@ -271,6 +279,42 @@ private fun rowOf(images: List<PixelImage>, gap: Int = 12): PixelImage {
         originX += image.width + gap
     }
     return PixelImage(width, height, pixels)
+}
+
+private fun writeReviewArtifacts(image: PixelImage, prefix: String) {
+    val theme = if (prefix.isEmpty()) "naruto" else prefix.removeSuffix("-")
+    val artifacts = File("/opt/cursor/artifacts")
+    artifacts.mkdirs()
+    writeJpeg(image.downscaleLongEdge(300), File(artifacts, "thumb-$theme-300.jpg"))
+    writeJpeg(centerSquare(image, 720), File(artifacts, "crop-$theme-1to1.jpg"))
+    writePng(image, listOf(File(artifacts, "preview-$theme-collage.png")))
+}
+
+private fun centerSquare(image: PixelImage, maxEdge: Int): PixelImage {
+    val side = minOf(image.width, image.height, maxEdge)
+    val x0 = (image.width - side) / 2
+    val y0 = (image.height - side) / 2
+    val pixels = IntArray(side * side)
+    for (y in 0 until side) {
+        System.arraycopy(image.pixels, (y0 + y) * image.width + x0, pixels, y * side, side)
+    }
+    return PixelImage(side, side, pixels)
+}
+
+private fun writeJpeg(image: PixelImage, file: File) {
+    val buffered = java.awt.image.BufferedImage(image.width, image.height, java.awt.image.BufferedImage.TYPE_INT_RGB)
+    val rgb = IntArray(image.pixels.size)
+    for (index in image.pixels.indices) rgb[index] = image.pixels[index] and 0x00FFFFFF
+    buffered.setRGB(0, 0, image.width, image.height, rgb, 0, image.width)
+    val writer = javax.imageio.ImageIO.getImageWritersByFormatName("jpg").next()
+    val param = writer.defaultWriteParam
+    param.compressionMode = javax.imageio.ImageWriteParam.MODE_EXPLICIT
+    param.compressionQuality = 0.9f
+    javax.imageio.stream.FileImageOutputStream(file).use { output ->
+        writer.output = output
+        writer.write(null, javax.imageio.IIOImage(buffered, null, null), param)
+    }
+    writer.dispose()
 }
 
 private fun copyArtifacts(destination: File, prefix: String) {
