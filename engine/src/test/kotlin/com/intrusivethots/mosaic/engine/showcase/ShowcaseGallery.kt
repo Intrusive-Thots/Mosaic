@@ -84,9 +84,13 @@ private suspend fun writeShapeRow(
     destination: File,
     prefix: String
 ) {
-    val colorOnly = render(target, cutouts, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 480).shape(0f))
-    val shaped = render(target, cutouts, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 480).shape(0.85f))
-    val strip = rowOf(listOf(target.fitted(shaped), colorOnly, shaped))
+    val blockedIn = currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 160).let { config ->
+        config.copy(collage = config.collage.copy(minScale = 0.08f, maxScale = 0.2f, overlap = 0.2f))
+    }
+    val detailed = currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 720)
+    val large = render(target, cutouts, blockedIn)
+    val fine = render(target, cutouts, detailed)
+    val strip = rowOf(listOf(target.fitted(fine), large, fine))
     writePng(strip.downscaleLongEdge(STRIP_EDGE), listOf(File(destination, "${prefix}cutout-shape-compare.png")))
 }
 
@@ -190,8 +194,6 @@ private fun currentCollage(edge: Int, stack: HybridStack, pieces: Int) = MosaicC
         stack = stack
     )
 )
-
-private fun MosaicConfig.shape(weight: Float) = copy(collage = collage.copy(shapeWeight = weight))
 
 private fun MosaicConfig.stack(stack: HybridStack) = copy(collage = collage.copy(stack = stack))
 

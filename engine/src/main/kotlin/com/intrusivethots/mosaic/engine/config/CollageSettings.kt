@@ -2,7 +2,7 @@ package com.intrusivethots.mosaic.engine.config
 
 enum class MosaicKind(val label: String) {
     GRID("Grid mosaic"),
-    COLLAGE("Cutout collage")
+    COLLAGE("Shaped collage")
 }
 
 enum class CollageBackground(val label: String) {

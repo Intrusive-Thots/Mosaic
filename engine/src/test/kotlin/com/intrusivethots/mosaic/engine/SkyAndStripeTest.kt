@@ -6,8 +6,12 @@ import com.intrusivethots.mosaic.engine.config.CollageSettings
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.MosaicKind
 import com.intrusivethots.mosaic.engine.config.RenderMode
+import com.intrusivethots.mosaic.engine.config.OutputLayout
 import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
 import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.quality.pieceBoundaryAlignment
+import com.intrusivethots.mosaic.engine.render.MemoryRowSink
+import com.intrusivethots.mosaic.engine.render.MosaicRenderer
 import com.intrusivethots.mosaic.engine.tile.MemoryTileSource
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -49,10 +53,7 @@ class SkyAndStripeTest {
         val blue = argb(36, 72, 210)
         val tiles = (0 until 4).map { MemoryTileSource(blob(orange, it), "orange-$it") } +
             (0 until 4).map { MemoryTileSource(blob(blue, it + 4), "blue-$it") }
-        val result = GenerationCoordinator().generate(
-            target = split(96, 64, orange, blue),
-            tiles = tiles,
-            config = MosaicConfig(
+        val config = MosaicConfig(
                 mosaicKind = MosaicKind.COLLAGE,
                 renderMode = RenderMode.ORIGINAL,
                 colorMatchWeight = 0f,
@@ -72,7 +73,11 @@ class SkyAndStripeTest {
                     shapeWeight = 0f,
                     refineSteps = 0
                 )
-            ),
+            )
+        val result = GenerationCoordinator().generate(
+            target = split(96, 64, orange, blue),
+            tiles = tiles,
+            config = config,
             preview = true
         )
         val top = result.plan.placements.filter { it.y < 0.42f }
@@ -82,6 +87,20 @@ class SkyAndStripeTest {
         assertTrue(bottom.size >= 2, "blue half was not rebuilt: $note")
         assertTrue(top.all { it.tileIndex < 4 }, "orange half used another color: $note")
         assertTrue(bottom.all { it.tileIndex >= 4 }, "blue half used another color: $note")
+        val image = result.image ?: error("missing collage")
+        val owners = IntArray(image.width * image.height) { -1 }
+        MosaicRenderer().render(
+            result.plan,
+            result.descriptors,
+            tiles.map { it.loadThumbnail(64) },
+            OutputLayout(1, 1, image.width, image.height, false),
+            config,
+            MemoryRowSink(image.width, image.height),
+            split(96, 64, orange, blue),
+            owners = owners
+        )
+        val alignment = pieceBoundaryAlignment(owners, image.width, image.height, split(96, 64, orange, blue))
+        assertTrue(alignment > 1.4, "piece boundaries missed the color split: $alignment")
     }
 }
 

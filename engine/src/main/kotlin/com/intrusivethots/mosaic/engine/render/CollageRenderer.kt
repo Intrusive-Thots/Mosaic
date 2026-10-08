@@ -25,6 +25,7 @@ class CollageRenderer {
         target: PixelImage?,
         sink: RowSink,
         coverage: BooleanArray? = null,
+        owners: IntArray? = null,
         onProgress: (Float) -> Unit = {}
     ) {
         val width = layout.width
@@ -40,10 +41,18 @@ class CollageRenderer {
             if (y % 8 == 0) coroutineContext.ensureActive()
             paintBackground(row, y, width, height, target, useTarget, mean)
             gate.prepare(y, width)
-            for (sprite in sprites) {
+            for (index in sprites.indices) {
+                val sprite = sprites[index]
+                if (sprite.placement.mask != null) {
+                    paintShapeRow(
+                        row, y, width, height, sprite.source, sprite.descriptor, sprite.placement,
+                        config, target, coverage, owners, index
+                    )
+                    continue
+                }
                 if (config.collage.separatePieces) paintShadow(row, y, sprite, width)
                 if (y < sprite.draw.top || y > sprite.draw.bottom) continue
-                paintSprite(row, y, sprite, config, coverage, width, gate)
+                paintSprite(row, y, sprite, config, coverage, width, gate, owners, index)
             }
             sink.writeRow(y, row)
             val percent = ((y + 1) * 100) / height
@@ -61,7 +70,9 @@ class CollageRenderer {
         config: MosaicConfig,
         coverage: BooleanArray?,
         width: Int,
-        gate: CloserGate? = null
+        gate: CloserGate? = null,
+        owners: IntArray? = null,
+        owner: Int = -1
     ) {
         val start = sprite.draw.left
         val end = sprite.draw.right
@@ -72,6 +83,7 @@ class CollageRenderer {
             val blended = srcOver(row[x], styled)
             if (gate != null && !gate.allows(x, blended)) continue
             if (coverage != null) coverage[y * width + x] = true
+            if (owners != null) owners[y * width + x] = owner
             row[x] = blended
         }
     }
@@ -84,13 +96,22 @@ class CollageRenderer {
         height: Int
     ): List<Sprite> {
         val sprites = ArrayList<Sprite>(plan.placements.size)
+        val paper = HashMap<Int, PixelImage>()
         for (placement in plan.placements) {
             val tile = placement.tileIndex
             if (tile !in descriptors.indices || tile !in thumbnails.indices) continue
-            val source = thumbnails[tile]
+            val source = if (placement.mask != null) {
+                paper.getOrPut(tile) { solidPaper(thumbnails[tile]) }
+            } else {
+                thumbnails[tile]
+            }
             val descriptor = descriptors[tile]
-            val draw = pieceDraw(placement, descriptor, source.width, source.height, width, height)
-            sprites.add(Sprite(descriptor, source, draw, placement.targetL, placement.targetA, placement.targetB))
+            val draw = if (placement.mask != null) {
+                maskSpan(placement.mask, width, height)
+            } else {
+                pieceDraw(placement, descriptor, source.width, source.height, width, height)
+            }
+            sprites.add(Sprite(descriptor, source, draw, placement))
         }
         return sprites
     }
@@ -139,14 +160,20 @@ class CollageRenderer {
         if (alpha <= TileAnalyzer.ALPHA_THRESHOLD) return 0
         if (config.collage.outline && alpha < 220) return (alpha shl 24) or OUTLINE
         val withAlpha = (sampled and 0x00FFFFFF) or (alpha shl 24)
-        return recolor(withAlpha, sprite, config.renderMode, config.colorMatchWeight)
+        return recolor(withAlpha, sprite.placement, sprite.descriptor, config.renderMode, config.colorMatchWeight)
     }
 
     /**
      * Shifts chroma toward the covered target and moves luminance only part of the way,
      * so the cutout's own shading stays visible. Strength 0 leaves the pixel unchanged.
      */
-    private fun recolor(argb: Int, sprite: Sprite, mode: RenderMode, strength: Float): Int {
+    private fun recolor(
+        argb: Int,
+        placement: com.intrusivethots.mosaic.engine.match.CutoutPlacement,
+        descriptor: TileDescriptor,
+        mode: RenderMode,
+        strength: Float
+    ): Int {
         val alpha = argb and OPAQUE_MASK
         if (mode == RenderMode.ORIGINAL || strength <= 0f) return argb
         val lab = OkLab.fromArgb(argb)
@@ -154,12 +181,12 @@ class CollageRenderer {
         val shading = 1f - strength * 0.25f
         val shifted = OkLab.Lab(
             l = (
-                sprite.descriptor.labL +
-                    (sprite.targetL - sprite.descriptor.labL) * strength * 0.4f +
-                    (lab.l - sprite.descriptor.labL) * shading
+                descriptor.labL +
+                    (placement.targetL - descriptor.labL) * strength * 0.4f +
+                    (lab.l - descriptor.labL) * shading
                 ).coerceIn(0f, 1f),
-            a = (lab.a + (sprite.targetA - sprite.descriptor.labA) * chroma).coerceIn(-0.5f, 0.5f),
-            b = (lab.b + (sprite.targetB - sprite.descriptor.labB) * chroma).coerceIn(-0.5f, 0.5f)
+            a = (lab.a + (placement.targetA - descriptor.labA) * chroma).coerceIn(-0.5f, 0.5f),
+            b = (lab.b + (placement.targetB - descriptor.labB) * chroma).coerceIn(-0.5f, 0.5f)
         )
         return (OkLab.toArgb(shifted) and 0x00FFFFFF) or alpha
     }
@@ -250,9 +277,7 @@ class CollageRenderer {
         val descriptor: TileDescriptor,
         val source: PixelImage,
         val draw: PieceDraw,
-        val targetL: Float,
-        val targetA: Float,
-        val targetB: Float
+        val placement: com.intrusivethots.mosaic.engine.match.CutoutPlacement
     )
 
     companion object {

@@ -38,7 +38,13 @@ import com.intrusivethots.mosaic.engine.tile.toKey
 import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 
-typealias PlanEdit = suspend (MosaicPlan, List<TileDescriptor>, PixelImage, TileIndex) -> MosaicPlan
+typealias PlanEdit = suspend (
+    MosaicPlan,
+    List<TileDescriptor>,
+    PixelImage,
+    TileIndex,
+    List<PixelImage>
+) -> MosaicPlan
 
 data class GenerationResult(
     val plan: MosaicPlan,
@@ -97,7 +103,9 @@ class GenerationCoordinator(
             reusePlan, fingerprint, cropped, descriptors, prepared.map { it.thumbnail },
             index, validated, tokens, progress
         )
-        val plan = placementEdit?.invoke(matched.first, descriptors, cropped, index) ?: matched.first
+        val plan = placementEdit?.invoke(
+            matched.first, descriptors, cropped, index, prepared.map { it.thumbnail }
+        ) ?: matched.first
         val comparisons = matched.second.comparisons
         val probes = matched.second.probes
         val solidCells = matched.second.solidCells
@@ -210,6 +218,7 @@ class GenerationCoordinator(
         index,
         config,
         tokens,
+        thumbnails,
         onSnapshot = { placements, label ->
             emitLanding(target, descriptors, thumbnails, config, fingerprint, placements, label, progress)
         },

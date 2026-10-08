@@ -54,10 +54,12 @@ object OkLab {
         dest[offset + 2] = 0.0259040371f * lRoot + 0.7827717662f * mRoot - 0.8086757660f * sRoot
     }
 
-    fun toArgb(lab: Lab, alpha: Int = 255): Int {
-        val lRoot = lab.l + 0.3963377774f * lab.a + 0.2158037573f * lab.b
-        val mRoot = lab.l - 0.1055613458f * lab.a - 0.0638541728f * lab.b
-        val sRoot = lab.l - 0.0894841775f * lab.a - 1.2914855480f * lab.b
+    fun toArgb(lab: Lab, alpha: Int = 255): Int = toArgb(lab.l, lab.a, lab.b, alpha)
+
+    fun toArgb(l: Float, a: Float, b: Float, alpha: Int = 255): Int {
+        val lRoot = l + 0.3963377774f * a + 0.2158037573f * b
+        val mRoot = l - 0.1055613458f * a - 0.0638541728f * b
+        val sRoot = l - 0.0894841775f * a - 1.2914855480f * b
         val l = lRoot * lRoot * lRoot
         val m = mRoot * mRoot * mRoot
         val s = sRoot * sRoot * sRoot

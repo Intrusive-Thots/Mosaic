@@ -55,27 +55,29 @@ Uniform cells that follow the grid are still the default, and center-crop and fi
 
 ## Cutout collage
 
-Grid mosaics are still the default. Cutout collage is a separate mode. A tile in that mode is an arbitrary shape with a transparent background: a person, a flower, an object, not a rectangle. Pieces may overlap. Large pieces go down first. Edges and later pieces are smaller, so a face is not covered by one blob.
+Grid mosaics are still the default. Cutout collage is a separate mode. It rebuilds the target out of paper shapes cut from the source images. A piece follows a region of the target: a coat, a face, a hair edge, an eye line. It is not a rectangle of a still dropped next to other rectangles. Pieces overlap. Large shapes go down first and block in the regions. Smaller shapes and contour strokes land later and can cover what is already there.
 
-The engine does not search every cutout at every pixel. It keeps a low-resolution residual of OKLab error against the target, starting from a flat mean-color background. Each placement picks the cell that is still most wrong, asks the existing OKLab index for a short candidate list, and scores only those candidates. A candidate is kept only when its masked colors reduce that error, including the damage it would do to pixels that are already close, and only when it covers some pixels that are still open. When shape weight is above zero, the same short list is re-ranked by how well the cutout's 8×8 silhouette matches the local luminance structure and how well its long axis lines up with the local edge. That re-rank does not scan the library again. Shape weight 0 leaves the choice on color. Each candidate is tried at a bounded set of angles inside the rotation range (15° steps up to ±90°, 20° steps beyond that, at most about a dozen angles). The detail pass also tries the local edge direction and pulls placements toward strong edges. Scale follows the local edge strength and how far the run has progressed, then shrinks further if that cell keeps rejecting pieces.
+The target is analyzed with its long edge capped at 220. An edge-aware SLIC pass cuts the coarse regions from the large-shape scale. A second pass keeps the fine regions that sit on strong gradients, about 28% of the piece budget. A third pass traces luminance edges into strokes, about 22% of the budget. Color is measured on the undilated core, so a thin dark line is not averaged with the field around it. The mask is then grown by the overlap setting. Each mask is stored at up to 96 pixels on a side.
 
-About 38% of the budget is a second pass on a finer residual (long edge 200). Those pieces are smaller and may cover a pixel that is already painted when that lowers the error. A short final pass, about 16% of the budget and capped at a fifth of the pieces, ranks cells by their worst pixel and matches that peak color with a smaller piece, so an eye is not averaged into the surrounding skin. Those specks come out of the detail budget. After placement, up to a few of the worst pieces are nudged or rotated in place, and the new pose is kept only when the whole residual drops. The same tile stays, so repetition counts do not change. The seed makes the order deterministic, so preview and the full render share a plan. Output size is not part of that plan. Placement does not stop because a coarse grid filled up.
+The engine does not search every source for every shape. Each shape asks the OKLab index for a short candidate list, then scores only that list. The score is the color error of a few samples across the shape, plus the region's average color. Crops are tried at three anchors, and rotations stay inside the texture-rotation range: upright, plus or minus the range, and the halfway angles when the range is at least 25°. The seed only jitters ties. Preview and the full render share the plan. Output size is not part of it.
 
-While pieces land, the coordinator renders a small preview twice: after the large pieces, and again after the fine pass. The progress label changes with the stage. Cancel still stops the loop. The full export is the same chunked scanline renderer as before.
+A shaped piece is filled from the source region that won, not from the whole cutout. Transparent texels are filled from the nearest opaque source color first, so a cleared background does not punch a hole, and the sample is bilinear. Later shapes overwrite earlier ones. There is no rectangular border. A saved placement that has no mask still uses the older stamp path, which alpha-composites the cutout and only replaces a pixel when the new color is closer to the target.
+
+While pieces land, the coordinator renders a small preview twice: after the large shapes, and again after the edge shapes. The progress label changes with the stage. Cancel still stops the loop. The full export is the same chunked scanline renderer as the grid.
 
 What a descriptor stores for a cutout, in addition to the usual OKLab color, histogram, and spatial grid:
 
 - those color features are computed only on pixels with alpha above 40
 - an 8×8 alpha mask of the opaque bounds
-- the opaque bounds as fractions of the source, so rotation and scale do not need another decode
+- the opaque bounds as fractions of the source, so a stamp rotation does not need another decode
 
-Rotation of a candidate remaps that mask. It does not rotate the bitmap until the renderer samples it. Repetition and the usage penalty count the source cutout, not each angle.
+The shaped matcher builds a 12×12 OKLab swatch from the opaque pixels inside those bounds. Repetition and the usage penalty count the source image, not each crop or angle.
 
-Rendering writes scanlines. The default background is the target's mean color, not the target photo. The target photo is still available as an explicit background if you want it under the gaps. Cutouts are alpha-composited in order, large pieces first, so later detail sits on top. Sampling is bilinear in premultiplied alpha, so a transparent texel adds no color and the silhouette feathers without a halo. Color correction, when it is on, shifts chroma toward the covered target and moves luminance only part of the way, so the cutout's own shading stays. Strength 0 leaves the pixel unchanged. An optional Separate pieces switch draws a short dark offset under each cutout. It is off by default and does not change which piece is chosen. The published sample leaves correction off, so the cutouts' own colors have to rebuild the picture.
+Rendering writes scanlines. The default background is the target's mean color, not the target photo. The target photo is still available as an explicit background if you want it under any gap. Color correction, when it is on, pulls chroma toward the covered target pixel and moves luminance less, so the source texture stays visible. Strength 0 leaves the pixel unchanged. The published sample leaves correction off, so the source colors have to rebuild the picture. An optional Separate pieces switch draws a short dark offset under stamp placements. Shaped pieces follow the mask and do not use that offset.
 
 A final collage is scaled so its long edge is at least 1600 px on Standard, 2200 on High, and 2800 on Ultra, then clamped to 24 million pixels. Preview and a custom width or height skip that floor. Output above 2.5 million pixels is streamed to a PNG. A size that would break the cell or pixel cap is rejected with the limit on screen. There is no `android:largeHeap`.
 
-Limits: 4 to 4,000 placements, scale from 1.5% to 90% of the target's short side, rotation from 0° to ±180°. The default asks for 480 pieces, from 3% to 16% of the short side, and keeps going until about 99% of the analysis picture is painted. Quality presets set the collage budget, scale range, adjustment steps, and correction strength along with the grid knobs. A style then sets overlap, rotation, shadows, outlines, feather, coverage, and shape weight. Advanced sliders stay behind an Advanced section. Collage mode uses the cutout pool and automatic extraction. Full photos are included only when you turn that on, or when no cutout could be loaded. After a mask is cropped, alpha below 24 is dropped, enclosed holes are filled from the nearest opaque color, specks smaller than 24 pixels are removed, and the outer edge is softened. On the stamp itself, Trim raises the alpha cutoff and crops to the remaining subject. Edit can erase with a finger and apply that soft edge again. The refined mask is stored with the pool. You can add many photos at once; extraction reports progress and can be cancelled. ML Kit still has no person or object labels, and it still needs the on-device model.
+Limits: 4 to 4,000 placements, scale from 1.5% to 90% of the target's short side, rotation from 0° to ±180°. The default asks for 480 pieces, from 3% to 16% of the short side. The coarse shapes cover the picture, and the rest of the budget is smaller edge shapes. Quality presets set the collage budget, scale range, and correction strength along with the grid knobs. A style then sets overlap, rotation, and color. Advanced sliders stay behind an Advanced section. Collage mode uses the cutout pool and automatic extraction. Full photos are included only when you turn that on, or when no cutout could be loaded. After a mask is cropped, alpha below 24 is dropped, enclosed holes are filled from the nearest opaque color, specks smaller than 24 pixels are removed, and the outer edge is softened. On the stamp itself, Trim raises the alpha cutoff and crops to the remaining subject. Edit can erase with a finger and apply that soft edge again. The refined mask is stored with the pool. You can add many photos at once; extraction reports progress and can be cancelled. ML Kit still has no person or object labels, and it still needs the on-device model.
 
 ## Quality presets
 
@@ -98,45 +100,46 @@ Measured with `./gradlew :engine:benchmark` on this machine (OpenJDK 21, synthet
 
 | Tiles | Grid | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full scan | Heap MB |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100 | 40×40 | 4.6 | 0.3 | 52.0 | 50.2 | 108.1 | 84,135 | 160,000 | 0.6 |
-| 500 | 60×60 | 13.1 | 0.4 | 38.1 | 111.1 | 164.8 | 233,676 | 1,800,000 | 1.9 |
-| 1,000 | 80×80 | 23.3 | 0.8 | 68.1 | 196.4 | 292.9 | 415,996 | 6,400,000 | 4.0 |
-| 5,000 | 120×120 | 118.5 | 3.9 | 152.4 | 447.1 | 735.9 | 936,000 | 72,000,000 | 13.5 |
+| 100 | 40×40 | 11.6 | 0.3 | 69.0 | 46.3 | 128.8 | 84,135 | 160,000 | 0.6 |
+| 500 | 60×60 | 14.1 | 0.6 | 42.0 | 104.5 | 163.8 | 233,676 | 1,800,000 | 1.9 |
+| 1,000 | 80×80 | 29.5 | 1.1 | 79.7 | 188.6 | 304.5 | 415,996 | 6,400,000 | 4.0 |
+| 5,000 | 120×120 | 153.5 | 4.1 | 178.8 | 406.8 | 759.9 | 936,000 | 72,000,000 | 13.6 |
 
-"Full scan" is cells × tiles, which is what the 1.x matcher did. At 5,000 tiles the index probes about 1.3% of that. Matching 14,400 cells against 5,000 tiles took 152 ms in this run. Probe counts match the previous grid run.
+"Full scan" is cells × tiles, which is what the 1.x matcher did. At 5,000 tiles the index probes about 1.3% of that. Matching 14,400 cells against 5,000 tiles took 178.8 ms in this run. Probe counts match the previous grid run.
 
-A separate 500-tile case uses 16:9 cells and orientation matching (250 landscape tiles, 250 portrait). The grid is 40×40. Match took 40.5 ms and 103,890 probes against a full scan of 800,000. Total time was 158.9 ms. Probes stay on the source photos; rotated copies are scored from the cached spatial grid. Probe counts match the previous grid run, and the grid golden image is unchanged.
+A separate 500-tile case uses 16:9 cells and orientation matching (250 landscape tiles, 250 portrait). The grid is 40×40. Match took 47.6 ms and 103,890 probes against a full scan of 800,000. Total time was 183.4 ms. Probes stay on the source photos; rotated copies are scored from the cached spatial grid. Probe counts match the previous grid run, and the grid golden image is unchanged.
 
-Cutout collage, after a discarded warmup, on a 160×100 gradient. Every requested piece was placed. The fine residual, shape re-rank, and adjustment pass make matching slower than the coarse-only placer. Probes stay far below a full scan. The 900-piece row uses the same scale range as the smaller rows, so the extra time is the larger budget.
+Cutout collage, after a discarded warmup, on a 160×100 gradient. The coarse pass is a full partition, so coverage is 100% even when the piece budget asks for more regions than the scale step can cut. Probes stay far below a full scan. The 900-piece row uses the same scale range as the smaller rows.
 
 | Cutouts | Requested | Placed | Match ms | Render ms | Total ms | Probes | Full scan | Painted |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 200 | 160 | 160 | 89.8 | 5.2 | 99.8 | 5,466 | 384,000 | 45% |
-| 600 | 280 | 280 | 91.7 | 5.2 | 112.4 | 12,355 | 2,016,000 | 71% |
-| 400 | 900 | 900 | 246.7 | 10.1 | 263.8 | 67,102 | 4,320,000 | 100% |
+| 200 | 160 | 99 | 41.2 | 6.1 | 51.2 | 3,792 | 384,000 | 100% |
+| 600 | 280 | 133 | 34.7 | 7.2 | 52.8 | 5,886 | 2,016,000 | 100% |
+| 400 | 900 | 307 | 31.5 | 7.0 | 47.6 | 13,430 | 4,320,000 | 100% |
 
-A hybrid case places the same 160 pieces on a 20×12 grid under the collage, on a custom 160×100 canvas. Grid matching, collage placement, and the stacked render together took 82.2 ms and 15,268 probes. Rendering checks each later cutout pixel against the target in OKLab, which is why collage render time is higher than the previous 2–6 ms.
+A hybrid case on the same gradient, 200 cutouts, 160 requested pieces, and a 20×12 grid under the collage, took 61.1 ms and 13,594 probes. It placed 99 shapes.
 
-Full scan is requested pieces × cutouts × 12 angles. Painted coverage on this gradient is below the portrait sample when the piece budget is small. The portrait sample uses 240 cutouts and 320 pieces, seed 4, on a flat mean-color background, locked to 280×180 so it lines up with the previous residual file. All 320 pieces were placed. Correction is off.
+Full scan is requested pieces × cutouts × 12 angles. The portrait sample uses 240 cutouts and 320 requested pieces, seed 4, on a flat mean-color background, locked to 280×180 so it lines up with the previous residual file. Correction is off. The shaped run placed 213 pieces and painted every pixel. The stamp row is the previous placer on this same portrait. Its edge-alignment figure used the edge pixel itself. The shaped figure is the mean target-edge strength within two pixels of a piece boundary, divided by the picture average. Above 1 means the cuts follow edges. Those two alignment numbers are not the same measurement.
 
-| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Pixels painted |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Underlayer sample | 0.0475 | 0.7655 | 0.0989 | 0.6873 | — | 59% |
-| Previous residual | 0.0334 | 0.6746 | 0.0477 | 0.6779 | 0.0563 | 96% |
-| This sample | 0.0323 | 0.7045 | 0.0447 | 0.7061 | 0.0527 | 94% |
-| Photo textures | 0.0314 | 0.6924 | 0.0476 | 0.6940 | 0.0480 | 95% |
-
-| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Generate ms |
+| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Pixels painted | Edge alignment |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Color only | 0.0319 | 0.7017 | 0.0450 | 0.7028 | 0.0533 | 94% | 120 |
-| Shape-aware | 0.0332 | 0.7078 | 0.0452 | 0.7094 | 0.0533 | 94% | 146 |
-| Dense 1,200 | 0.0270 | 0.7560 | 0.0424 | 0.7569 | 0.0424 | 98% | 440 |
-| Grid under collage | 0.0298 | 0.6970 | 0.0481 | 0.7014 | 0.0577 | 94% | 134 |
-| Collage under grid | 0.0213 | 0.3657 | 0.0321 | 0.3373 | 0.0342 | 15% | 137 |
+| Underlayer sample | 0.0475 | 0.7655 | 0.0989 | 0.6873 | — | 59% | — |
+| Previous residual | 0.0334 | 0.6746 | 0.0477 | 0.6779 | 0.0563 | 96% | — |
+| Stamp collage | 0.0323 | 0.7045 | 0.0447 | 0.7061 | 0.0527 | 94% | 3.211 |
+| Shaped collage | 0.0341 | 0.7417 | 0.0488 | 0.7417 | 0.0556 | 100% | 10.4693 |
+| Photo textures | 0.0330 | 0.7896 | 0.0490 | 0.7896 | 0.0507 | 100% | 10.4693 |
 
-Masked scores count only pixels a cutout painted. Edge ΔE is the mean OKLab distance on the covered pixels whose reference luminance gradient is in the top quarter. The underlayer sample looked better on whole-image scores because the target photo showed through the gaps. Shape-aware matching (weight 0.9) stays in the same color band as color-only. The dense run asks for 1,200 pieces at the High Quality scale range on a 560×360 canvas. Whole ΔE is 0.0270, luminance SSIM is 0.7560, and edge ΔE is 0.0424. Collage-under-grid paints the grid over the cutouts except for a grout gap, so its masked coverage is the grout (15%) and its whole-image SSIM follows the grid. Grid-under-collage keeps whole ΔE at 0.0298.
+| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Edge alignment | Generate ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Same cuts, weight 0 | 0.0341 | 0.7417 | 0.0488 | 0.7417 | 0.0556 | 100% | 10.4693 | 75 |
+| Same cuts, weight 0.9 | 0.0341 | 0.7417 | 0.0488 | 0.7417 | 0.0556 | 100% | 10.4693 | 69 |
+| Dense 1,200 | 0.0302 | 0.8014 | 0.0463 | 0.8014 | 0.0463 | 100% | 7.7857 | 161 |
+| Grid under collage | 0.0341 | 0.7417 | 0.0488 | 0.7417 | 0.0556 | 100% | 10.4693 | 69 |
+| Collage under grid | 0.0219 | 0.3707 | 0.0315 | 0.3470 | 0.0336 | 16% | 10.4693 | 75 |
 
-A later cutout now replaces a pixel only when that pixel is closer to the target, and detail pieces are scored on the pixels they actually improve. Against the previous published sample (0.0338 whole ΔE, 0.6790 SSIM, 0.0555 edge ΔE, mouth window 19.1), this sample is 0.0323, 0.7045, 0.0527, and the mouth window is 16.3. On the 280×180 face, against the frozen previous residual file: left eye 37.1 → 26.7, right eye 45.1 → 22.2, mouth 18.8 → 16.3, cheek 16.2 → 14.5.
+Masked scores count only pixels a cutout painted. Edge ΔE is the mean OKLab distance on the covered pixels whose reference luminance gradient is in the top quarter. Whole ΔE moved from 0.0323 on the stamp collage to 0.0341, and masked ΔE from 0.0447 to 0.0488. Luminance SSIM moved from 0.7045 to 0.7417, coverage from 94% to 100%. The dense run asks for 1,200 pieces at the High Quality scale range on a 560×360 canvas: whole ΔE 0.0302, SSIM 0.8014, edge ΔE 0.0463. Shape weight is still stored on the session. Both of those rows cut the same target shapes, so the numbers match. Collage-under-grid paints the grid over the shapes except for a grout gap, so its masked coverage is the grout (16%) and its whole-image SSIM follows the grid.
+
+On the 280×180 face, against the frozen previous residual file: left eye 37.1 → 49.9, right eye 45.1 → 48.3, mouth 18.8 → 26.9, cheek 16.2 → 10.5. The eye and mouth windows are farther from that residual than the stamp run was. The shapes are filled with source texture and correction is off in this sample, so a small window picks up grain the stamp had flattened. The cheek is closer.
 
 Those scores are the synthetic portrait the benchmark measures. The pictures below are separate showcases. `scripts/regenerate-showcase.py` rebuilds the Naruto pictures, and `scripts/regenerate-showcase.py rick` rebuilds the Rick and Morty pictures. Sources download into the gitignored `showcase-sources/` folder. The source stills are not in the repository. They belong to their respective owners. These showcases are a non-commercial demonstration.
 
@@ -148,15 +151,15 @@ The grid comparison is the target, then average-RGB selection, then the OKLab ma
 
 ![Target, coarser collage, current collage, and opaque photo collage](docs/images/rick-cutout-collage.png)
 
-The collage row is the target, then 220 larger pieces with no refinement and no shape weight, then 720 pieces at 2.2–9% scale with shape weight 0.45, then the same 720-piece settings using the opaque photos. Repetition radius is 2 so one cutout cannot tile the row beside itself. Color correction strength is 0.5.
+The collage row is the target, then 220 larger shapes, then 720 shapes at 2.2–9% scale, then the same 720-piece settings using the opaque photos. Repetition radius is 2 so one source cannot tile the row beside itself. Color correction strength is 0.5.
 
-![Target, color-only collage, and shape-aware collage](docs/images/rick-cutout-shape-compare.png)
+![Target, large blocking shapes, and edge-following collage](docs/images/rick-cutout-shape-compare.png)
 
-Shape comparison: target, shape weight 0, then shape weight 0.85. Both ask for 480 pieces.
+Shape row: the target, then 160 large shapes at 8–20% scale, then the 720-piece collage whose smaller cuts follow edges.
 
 ![Dense collage](docs/images/rick-cutout-collage-dense.png)
 
-The dense collage is a full-size result: 1,100 pieces, scale 1.8–7%, 12 refinement steps, shape weight 0.45.
+The dense collage is a full-size result: 1,100 pieces at 1.8–7% scale, so more of the budget is small edge shapes.
 
 ![Full-size grid mosaic](docs/images/rick-showcase-grid.png)
 
@@ -172,15 +175,15 @@ The earlier Naruto showcase is still in `docs/images/` without a prefix. The tar
 
 ![Target, coarser collage, current collage, and opaque photo collage](docs/images/cutout-collage.png)
 
-The collage row is the target, then 220 larger pieces with no refinement and no shape weight, then 720 pieces at 2.2–9% scale with shape weight 0.45, then the same 720-piece settings using the opaque photos. Repetition radius is 2 so one cutout cannot tile the row beside itself. Color correction strength is 0.5.
+The collage row is the target, then 220 larger shapes, then 720 shapes at 2.2–9% scale, then the same 720-piece settings using the opaque photos. Repetition radius is 2 so one source cannot tile the row beside itself. Color correction strength is 0.5.
 
-![Target, color-only collage, and shape-aware collage](docs/images/cutout-shape-compare.png)
+![Target, large blocking shapes, and edge-following collage](docs/images/cutout-shape-compare.png)
 
-Shape comparison: target, shape weight 0, then shape weight 0.85. Both ask for 480 pieces.
+Shape row: the target, then 160 large shapes at 8–20% scale, then the 720-piece collage whose smaller cuts follow edges.
 
 ![Dense 1,200-piece collage](docs/images/cutout-collage-dense.png)
 
-The dense collage is a full-size result: 1,100 pieces, scale 1.8–7%, 12 refinement steps, shape weight 0.45, 1680×1380.
+The dense collage is a full-size result: 1,100 pieces at 1.8–7% scale, so more of the budget is small edge shapes. The picture is 1680×1380.
 
 ![Full-size grid mosaic](docs/images/showcase-grid.png)
 
@@ -221,11 +224,13 @@ A style is a look, separate from the quality preset's piece budget. Sparse is th
 
 | Style | Overlap | Rotation | Shadow | Outline | Feather | Coverage | Shape weight | Color |
 | --- | ---: | ---: | --- | --- | ---: | ---: | ---: | --- |
-| Paper collage | 0.12 | ±6° | on | off | 0.20 | 0.90 | 0.50 | Blended 0.40 |
-| Stamp collage | 0.02 | ±12° | off | on | 0 | 0.72 | 0.60 | Original |
-| Painterly overlap | 0.70 | ±28° | off | off | 0.55 | 0.98 | 0.25 | Blended 0.72 |
-| Sparse artistic | 0.08 | ±16° | on | off | 0.10 | 0.45 | 0.55 | Corrected 0.45 |
-| Dense coverage | 0.38 | unchanged | off | off | 0.08 | 0.99 | 0.40 | unchanged |
+| Torn paper | 0.12 | ±6° | on | off | 0.20 | 0.90 | 0.50 | Blended 0.40 |
+| Hard cuts | 0.02 | ±12° | off | on | 0 | 0.72 | 0.60 | Original |
+| Soft overlap | 0.70 | ±28° | off | off | 0.55 | 0.98 | 0.25 | Blended 0.72 |
+| Fewer shapes | 0.08 | ±16° | on | off | 0.10 | 0.45 | 0.55 | Corrected 0.45 |
+| Shaped coverage | 0.38 | unchanged | off | off | 0.08 | 0.99 | 0.40 | unchanged |
+
+Every style cuts the target into shapes. Overlap, rotation, piece count, and color strength are what change the picture. Fewer shapes also lowers the piece count. Hard cuts is low overlap and original color, not a grid of rectangles. Feather, outline, and the separate-pieces shadow still apply to a stamp placement that has no mask.
 
 ## Stacking with the grid
 
@@ -233,7 +238,7 @@ The stack is part of the match fingerprint, so preview and export of one stack s
 
 ## Editing a result
 
-Tap the result, then regenerate that neighborhood, swap the piece under the finger, pin it, or remove it. A pin stays through a later regenerate. Undo keeps the last 16 plans, and Redo walks forward again. Swap, pin, and remove reuse the existing plan. Regenerate replays the same seed for pieces outside the tap and fills only the opened cells. The current plan, both stacks, the target URI, and the library URIs are written to app storage, so a process death restores them and redraws the preview when the pictures still match. A run killed before the first plan is saved has nothing to restore. Settings, including style and stack, stay in preferences.
+Tap the result, then regenerate that neighborhood, swap the piece under the finger, pin it, or remove it. A pin stays through a later regenerate. Undo keeps the last 16 plans, and Redo walks forward again. Swap, pin, and remove reuse the existing plan, including each shape mask and crop. Regenerate keeps pinned pieces and pieces outside the tap, and fills the tapped area with new shapes. The current plan, both stacks, the target URI, and the library URIs are written to app storage, so a process death restores them and redraws the preview when the pictures still match. A run killed before the first plan is saved has nothing to restore. Settings, including style and stack, stay in preferences. A plan written by this version stores the crop and the mask. An older plan still opens and renders as stamps.
 
 ## Phone Studio
 
@@ -278,7 +283,7 @@ Do not commit that file or the keystore.
 
 ## Testing
 
-JVM tests cover OKLab conversion, histograms, cropping, descriptors, candidate indexing, repetition, usage balance, grid planning, non-square cells, cutout masks, collage placement, cancellation, atomic writes, and golden images. The grid golden digest is SHA-256 `0745027b47ef5ffb4aad0ea56cad0d5fa123d41795e750931914bd37af2194ba`. The cutout-collage golden digest is SHA-256 `503595a79f91d2dc1d5fc846f1fd6666cc0df1f5dc31db39dcca0f73db28e9ff`. The collage regression requires at least 96% of the preview painted, masked OKLab ΔE under 0.055, masked luminance SSIM above 0.60, and edge ΔE under 0.065.
+JVM tests cover OKLab conversion, histograms, cropping, descriptors, candidate indexing, repetition, usage balance, grid planning, non-square cells, cutout masks, shaped collage placement, cancellation, atomic writes, and golden images. The grid golden digest is SHA-256 `0745027b47ef5ffb4aad0ea56cad0d5fa123d41795e750931914bd37af2194ba`. The cutout-collage golden digest is SHA-256 `d91de4672b3bd7ef13569e45002d3d48d734f2c4bda8408708c27c7b60fca145`. The collage regression requires at least 96% of the preview painted, masked OKLab ΔE under 0.055, masked luminance SSIM above 0.55, and edge ΔE under 0.065. A two-tone picture must keep piece boundaries on the target edge, with edge alignment above 1.4.
 
 ```bash
 ./gradlew :engine:test :engine:detekt :app:detekt :app:lintDebug

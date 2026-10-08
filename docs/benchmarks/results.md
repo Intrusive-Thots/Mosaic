@@ -6,10 +6,10 @@ Heap is the change in `totalMemory - freeMemory` around the case and is only an 
 
 | Tiles | Grid | Load ms | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full-library comparisons | Heap MB |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100 | 40×40 | 1.0 | 4.6 | 0.3 | 52.0 | 50.2 | 108.1 | 84135 | 160000 | 0.6 |
-| 500 | 60×60 | 2.1 | 13.1 | 0.4 | 38.1 | 111.1 | 164.8 | 233676 | 1800000 | 1.9 |
-| 1000 | 80×80 | 4.3 | 23.3 | 0.8 | 68.1 | 196.4 | 292.9 | 415996 | 6400000 | 4.0 |
-| 5000 | 120×120 | 14.0 | 118.5 | 3.9 | 152.4 | 447.1 | 735.9 | 936000 | 72000000 | 13.5 |
+| 100 | 40×40 | 1.7 | 11.6 | 0.3 | 69.0 | 46.3 | 128.8 | 84135 | 160000 | 0.6 |
+| 500 | 60×60 | 2.6 | 14.1 | 0.6 | 42.0 | 104.5 | 163.8 | 233676 | 1800000 | 1.9 |
+| 1000 | 80×80 | 5.4 | 29.5 | 1.1 | 79.7 | 188.6 | 304.5 | 415996 | 6400000 | 4.0 |
+| 5000 | 120×120 | 16.8 | 153.5 | 4.1 | 178.8 | 406.8 | 759.9 | 936000 | 72000000 | 13.6 |
 
 Probes are candidate color checks inside OKLab bins, capped per cell so a large library is not scanned in full.
 The full-library column is cells × tiles, which is what the 1.x matcher did.
@@ -20,21 +20,21 @@ The full-library column is cells × tiles, which is what the 1.x matcher did.
 
 | Tiles | Grid | Analyze ms | Match ms | Render ms | Total ms | Probes | Full scan |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 500 | 40×40 | 24.5 | 40.5 | 88.0 | 158.9 | 103890 | 800000 |
+| 500 | 40×40 | 32.1 | 47.6 | 93.6 | 183.4 | 103890 | 800000 |
 
 ## Cutout collage
 
-Each placement queries the OKLab index once. Large pieces land first. A finer pass adds small pieces
-on edges, including over a pixel that is already covered when that lowers the error.
-Shape agreement re-ranks that short list. It does not scan the library again.
+The target is cut into coarse regions, finer edge regions, and contour strokes.
+Each shape is filled from the source crop, rotation, and scale that best match its color.
+Later shapes overlap freely. The index is queried once per shape, then only that short list is scored.
 Full scan is requested pieces × cutouts × 12 angles.
 The 900-piece row uses the same scale range as the rows above, so the extra time is the larger budget.
 
 | Cutouts | Requested | Placed | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full scan | Note |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 200 | 160 | 160 | 4.5 | 0.2 | 89.8 | 5.2 | 99.8 | 5466 | 384000 | coverage 45% |
-| 600 | 280 | 280 | 15.1 | 0.4 | 91.7 | 5.2 | 112.4 | 12355 | 2016000 | coverage 71% |
-| 400 | 900 | 900 | 6.7 | 0.3 | 246.7 | 10.1 | 263.8 | 67102 | 4320000 | coverage 100% |
+| 200 | 160 | 99 | 3.7 | 0.2 | 41.2 | 6.1 | 51.2 | 3792 | 384000 | coverage 100% |
+| 600 | 280 | 133 | 10.5 | 0.3 | 34.7 | 7.2 | 52.8 | 5886 | 2016000 | coverage 100% |
+| 400 | 900 | 307 | 8.8 | 0.3 | 31.5 | 7.0 | 47.6 | 13430 | 4320000 | coverage 100% |
 
 ## Hybrid stack
 
@@ -43,7 +43,7 @@ Time includes grid matching, collage placement, and the stacked render.
 
 | Cutouts | Requested | Placed | Total ms | Probes | Note |
 | ---: | ---: | ---: | ---: | ---: | --- |
-| 200 | 160 | 160 | 82.2 | 15268 | grid under collage |
+| 200 | 160 | 99 | 61.1 | 13594 | grid under collage |
 
 ## Matching quality
 
@@ -56,42 +56,47 @@ Both sides use the original tile pixels and the same renderer. Left is average-R
 | OKLab default | 0.0436 | 0.6559 |
 
 Sample collage on the portrait scene, 240 cutouts, 320 requested, seed 4, mean-color background.
-Organic run placed 320 pieces. Photo-texture run placed 320 pieces.
+Organic run placed 213 pieces. Photo-texture run placed 213 pieces.
 engine/build/reports/benchmarks/images/cutout-collage.png is the target, the previous collage, this collage, and a photo-texture collage.
 The photo textures are generated in this repository. They are not third-party photographs.
 The previous collage is the committed output from the residual placer before the detail pass.
 Its edge score uses pixels that differ from the target mean color, because that file has no coverage mask.
 Output is locked to 280×180 so this row lines up with the previous residual file.
 Masked scores count only pixels a cutout painted. Edge ΔE is the top quarter of reference luminance gradients.
+Edge alignment is mean target-edge strength within two pixels of a piece boundary,
+divided by the picture average. Above 1 means cuts follow edges.
+The stamp row is the previous placer on this same portrait. Its alignment used the edge pixel itself, before the two-pixel neighborhood.
 
-| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Pixels painted |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Underlayer sample | 0.0475 | 0.7655 | 0.0989 | 0.6873 | — | 59% |
-| Previous residual | 0.0334 | 0.6746 | 0.0477 | 0.6779 | 0.0563 | 96% |
-| This run | 0.0323 | 0.7045 | 0.0447 | 0.7061 | 0.0527 | 94% |
-| Photo textures | 0.0314 | 0.6924 | 0.0476 | 0.6940 | 0.0480 | 95% |
+| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Pixels painted | Edge alignment |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Underlayer sample | 0.0475 | 0.7655 | 0.0989 | 0.6873 | — | 59% | — |
+| Previous residual | 0.0334 | 0.6746 | 0.0477 | 0.6779 | 0.0563 | 96% | — |
+| Stamp collage | 0.0323 | 0.7045 | 0.0447 | 0.7061 | 0.0527 | 94% | 3.211 |
+| Shaped collage | 0.0341 | 0.7417 | 0.0488 | 0.7417 | 0.0556 | 100% | 10.4693 |
+| Photo textures | 0.0330 | 0.7896 | 0.0490 | 0.7896 | 0.0507 | 100% | 10.4693 |
 
 Mean absolute RGB error in face windows on the 280×180 canvas, previous residual versus this run.
-- Left eye: 37.1 → 26.7
-- Right eye: 45.1 → 22.2
-- Mouth: 18.8 → 16.3
-- Cheek: 16.2 → 14.5
+- Left eye: 37.1 → 49.9
+- Right eye: 45.1 → 48.3
+- Mouth: 18.8 → 26.9
+- Cheek: 16.2 → 10.5
 
 
 ## Shape, density, and hybrid
 
 Same portrait and 240 organic cutouts, seed 4, correction off, mean-color background.
-Color-only sets shape weight to 0. Shape-aware sets it to 0.9. Both stay at 280×180 and 320 pieces.
+Color-only and shape-aware both cut the same target shapes at 280×180 and 320 pieces.
+Shape weight stays in saved sessions. The cut follows the target either way.
 engine/build/reports/benchmarks/images/cutout-shape-compare.png is the target, color-only, then shape-aware.
 Dense coverage asks for 1,200 pieces at the High Quality scale range (2–11%) on a 560×360 canvas.
 engine/build/reports/benchmarks/images/cutout-hybrid.png is cutouts only, grid under collage, then collage under grid, all 280×180.
 docs/images/studio-phone-mock.png is a labeled layout mock of the phone Studio. It is not a device screenshot.
 
-| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Generate ms |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Color only | 0.0319 | 0.7017 | 0.0450 | 0.7028 | 0.0533 | 94% | 120 |
-| Shape-aware | 0.0332 | 0.7078 | 0.0452 | 0.7094 | 0.0533 | 94% | 146 |
-| Dense 1200 | 0.0270 | 0.7560 | 0.0424 | 0.7569 | 0.0424 | 98% | 440 |
-| Grid under collage | 0.0298 | 0.6970 | 0.0481 | 0.7014 | 0.0577 | 94% | 134 |
-| Collage under grid | 0.0213 | 0.3657 | 0.0321 | 0.3373 | 0.0342 | 15% | 137 |
+| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Edge alignment | Generate ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Color only | 0.0341 | 0.7417 | 0.0488 | 0.7417 | 0.0556 | 100% | 10.4693 | 75 |
+| Shape-aware | 0.0341 | 0.7417 | 0.0488 | 0.7417 | 0.0556 | 100% | 10.4693 | 69 |
+| Dense 1200 | 0.0302 | 0.8014 | 0.0463 | 0.8014 | 0.0463 | 100% | 7.7857 | 161 |
+| Grid under collage | 0.0341 | 0.7417 | 0.0488 | 0.7417 | 0.0556 | 100% | 10.4693 | 69 |
+| Collage under grid | 0.0219 | 0.3707 | 0.0315 | 0.3470 | 0.0336 | 16% | 10.4693 | 75 |
 

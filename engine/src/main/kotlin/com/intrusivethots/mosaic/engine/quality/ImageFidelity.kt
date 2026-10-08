@@ -110,6 +110,63 @@ fun maskedEdgeDeltaE(rendered: PixelImage, reference: PixelImage, covered: Boole
     return if (count == 0) 0.0 else sum / count
 }
 
+/**
+ * Mean target-edge strength beside piece boundaries, divided by the mean edge strength
+ * of the picture. A boundary may sit one or two pixels off the gradient peak when a
+ * cut traces that edge, so each boundary pixel uses the strongest target edge within
+ * two pixels. Above 1 means the cuts follow stronger edges than the picture average.
+ * [owners] is the topmost piece index per pixel of the rendered canvas, or -1 where
+ * nothing was painted.
+ */
+fun pieceBoundaryAlignment(
+    owners: IntArray,
+    renderedWidth: Int,
+    renderedHeight: Int,
+    reference: PixelImage
+): Double {
+    val width = renderedWidth
+    val height = renderedHeight
+    if (width < 2 || height < 2 || owners.size != width * height) return 0.0
+    val tone = luminance(align(reference, width, height))
+    var edgeSum = 0.0
+    var edgeCount = 0
+    var boundarySum = 0.0
+    var boundaryCount = 0
+    for (y in 0 until height - 1) {
+        val row = y * width
+        for (x in 0 until width - 1) {
+            val index = row + x
+            val magnitude = gradientAt(tone, width, height, index).toDouble()
+            edgeSum += magnitude
+            edgeCount++
+            val owner = owners[index]
+            if (owner < 0) continue
+            val rightCut = owners[index + 1] >= 0 && owners[index + 1] != owner
+            val downCut = owners[index + width] >= 0 && owners[index + width] != owner
+            if (!rightCut && !downCut) continue
+            boundarySum += nearbyGradient(tone, width, height, x, y).toDouble()
+            boundaryCount++
+        }
+    }
+    if (boundaryCount == 0 || edgeCount == 0 || edgeSum <= 1e-8) return 0.0
+    return (boundarySum / boundaryCount) / (edgeSum / edgeCount)
+}
+
+private fun nearbyGradient(tone: FloatArray, width: Int, height: Int, x: Int, y: Int): Float {
+    var best = 0f
+    for (dy in -2..2) {
+        val py = y + dy
+        if (py !in 0 until height) continue
+        for (dx in -2..2) {
+            val px = x + dx
+            if (px !in 0 until width) continue
+            val magnitude = gradientAt(tone, width, height, py * width + px)
+            if (magnitude > best) best = magnitude
+        }
+    }
+    return best
+}
+
 fun luminanceSsim(rendered: PixelImage, reference: PixelImage): Double {
     val aligned = if (reference.width == rendered.width && reference.height == rendered.height) {
         reference
