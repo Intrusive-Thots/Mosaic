@@ -36,13 +36,15 @@ class FaceBox(
 /**
  * Faces for one source, detected once and cached by the caller.
  * The anime cascade runs first. Eye pairs fill in western cartoons and frames
- * the cascade misses. A source with an empty list is not used for cutout collage.
+ * the cascade misses. One-pixel pupils are only used when both of those miss,
+ * so a button or a nostril cannot steal the crop from a real face.
+ * A source with an empty list is not used for cutout collage.
  */
 object CartoonFaceFinder {
     fun find(image: PixelImage): List<FaceBox> {
-        val cascade = AnimeFaceCascade.find(image).map { ScoredFace(2f, it) }
-        val eyes = CartoonEyes.find(image).map { ScoredFace(1f, it) }
-        return keep(cascade + eyes)
+        val cascade = AnimeFaceCascade.find(image)
+        val eyes = CartoonEyes.find(image, dotsWhenEmpty = cascade.isEmpty())
+        return keep(cascade.map { ScoredFace(2f, it) } + eyes.map { ScoredFace(1f, it) })
     }
 
     private fun keep(found: List<ScoredFace>): List<FaceBox> {

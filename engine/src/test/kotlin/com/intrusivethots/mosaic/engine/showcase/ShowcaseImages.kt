@@ -135,7 +135,9 @@ private fun isSubject(image: PixelImage): Boolean {
     val bounds = opaqueBounds(image) ?: return false
     val spanX = bounds.width.toFloat() / image.width
     val spanY = bounds.height.toFloat() / image.height
-    if (spanX > 0.94f && spanY > 0.94f) return false
+    // A character that touches the frame still counts when a real background is clear.
+    // A solid photo that fills the frame does not.
+    if (spanX > 0.94f && spanY > 0.94f && clearFraction(image) < 0.15f) return false
     if (spanY < 0.22f && spanX > 0.72f) return false
     if (spanX < 0.16f && spanY > 0.72f) return false
     return opaqueHasColor(image)
@@ -198,6 +200,10 @@ private fun isWellLit(image: PixelImage): Boolean {
         var x = 0
         while (x < image.width) {
             val pixel = image.pixel(x, y)
+            if ((pixel ushr 24) < 40) {
+                x += step
+                continue
+            }
             val red = (pixel ushr 16) and 255
             val green = (pixel ushr 8) and 255
             val blue = pixel and 255

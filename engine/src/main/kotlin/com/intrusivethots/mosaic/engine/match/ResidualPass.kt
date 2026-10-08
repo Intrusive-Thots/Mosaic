@@ -178,41 +178,76 @@ private fun sealToFloor(
 ) {
     val floor = pieceFloor(config.collage.minPiece, measureWidth, measureHeight)
     val radius = (floor.shortOfShort * min(measureWidth, measureHeight)).toInt().coerceAtLeast(2)
+    liftBuried(plane, measureWidth, measureHeight, config, fit, pieces, correct, floor, radius)
+    coverOpen(plane, measureWidth, measureHeight, config, fit, pieces, correct, floor)
+    mendSeams(plane, pieces, floor, measureWidth, measureHeight)
+    liftBuried(plane, measureWidth, measureHeight, config, fit, pieces, correct, floor, radius)
+}
+
+private fun liftBuried(
+    plane: LabPlane,
+    measureWidth: Int,
+    measureHeight: Int,
+    config: MosaicConfig,
+    fit: ShapeFit,
+    pieces: MutableList<PlacedPiece>,
+    correct: Boolean,
+    floor: PieceFloor,
+    radius: Int
+) {
     var attempt = 0
     while (attempt < 4) {
         attempt++
         val buried = findBuried(pieces.map { it.placement.mask }, measureWidth, measureHeight, floor)
-        if (buried != null) {
-            var index = pieces.lastIndex
-            while (index >= 0) {
-                if (buried.drop[index]) pieces.removeAt(index)
-                index--
-            }
-            val masks = pieces.map { it.placement.mask }
-            val assign = nearestPiece(masks, buried.holes, measureWidth, measureHeight, radius)
-            for (pieceIndex in pieces.indices) {
-                val piece = pieces[pieceIndex]
-                piece.placement = withAbsorbed(
-                    piece.placement, assign, pieceIndex, buried.holes, measureWidth, measureHeight, radius
-                )
-            }
-            val leftover = BooleanArray(buried.holes.size) { hole -> buried.holes[hole] && assign[hole] < 0 }
-            coverHoles(plane, leftover, measureWidth, measureHeight, config, fit, pieces, correct, floor)
-        } else {
-            break
+        if (buried == null) return
+        var index = pieces.lastIndex
+        while (index >= 0) {
+            if (buried.drop[index]) pieces.removeAt(index)
+            index--
         }
+        val masks = pieces.map { it.placement.mask }
+        val assign = nearestPiece(masks, buried.holes, measureWidth, measureHeight, radius)
+        for (pieceIndex in pieces.indices) {
+            val piece = pieces[pieceIndex]
+            piece.placement = withAbsorbed(
+                piece.placement, assign, pieceIndex, buried.holes, measureWidth, measureHeight, radius
+            )
+        }
+        val leftover = BooleanArray(buried.holes.size) { hole -> buried.holes[hole] && assign[hole] < 0 }
+        coverHoles(plane, leftover, measureWidth, measureHeight, config, fit, pieces, correct, floor)
     }
-    coverOpen(plane, measureWidth, measureHeight, config, fit, pieces, correct, floor)
-    mendSeams(plane, pieces, floor)
 }
 
-private fun mendSeams(plane: LabPlane, pieces: MutableList<PlacedPiece>, floor: PieceFloor) {
-    if (pieces.isEmpty()) return
+private fun mendSeams(
+    plane: LabPlane,
+    pieces: MutableList<PlacedPiece>,
+    floor: PieceFloor,
+    measureWidth: Int,
+    measureHeight: Int
+) {
+    if (pieces.isEmpty() || plane.width < 1 || plane.height < 1) return
     val reach = (floor.shortOfShort * min(plane.width, plane.height)).toInt().coerceIn(2, 6)
     val (holes, assign) = matchingSeams(plane, pieces.map { it.placement.mask }, reach, SEAM_LIMIT)
+    val wide = IntArray(measureWidth * measureHeight) { -1 }
+    val open = BooleanArray(wide.size)
+    for (index in holes.indices) {
+        if (!holes[index]) continue
+        val x0 = index % plane.width * measureWidth / plane.width
+        val y0 = index / plane.width * measureHeight / plane.height
+        val x1 = (index % plane.width + 1) * measureWidth / plane.width
+        val y1 = (index / plane.width + 1) * measureHeight / plane.height
+        for (y in y0 until y1.coerceAtLeast(y0 + 1).coerceAtMost(measureHeight)) {
+            val row = y * measureWidth
+            for (x in x0 until x1.coerceAtLeast(x0 + 1).coerceAtMost(measureWidth)) {
+                open[row + x] = true
+                wide[row + x] = assign[index]
+            }
+        }
+    }
+    val measureReach = (reach * maxOf(measureWidth, measureHeight) / maxOf(plane.width, plane.height)).coerceAtLeast(reach)
     for (pieceIndex in pieces.indices) {
         val piece = pieces[pieceIndex]
-        piece.placement = withAbsorbed(piece.placement, assign, pieceIndex, holes, plane.width, plane.height, reach)
+        piece.placement = withAbsorbed(piece.placement, wide, pieceIndex, open, measureWidth, measureHeight, measureReach)
     }
 }
 

@@ -13,13 +13,13 @@ import kotlin.math.sqrt
  * with a dark pupil. A flat tile returns nothing.
  */
 internal object CartoonEyes {
-    fun find(image: PixelImage): List<FaceBox> {
+    fun find(image: PixelImage, dotsWhenEmpty: Boolean = false): List<FaceBox> {
         val fitted = image.downscaleLongEdge(DETECT_EDGE)
         val luma = lumaOf(fitted)
         val found = ArrayList<Hit>()
         pairKind(luma, fitted.width, fitted.height, dark = true, found)
         pairKind(luma, fitted.width, fitted.height, dark = false, found)
-        found.addAll(dotPairs(image))
+        if (found.isEmpty() && dotsWhenEmpty) found.addAll(dotPairs(image))
         found.sortByDescending { it.score }
         val kept = ArrayList<FaceBox>()
         for (hit in found) {

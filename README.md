@@ -157,7 +157,29 @@ Those scores are the synthetic portrait the benchmark measures, with correction 
 
 The paper-detail row kept line art and graded each piece most of the way to the target, so the thumbnail was tight and the photos were hard to recognize. Cut paper keeps the sharp photo and applies the bounded grade, but the pieces were large and the source frames were sampled from a 128-pixel thumb, so the texture column could read 1.00 while the photos were still a smear. Small pieces asks for 1,800 shapes (1,807 placed) at 1.2–5% scale, and 3,400 (3,403 placed) for the dense row at 0.8–3%. Each piece is a near-native crop, never upscaled more than about 1.25×, and the color grade is unchanged. Naruto's distance moves from 0.1152 to 0.1091 and its SSIM from 0.6844 to 0.7037. The dense Naruto distance moves from 0.1133 to 0.1273. Rick's distance moves from 0.0917 to 0.0621 and its SSIM from 0.6542 to 0.7694. Dense Rick moves from 0.0925 to 0.0640. The texture column is left blank because high-frequency energy versus the target was not recomputed; it is the metric that stayed near 1.00 on the smeared cut-paper render. The kept ratio is 1.040 for Naruto, 1.048 dense, 0.942 for Rick, and 0.928 dense. Piece fidelity, median and 10th percentile, is 0.536 and 0.172 for Naruto, 0.498 and 0.134 dense, 0.688 and 0.320 for Rick, and 0.617 and 0.179 dense. A blocking layer made only of global color masses was tried earlier and discarded. The minimum-piece row is the same request with a hard floor of 4.5% of the short side, measured on what remains visible after the mask and later overlaps. Naruto places 324 pieces in both the normal and dense renders. Rick places 374. Piece fidelity, median and 10th percentile, is 0.620 and 0.350 for Naruto, 0.633 and 0.350 dense, 0.725 and 0.416 for Rick, and 0.724 and 0.417 dense. The smallest visible short side is 4.57% for Naruto and 4.55% for Rick.
 
-The pictures below are separate showcases. `scripts/regenerate-showcase.py` rebuilds the Naruto pictures, and `scripts/regenerate-showcase.py rick` rebuilds the Rick and Morty pictures. Sources download into the gitignored `showcase-sources/` folder. The source stills are not in the repository. They belong to their respective owners. These showcases are a non-commercial demonstration.
+The pictures below are separate showcases. `scripts/regenerate-showcase.py` rebuilds the Naruto pictures, `scripts/regenerate-showcase.py rick` rebuilds the Rick and Morty pictures, and `scripts/regenerate-showcase.py koth` or `pokemon` rebuilds the crossover. Sources download into the gitignored `showcase-sources/` folder. The source stills are not in the repository. They belong to their respective owners. These showcases are a non-commercial demonstration.
+
+The crossover is two renders. King of the Hill is the alley still of Hank, Dale, Bill, and Boomhauer, rebuilt from 100 Pokemon stills. Pokemon is Ash with Pikachu, rebuilt from 100 King of the Hill stills. The URLs are in [docs/showcase/koth-sources.tsv](docs/showcase/koth-sources.tsv) and [docs/showcase/pokemon-sources.tsv](docs/showcase/pokemon-sources.tsv). A flat border is flooded away. A character that already fills a clear frame stays. Every placed piece is at least 4.5% of the short side and keeps a detected face from its source. The collage seed is 4 and the grid seed is 7, the same as the other showcases. Color correction is 0.72 on the collage and 0.58 on the grid.
+
+On the Pokemon library, 100 cutouts remain and 96 have a face, so 4 are excluded. The King of the Hill collage places 373 pieces, all of them on a face. Distance ΔE is 0.0958, SSIM 0.403, texture 0.948. Piece fidelity median is 0.848 and the 10th percentile is 0.744. The smallest visible short side is 4.56% of the short side, against a 4.5% floor. The dense pass places 361 pieces, ΔE 0.0953, SSIM 0.401, texture 0.951, fidelity 0.842 and 0.730. The picture is 1468×1633 because the alley still is portrait and the in-memory bitmap stays under 2.4 million pixels.
+
+On the King of the Hill library, 97 cutouts remain and 94 have a face, so 3 are excluded. The Ash and Pikachu collage places 567 pieces, all of them on a face. Distance ΔE is 0.1023, SSIM 0.605, texture 0.929. Piece fidelity median is 0.789 and the 10th percentile is 0.631. The smallest visible short side is 4.55%. The dense pass places 556 pieces, ΔE 0.1020, SSIM 0.600, texture 0.932, fidelity 0.795 and 0.658. The picture is 1680×945.
+
+![King of the Hill, average-RGB selection, and OKLab selection](docs/images/koth-matching-comparison.png)
+
+![Target, coarser collage, current collage, and opaque photo collage](docs/images/koth-cutout-collage.png)
+
+![Target beside the King of the Hill collage](docs/images/koth-target-collage.png)
+
+![Dense King of the Hill collage](docs/images/koth-cutout-collage-dense.png)
+
+![Pokemon, average-RGB selection, and OKLab selection](docs/images/pokemon-matching-comparison.png)
+
+![Target, coarser collage, current collage, and opaque photo collage](docs/images/pokemon-cutout-collage.png)
+
+![Target beside the Pokemon collage](docs/images/pokemon-target-collage.png)
+
+![Dense Pokemon collage](docs/images/pokemon-cutout-collage-dense.png)
 
 The current theme is Rick and Morty. The target is the Rick and Morty Wiki file *Smith family adult swim*: Rick and Morty standing together on a light background, Rick in the white coat with blue hair and Morty in the yellow shirt. The library is 100 other Rick and Morty Wiki images, listed with their URLs in [docs/showcase/rick-sources.tsv](docs/showcase/rick-sources.tsv). They are well-lit character pictures, including the Smith family and other bright figures, chosen for yellow, blue, white, and skin tones. A dark frame is not used. A flat border is flooded away to leave the subject. A bright picture that already fills the frame stays as a light-edged stamp. The collage seed is 4. The grid seed is 7. The grid color-corrects each tile toward its cell at strength 0.58. The collage color-corrects each shape toward its region at strength 0.72. These files sit beside the Naruto pictures; they do not replace them.
 

@@ -32,6 +32,7 @@ import java.io.File
 
 internal const val PANEL_EDGE = 840
 internal const val FULL_EDGE = 1680
+private const val SHOWCASE_PIXELS = 2_400_000L
 internal const val STRIP_EDGE = 1680
 private const val COLLAGE_SEED = 4
 private const val GRID_SEED = 7
@@ -42,8 +43,9 @@ internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File, 
     destination.mkdirs()
     reportFaces(prefix, library.cutouts)
     val panelTarget = library.target.downscaleLongEdge(PANEL_EDGE)
-    val fullTarget = library.target.downscaleLongEdge(FULL_EDGE)
-    val collageTarget = library.target.fitLongEdge(FULL_EDGE)
+    val fullEdge = outputEdge(library.target, FULL_EDGE)
+    val fullTarget = library.target.fitLongEdge(fullEdge)
+    val collageTarget = fullTarget
     val cutouts = sources(library.cutouts, "cutout")
     val photos = sources(library.photos, "photo")
     val opaque = sources(library.photos, "grid")
@@ -51,12 +53,17 @@ internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File, 
     writeCollageRow(panelTarget, cutouts, photos, destination, prefix)
     writeShapeRow(panelTarget, cutouts, destination, prefix)
     writeHybridRow(panelTarget, cutouts, destination, prefix)
-    val fullCollage = render(collageTarget, cutouts, currentCollage(FULL_EDGE, HybridStack.CUTOUTS, NORMAL_PIECES), "${prefix}full")
+    val fullCollage = render(
+        collageTarget,
+        cutouts,
+        currentCollage(fullEdge, HybridStack.CUTOUTS, NORMAL_PIECES).longEdge(library.target, fullEdge),
+        "${prefix}full"
+    )
     writePng(fullCollage, listOf(File(destination, "${prefix}cutout-collage-output.png")))
     writeReviewArtifacts(fullCollage, collageTarget, destination, prefix)
-    val dense = render(collageTarget, cutouts, denseCollage(FULL_EDGE), "${prefix}dense")
+    val dense = render(collageTarget, cutouts, denseCollage(fullEdge).longEdge(library.target, fullEdge), "${prefix}dense")
     writePng(dense, listOf(File(destination, "${prefix}cutout-collage-dense.png")))
-    val grid = render(fullTarget, opaque, gridConfig(80, FULL_EDGE))
+    val grid = render(fullTarget, opaque, gridConfig(80, fullEdge).longEdge(library.target, fullEdge))
     writePng(grid, listOf(File(destination, "${prefix}showcase-grid.png")))
     copyArtifacts(destination, prefix)
 }
@@ -260,6 +267,24 @@ private fun currentCollage(edge: Int, stack: HybridStack, pieces: Int) = MosaicC
 )
 
 private fun MosaicConfig.stack(stack: HybridStack) = copy(collage = collage.copy(stack = stack))
+
+/** Custom width is the output width, so a portrait must set the height or it grows past the long edge. */
+private fun MosaicConfig.longEdge(target: PixelImage, edge: Int): MosaicConfig {
+    return if (target.width >= target.height) {
+        copy(customOutputWidth = edge, customOutputHeight = 0)
+    } else {
+        copy(customOutputWidth = 0, customOutputHeight = edge)
+    }
+}
+
+private fun outputEdge(target: PixelImage, edge: Int): Int {
+    val longSide = maxOf(target.width, target.height).coerceAtLeast(1)
+    val shortSide = minOf(target.width, target.height).coerceAtLeast(1)
+    val pixels = edge.toLong() * edge.toLong() * shortSide / longSide
+    if (pixels <= SHOWCASE_PIXELS) return edge
+    val scale = kotlin.math.sqrt(SHOWCASE_PIXELS.toDouble() / pixels.toDouble())
+    return (edge * scale).toInt().coerceAtLeast(1)
+}
 
 private fun PixelImage.fitted(frame: PixelImage): PixelImage = resizeToHeight(frame.height)
 

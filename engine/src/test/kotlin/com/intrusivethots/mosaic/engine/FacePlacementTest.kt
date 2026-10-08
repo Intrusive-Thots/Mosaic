@@ -34,6 +34,19 @@ class FacePlacementTest {
     }
 
     @Test
+    fun stampedFacesStayOnTheEyes() {
+        for (index in 0 until 16) {
+            val organic = CartoonFaceFinder.find(organicCutout(index, 16, 48))
+            val photo = CartoonFaceFinder.find(photoCutout(index, 16, 48))
+            assertTrue(organic.isNotEmpty() && photo.isNotEmpty(), "index $index missing a face")
+            (organic + photo).forEach { face ->
+                val onEyes = kotlin.math.abs(face.centerX - 0.5f) < 0.22f && face.centerY in 0.25f..0.72f
+                assertTrue(onEyes, "index $index stray face ${face.left} ${face.top} ${face.right} ${face.bottom}")
+            }
+        }
+    }
+
+    @Test
     fun everyPlacedPieceShowsAFace() = runBlocking {
         val tiles = (0 until 8).map { index ->
             MemoryTileSource(shapedCutout(index, 8, 28), "face-$index")
