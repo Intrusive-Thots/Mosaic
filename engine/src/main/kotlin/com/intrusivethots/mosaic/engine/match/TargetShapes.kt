@@ -802,6 +802,8 @@ private fun chainCut(chain: IntArray, plane: LabPlane, grow: Int): ShapeCut? {
     return cutForLabel(labels, plane, 0, grow)
 }
 
+internal fun luminanceGradient(plane: LabPlane): FloatArray = gradientMap(plane.l, plane.width, plane.height)
+
 private fun gradientMap(l: FloatArray, width: Int, height: Int): FloatArray {
     val gradient = FloatArray(l.size)
     for (y in 0 until height) {

@@ -1,6 +1,7 @@
 package com.intrusivethots.mosaic.engine.render
 
 import com.intrusivethots.mosaic.engine.color.OkLab
+import com.intrusivethots.mosaic.engine.config.CollageStyle
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.RenderMode
 import com.intrusivethots.mosaic.engine.image.PixelImage
@@ -68,10 +69,10 @@ internal fun paintShapeRow(
     outputWidth: Int,
     outputHeight: Int,
     source: PixelImage,
+    base: PixelImage,
     descriptor: TileDescriptor,
     placement: CutoutPlacement,
     config: MosaicConfig,
-    target: PixelImage?,
     coverage: BooleanArray?,
     owners: IntArray?,
     owner: Int,
@@ -81,35 +82,88 @@ internal fun paintShapeRow(
 ) {
     val mask = placement.mask ?: return
     val ny = (y + 0.5f) / outputHeight
-    if (ny < mask.top - 0.002f || ny > mask.bottom + 0.002f) return
-    val left = (mask.left * outputWidth).toInt().coerceIn(0, outputWidth - 1)
-    val right = ((mask.right * outputWidth).toInt() - 1).coerceIn(left, outputWidth - 1)
+    val edge = if (outline != null && paperRim(config)) paperEdge(outline, ny, outputHeight) else null
+    val pad = if (edge != null) RIM_PAD / outputHeight.toFloat() else 0.002f
+    if (ny < mask.top - pad || ny > mask.bottom + pad) return
+    val extra = if (edge != null) RIM_PAD else 0
+    val left = ((mask.left * outputWidth).toInt() - extra).coerceIn(0, outputWidth - 1)
+    val right = ((mask.right * outputWidth).toInt() + extra).coerceIn(left, outputWidth - 1)
     val radians = Math.toRadians(placement.angleDegrees.toDouble())
     val turnCos = cos(radians).toFloat()
     val turnSin = sin(radians).toFloat()
     val lab = FloatArray(3)
+    val low = FloatArray(3)
     val crossings = if (outline == null) null else outlineCrossings(outline, ny)
     for (x in left..right) {
         val color = cutPixel(
-            source, descriptor, placement, mask, config, target, field, tone,
-            x, y, outputWidth, outputHeight, turnCos, turnSin, lab, crossings
+            source, base, descriptor, placement, mask, config, field, tone,
+            x, y, outputWidth, outputHeight, turnCos, turnSin, lab, low, crossings
         )
-        if (color == 0) continue
-        val index = y * outputWidth + x
-        val alpha = color ushr 24
-        row[x] = srcOver(row[x], color)
-        if (alpha > 40 && coverage != null) coverage[index] = true
-        if (alpha > 140 && owners != null) owners[index] = owner
+        if (color != 0) {
+            stampCut(row, y, x, outputWidth, color, coverage, owners, owner)
+            continue
+        }
+        val fiber = if (edge == null) 0 else fiberColor(edge, outputWidth, x)
+        if (fiber != 0) row[x] = srcOver(row[x], fiber)
     }
+}
+
+private fun stampCut(
+    row: IntArray,
+    y: Int,
+    x: Int,
+    outputWidth: Int,
+    color: Int,
+    coverage: BooleanArray?,
+    owners: IntArray?,
+    owner: Int
+) {
+    row[x] = srcOver(row[x], color)
+    val index = y * outputWidth + x
+    val alpha = color ushr 24
+    if (alpha > 40 && coverage != null) coverage[index] = true
+    if (alpha > 140 && owners != null) owners[index] = owner
+}
+
+private fun paperRim(config: MosaicConfig): Boolean {
+    return config.collage.separatePieces || config.collage.style == CollageStyle.PAPER
+}
+
+private class PaperEdge(val near: Array<FloatArray>, val shadow: FloatArray)
+
+private fun paperEdge(outline: PieceOutline, ny: Float, outputHeight: Int): PaperEdge {
+    val near = Array(RIM_REACH * 2 + 1) { slot ->
+        outlineCrossings(outline, ny + (slot - RIM_REACH) / outputHeight.toFloat())
+    }
+    val shadow = outlineCrossings(outline, ny - SHADOW_DY / outputHeight.toFloat())
+    return PaperEdge(near, shadow)
+}
+
+private fun fiberColor(edge: PaperEdge, outputWidth: Int, x: Int): Int {
+    if (touchesInterior(edge.near, outputWidth, x)) return FIBER
+    val shadowX = x + SHADOW_DX
+    if (shadowX !in 0 until outputWidth) return 0
+    return if (outlineCoverage(edge.shadow, outputWidth, shadowX) >= SOLID) SHADOW else 0
+}
+
+private fun touchesInterior(rows: Array<FloatArray>, outputWidth: Int, x: Int): Boolean {
+    for (row in rows) {
+        for (dx in -RIM_REACH..RIM_REACH) {
+            val px = x + dx
+            if (px !in 0 until outputWidth) continue
+            if (outlineCoverage(row, outputWidth, px) >= SOLID) return true
+        }
+    }
+    return false
 }
 
 private fun cutPixel(
     source: PixelImage,
+    base: PixelImage,
     descriptor: TileDescriptor,
     placement: CutoutPlacement,
     mask: PieceMask,
     config: MosaicConfig,
-    target: PixelImage?,
     field: PixelImage?,
     tone: RegionTone?,
     x: Int,
@@ -119,6 +173,7 @@ private fun cutPixel(
     turnCos: Float,
     turnSin: Float,
     lab: FloatArray,
+    low: FloatArray,
     crossings: FloatArray?
 ): Int {
     val nx = (x + 0.5f) / outputWidth
@@ -128,7 +183,8 @@ private fun cutPixel(
     if (cover < 12) return 0
     val sampled = sourceColor(source, descriptor, placement, mask, nx, ny, turnCos, turnSin)
     if ((sampled ushr 24) < 128) return 0
-    val painted = harmonize(sampled, target, field, tone, config, x, y, outputWidth, outputHeight, lab)
+    val basePx = sourceColor(base, descriptor, placement, mask, nx, ny, turnCos, turnSin)
+    val painted = harmonize(sampled, basePx, field, tone, config, x, y, outputWidth, outputHeight, lab, low)
     return (painted and 0x00FFFFFF) or (cover shl 24)
 }
 
@@ -146,7 +202,10 @@ private fun maskCoverage(mask: PieceMask, nx: Float, ny: Float): Int {
     val ty = y - y0
     val top = alphaAt(mask, x0, y0) + (alphaAt(mask, x1, y0) - alphaAt(mask, x0, y0)) * tx
     val bottom = alphaAt(mask, x0, y1) + (alphaAt(mask, x1, y1) - alphaAt(mask, x0, y1)) * tx
-    return (top + (bottom - top) * ty).roundToInt().coerceIn(0, 255)
+    val sampled = (top + (bottom - top) * ty).roundToInt()
+    if (sampled >= 220) return 255
+    if (sampled <= 28) return 0
+    return sampled.coerceIn(0, 255)
 }
 
 private fun alphaAt(mask: PieceMask, x: Int, y: Int): Float =
@@ -242,7 +301,7 @@ private fun nearer(candidate: Int, index: Int, current: Int, width: Int): Boolea
 
 private fun harmonize(
     sampled: Int,
-    target: PixelImage?,
+    basePx: Int,
     field: PixelImage?,
     tone: RegionTone?,
     config: MosaicConfig,
@@ -250,31 +309,114 @@ private fun harmonize(
     y: Int,
     outputWidth: Int,
     outputHeight: Int,
-    lab: FloatArray
+    lab: FloatArray,
+    low: FloatArray
 ): Int {
     val strength = config.colorMatchWeight
-    if (tone == null || target == null || config.renderMode == RenderMode.ORIGINAL || strength <= 0f) return sampled
+    if (tone == null || config.renderMode == RenderMode.ORIGINAL || strength <= 0f) return sampled
     OkLab.writeLab(sampled, lab, 0)
+    val sharpL = lab[0]
+    val sharpA = lab[1]
+    val sharpB = lab[2]
+    OkLab.writeLab(basePx, lab, 0)
+    writeLow(low, field, tone, x, y, outputWidth, outputHeight)
     val center = 1f - (1f - strength) * (1f - strength)
-    val srcSpread = tone.srcSpread.coerceAtLeast(0.004f)
-    val ratio = (tone.tgtSpread / srcSpread).coerceIn(0.05f, 1.15f)
-    val keep = if (tone.kappa < 0.5f) tone.kappa else ratio * (0.55f + 0.45f * (1f - center))
-    var l = tone.tgtL + (lab[0] - tone.srcL) * keep
-    var a = tone.tgtA + (lab[1] - tone.srcA) * keep
-    var b = tone.tgtB + (lab[2] - tone.srcB) * keep
-    l = lab[0] + (l - lab[0]) * center
-    a = lab[1] + (a - lab[1]) * center
-    b = lab[2] + (b - lab[2]) * center
-    if (field != null) {
-        val nudge = strength * if (config.renderMode == RenderMode.BLENDED) 0.12f else 0.22f
-        val fx = (x + 0.5f) * field.width / outputWidth - 0.5f
-        val fy = (y + 0.5f) * field.height / outputHeight - 0.5f
-        val low = OkLab.fromArgb(field.sampleBilinear(fx, fy))
-        l += (low.l - l) * nudge
-        a += (low.a - a) * nudge
-        b += (low.b - b) * nudge
-    }
+    val keep = tone.kappa.coerceIn(0.85f, 1f)
+    val l = lab[0] + (low[0] - lab[0]) * center + (sharpL - lab[0]) * keep
+    val a = lab[1] + (low[1] - lab[1]) * center + (sharpA - lab[1]) * keep
+    val b = lab[2] + (low[2] - lab[2]) * center + (sharpB - lab[2]) * keep
     return OkLab.toArgb(l.coerceIn(0f, 1f), a.coerceIn(-0.5f, 0.5f), b.coerceIn(-0.5f, 0.5f))
+}
+
+private fun writeLow(
+    into: FloatArray,
+    field: PixelImage?,
+    tone: RegionTone,
+    x: Int,
+    y: Int,
+    outputWidth: Int,
+    outputHeight: Int
+) {
+    if (field == null) {
+        into[0] = tone.tgtL
+        into[1] = tone.tgtA
+        into[2] = tone.tgtB
+        return
+    }
+    val fx = (x + 0.5f) * field.width / outputWidth - 0.5f
+    val fy = (y + 0.5f) * field.height / outputHeight - 0.5f
+    OkLab.writeLab(field.sampleBilinear(fx, fy), into, 0)
+}
+
+/** Low-frequency base of a source. The render adds the sharp residual back on top. */
+internal fun softBase(image: PixelImage): PixelImage {
+    var pixels = image.pixels
+    repeat(BASE_PASSES) {
+        pixels = blurVertical(blurHorizontal(pixels, image.width, image.height, BASE_RADIUS), image.width, image.height, BASE_RADIUS)
+    }
+    return PixelImage(image.width, image.height, pixels)
+}
+
+private fun blurHorizontal(source: IntArray, width: Int, height: Int, radius: Int): IntArray {
+    val into = IntArray(source.size)
+    val window = radius * 2 + 1
+    for (y in 0 until height) blurSpan(source, into, y * width, width, radius, window)
+    return into
+}
+
+private fun blurVertical(source: IntArray, width: Int, height: Int, radius: Int): IntArray {
+    val into = IntArray(source.size)
+    val window = radius * 2 + 1
+    for (x in 0 until width) blurColumn(source, into, x, width, height, radius, window)
+    return into
+}
+
+private fun blurSpan(source: IntArray, into: IntArray, row: Int, width: Int, radius: Int, window: Int) {
+    var red = 0
+    var green = 0
+    var blue = 0
+    for (dx in -radius..radius) {
+        val pixel = source[row + dx.coerceIn(0, width - 1)]
+        red += (pixel ushr 16) and 255
+        green += (pixel ushr 8) and 255
+        blue += pixel and 255
+    }
+    for (x in 0 until width) {
+        into[row + x] = OPAQUE or ((red / window) shl 16) or ((green / window) shl 8) or (blue / window)
+        val lose = source[row + (x - radius).coerceIn(0, width - 1)]
+        val gain = source[row + (x + radius + 1).coerceIn(0, width - 1)]
+        red += ((gain ushr 16) and 255) - ((lose ushr 16) and 255)
+        green += ((gain ushr 8) and 255) - ((lose ushr 8) and 255)
+        blue += (gain and 255) - (lose and 255)
+    }
+}
+
+private fun blurColumn(
+    source: IntArray,
+    into: IntArray,
+    x: Int,
+    width: Int,
+    height: Int,
+    radius: Int,
+    window: Int
+) {
+    var red = 0
+    var green = 0
+    var blue = 0
+    for (dy in -radius..radius) {
+        val pixel = source[dy.coerceIn(0, height - 1) * width + x]
+        red += (pixel ushr 16) and 255
+        green += (pixel ushr 8) and 255
+        blue += pixel and 255
+    }
+    for (y in 0 until height) {
+        into[y * width + x] = OPAQUE or ((red / window) shl 16) or ((green / window) shl 8) or (blue / window)
+        val lose = source[(y - radius).coerceIn(0, height - 1) * width + x]
+        val gain = source[(y + radius + 1).coerceIn(0, height - 1) * width + x]
+        red += ((gain ushr 16) and 255) - ((lose ushr 16) and 255)
+        green += ((gain ushr 8) and 255) - ((lose ushr 8) and 255)
+        blue += (gain and 255) - (lose and 255)
+    }
 }
 
 private fun toneFromSamples(
@@ -368,50 +510,18 @@ private fun toneFromSamples(
     )
 }
 
-internal fun flattenPaper(image: PixelImage): PixelImage {
-    var current = image
-    repeat(FLATTEN_PASSES) { current = flattenPass(current) }
-    return current
-}
-
-private fun flattenPass(image: PixelImage): PixelImage {
-    val pixels = IntArray(image.pixels.size)
-    val lab = FloatArray(3)
-    val neighbor = FloatArray(3)
-    for (y in 0 until image.height) {
-        for (x in 0 until image.width) pixels[y * image.width + x] = flattenPixel(image, x, y, lab, neighbor)
-    }
-    return PixelImage(image.width, image.height, pixels)
-}
-
-private fun flattenPixel(image: PixelImage, x: Int, y: Int, lab: FloatArray, neighbor: FloatArray): Int {
-    OkLab.writeLab(image.pixels[y * image.width + x], lab, 0)
-    var l = 0f
-    var a = 0f
-    var b = 0f
-    var weight = 0f
-    for (dy in -1..1) {
-        val py = (y + dy).coerceIn(0, image.height - 1)
-        for (dx in -1..1) {
-            val px = (x + dx).coerceIn(0, image.width - 1)
-            OkLab.writeLab(image.pixels[py * image.width + px], neighbor, 0)
-            val range = neighbor[0] - lab[0]
-            val influence = if (range * range > FLATTEN_RANGE * FLATTEN_RANGE) 0.2f else 1f
-            l += neighbor[0] * influence
-            a += neighbor[1] * influence
-            b += neighbor[2] * influence
-            weight += influence
-        }
-    }
-    val safe = weight.coerceAtLeast(1e-3f)
-    return OkLab.toArgb(l / safe, a / safe, b / safe) or OPAQUE
-}
-
 private const val OPAQUE = 0xFF shl 24
-private const val FLATTEN_PASSES = 4
-private const val FLATTEN_RANGE = 0.08f
 private const val FIELD_EDGE = 64
 private const val TONE_STEPS = 7
 private const val BLOCKING_SCALE = 0.055f
-private const val BLOCK_DETAIL = 0.08f
-private const val DETAIL_KEEP = 0.85f
+private const val BLOCK_DETAIL = 1f
+private const val DETAIL_KEEP = 1f
+private const val RIM_PAD = 6
+private const val RIM_REACH = 2
+private const val SHADOW_DX = 3
+private const val SHADOW_DY = 3
+private const val SOLID = 200
+private const val FIBER = (210 shl 24) or (245 shl 16) or (236 shl 8) or 220
+private const val SHADOW = 48 shl 24
+private const val BASE_RADIUS = 14
+private const val BASE_PASSES = 2

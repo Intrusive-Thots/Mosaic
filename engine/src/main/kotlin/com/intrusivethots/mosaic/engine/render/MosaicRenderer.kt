@@ -245,10 +245,10 @@ class MosaicRenderer(
             if (y % 8 == 0) coroutineContext.ensureActive()
             if (collageOnTop) {
                 fillUniformRow(plan, descriptors, thumbnails, layout, config, y, row)
-                paintCutouts(row, y, sprites, config, layout, target, coverage, owners, field)
+                paintCutouts(row, y, sprites, config, layout, coverage, owners, field)
             } else {
                 collageRenderer.paintBackground(row, y, layout.width, layout.height, target, useTarget, mean)
-                paintCutouts(row, y, sprites, config, layout, target, coverage, owners, field)
+                paintCutouts(row, y, sprites, config, layout, coverage, owners, field)
                 fillUniformRow(plan, descriptors, thumbnails, layout, config, y, gridRow)
                 overlayGrid(row, gridRow, y, layout, grout, coverage)
             }
@@ -267,7 +267,6 @@ class MosaicRenderer(
         sprites: List<CollageRenderer.Sprite>,
         config: MosaicConfig,
         layout: OutputLayout,
-        target: PixelImage?,
         coverage: BooleanArray?,
         owners: IntArray?,
         field: PixelImage?
@@ -277,8 +276,8 @@ class MosaicRenderer(
             val sprite = sprites[index]
             if (sprite.placement.mask != null) {
                 paintShapeRow(
-                    row, y, width, layout.height, sprite.source, sprite.descriptor, sprite.placement,
-                    config, target, coverage, owners, index, sprite.tone, field, sprite.outline
+                    row, y, width, layout.height, sprite.source, sprite.base, sprite.descriptor, sprite.placement,
+                    config, coverage, owners, index, sprite.tone, field, sprite.outline
                 )
                 continue
             }

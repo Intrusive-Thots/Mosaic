@@ -183,6 +183,49 @@ fun distanceReadability(rendered: PixelImage, reference: PixelImage, width: Int 
 }
 
 /**
+ * Mean absolute luminance deviation from a 3×3 box. Flat paper scores near zero.
+ * Line art, eyes, and type score higher.
+ */
+fun highFrequencyEnergy(image: PixelImage): Double {
+    if (image.width < 3 || image.height < 3) return 0.0
+    val tone = luminance(image)
+    var sum = 0.0
+    var count = 0
+    for (y in 1 until image.height - 1) {
+        val row = y * image.width
+        for (x in 1 until image.width - 1) {
+            sum += abs(tone[row + x] - boxMean(tone, image.width, x, y))
+            count++
+        }
+    }
+    return if (count == 0) 0.0 else sum / count
+}
+
+/**
+ * High-frequency energy kept after color correction, relative to the same plan
+ * rendered from the source crops with no recoloring. 1 means the line art survived.
+ */
+fun textureVisibility(corrected: PixelImage, original: PixelImage): Double {
+    val sourceImage = if (original.width == corrected.width && original.height == corrected.height) {
+        original
+    } else {
+        original.resizeAreaAverage(corrected.width, corrected.height)
+    }
+    val source = highFrequencyEnergy(sourceImage)
+    if (source < 1e-5) return 1.0
+    return highFrequencyEnergy(corrected) / source
+}
+
+private fun boxMean(tone: FloatArray, width: Int, x: Int, y: Int): Float {
+    var sum = 0f
+    for (dy in -1..1) {
+        val row = (y + dy) * width
+        for (dx in -1..1) sum += tone[row + x + dx]
+    }
+    return sum / 9f
+}
+
+/**
  * OKLab ΔE and luminance SSIM on a four-level pyramid. Coarser levels count more,
  * so a missed color mass costs more than texture inside a piece.
  * Weights run from fine to coarse: 0.10, 0.20, 0.30, 0.40.

@@ -34,7 +34,21 @@ internal class ShapeFit(
 ) {
     var comparisons: Long = 0
 
-    fun choose(cut: ShapeCut, ordinal: Int, avoid: Int = -1, commit: Boolean = true): CutoutPlacement? {
+    fun choose(
+        cut: ShapeCut,
+        ordinal: Int,
+        avoid: Int = -1,
+        commit: Boolean = true,
+        taken: Set<Int> = emptySet()
+    ): CutoutPlacement? {
+        val placement = select(cut, ordinal, avoid, taken)
+            ?: if (taken.isEmpty()) null else select(cut, ordinal, avoid, emptySet())
+        if (placement == null) return null
+        if (commit) keep(placement)
+        return placement
+    }
+
+    private fun select(cut: ShapeCut, ordinal: Int, avoid: Int, taken: Set<Int>): CutoutPlacement? {
         val column = (cut.centerX * GRID).toInt().coerceIn(0, GRID - 1)
         val row = (cut.centerY * GRID).toInt().coerceIn(0, GRID - 1)
         index.fillCandidates(
@@ -57,7 +71,7 @@ internal class ShapeFit(
         var bestScore = Float.POSITIVE_INFINITY
         for (slot in 0 until topK.size) {
             val tile = topK.ids[slot]
-            if (tile == avoid) continue
+            if (tile == avoid || tile in taken) continue
             val penalty = tracker.penalty(tile) + jitter(config.randomSeed, ordinal, tile)
             val scored = scoreTile(swatches[tile], cut, angles, span, penalty, solve)
             comparisons++
@@ -70,7 +84,7 @@ internal class ShapeFit(
             }
         }
         if (bestTile < 0) return null
-        val placement = CutoutPlacement(
+        return CutoutPlacement(
             tileIndex = bestTile,
             x = cut.centerX,
             y = cut.centerY,
@@ -84,8 +98,6 @@ internal class ShapeFit(
             cropV = bestV,
             cropSpan = span
         )
-        if (commit) keep(placement)
-        return placement
     }
 
     fun keep(placement: CutoutPlacement) {
@@ -111,20 +123,45 @@ private fun scoreTile(
     penalty: Float,
     solve: Boolean
 ): Scored {
-    if (cut.blocking) return scoreFlat(swatch, cut, penalty, solve)
+    if (cut.blocking && cut.spread < BUSY_SPREAD) return scoreFlat(swatch, cut, penalty, solve)
     var best = Scored(Float.POSITIVE_INFINITY, 0f, 0.5f, 0.5f)
     for (angle in angles) {
         val radians = Math.toRadians(angle.toDouble())
-        val cos = cos(radians).toFloat()
-        val sin = sin(radians).toFloat()
+        val turnCos = cos(radians).toFloat()
+        val turnSin = sin(radians).toFloat()
         for (anchorV in ANCHORS) {
             for (anchorU in ANCHORS) {
-                val score = sampleError(swatch, cut, cos, sin, anchorU, anchorV, span, solve) + penalty
+                val score = sampleError(swatch, cut, turnCos, turnSin, anchorU, anchorV, span, solve) + penalty
                 if (score < best.score) best = Scored(score, angle, anchorU, anchorV)
             }
         }
     }
-    return best
+    return refineCrop(swatch, cut, best, span, penalty, solve)
+}
+
+/** Slides the winning crop so the piece shows the matching part of the source, not a flat patch. */
+private fun refineCrop(
+    swatch: TileSwatch,
+    cut: ShapeCut,
+    best: Scored,
+    span: Float,
+    penalty: Float,
+    solve: Boolean
+): Scored {
+    if (best.score == Float.POSITIVE_INFINITY) return best
+    val radians = Math.toRadians(best.angle.toDouble())
+    val turnCos = cos(radians).toFloat()
+    val turnSin = sin(radians).toFloat()
+    var chosen = best
+    for (shiftV in CROP_SHIFTS) {
+        for (shiftU in CROP_SHIFTS) {
+            val score = sampleError(
+                swatch, cut, turnCos, turnSin, best.u + shiftU, best.v + shiftV, span, solve
+            ) + penalty
+            if (score < chosen.score) chosen = Scored(score, best.angle, best.u + shiftU, best.v + shiftV)
+        }
+    }
+    return chosen
 }
 
 private fun sampleError(
@@ -198,7 +235,7 @@ private fun scoreFlat(swatch: TileSwatch, cut: ShapeCut, penalty: Float, solve: 
 }
 
 private fun flatScore(window: WindowColor, cut: ShapeCut, penalty: Float, solve: Boolean): Float {
-    val texture = window.spread * 9f
+    val texture = window.spread * FLAT_TEXTURE
     if (!solve) {
         val dl = window.l - cut.meanL
         val da = window.a - cut.meanA
@@ -365,6 +402,9 @@ private fun jitter(seed: Int, ordinal: Int, tile: Int): Float {
 private const val SWATCH = 12
 private const val GRID = 12
 private const val FLAT_SPAN = 0.2f
+private const val FLAT_TEXTURE = 1.2f
+private const val BUSY_SPREAD = 0.04f
 private val ANCHORS = floatArrayOf(0.34f, 0.5f, 0.66f)
+private val CROP_SHIFTS = floatArrayOf(-0.10f, -0.05f, 0f, 0.05f, 0.10f)
 private val FLAT_ANCHORS = floatArrayOf(0.24f, 0.4f, 0.56f, 0.72f)
 private val FLAT_WINDOW = floatArrayOf(-0.06f, 0f, 0.06f)

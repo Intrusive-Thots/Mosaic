@@ -7,9 +7,13 @@ import com.intrusivethots.mosaic.engine.config.CollageStyle
 import com.intrusivethots.mosaic.engine.config.HybridStack
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.MosaicKind
+import com.intrusivethots.mosaic.engine.config.OutputLayout
 import com.intrusivethots.mosaic.engine.config.RenderMode
 import com.intrusivethots.mosaic.engine.config.planOutput
 import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
+import com.intrusivethots.mosaic.engine.coord.GenerationResult
+import com.intrusivethots.mosaic.engine.quality.distanceReadability
+import com.intrusivethots.mosaic.engine.quality.textureVisibility
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.downscaleLongEdge
 import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
@@ -39,9 +43,9 @@ internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File, 
     writeCollageRow(panelTarget, cutouts, photos, destination, prefix)
     writeShapeRow(panelTarget, cutouts, destination, prefix)
     writeHybridRow(panelTarget, cutouts, destination, prefix)
-    val fullCollage = render(fullTarget, cutouts, currentCollage(FULL_EDGE, HybridStack.CUTOUTS, 720))
+    val fullCollage = render(fullTarget, cutouts, currentCollage(FULL_EDGE, HybridStack.CUTOUTS, 720), "${prefix}full")
     writePng(fullCollage, listOf(File(destination, "${prefix}cutout-collage-output.png")))
-    val dense = render(fullTarget, cutouts, denseCollage(FULL_EDGE))
+    val dense = render(fullTarget, cutouts, denseCollage(FULL_EDGE), "${prefix}dense")
     writePng(dense, listOf(File(destination, "${prefix}cutout-collage-dense.png")))
     val grid = render(fullTarget, opaque, gridConfig(80, FULL_EDGE))
     writePng(grid, listOf(File(destination, "${prefix}showcase-grid.png")))
@@ -108,9 +112,38 @@ private suspend fun writeHybridRow(
     writePng(strip.downscaleLongEdge(STRIP_EDGE), listOf(File(destination, "${prefix}cutout-hybrid.png")))
 }
 
-private suspend fun render(target: PixelImage, tiles: List<MemoryTileSource>, config: MosaicConfig): PixelImage {
+private suspend fun render(
+    target: PixelImage,
+    tiles: List<MemoryTileSource>,
+    config: MosaicConfig,
+    label: String = ""
+): PixelImage {
     val result = GenerationCoordinator().generate(target, tiles, config, preview = false)
-    return result.image ?: error("Showcase render produced no image.")
+    val image = result.image ?: error("Showcase render produced no image.")
+    if (label.isNotEmpty()) reportRead(label, image, target, result, tiles, config)
+    return image
+}
+
+private suspend fun reportRead(
+    label: String,
+    image: PixelImage,
+    target: PixelImage,
+    result: GenerationResult,
+    tiles: List<MemoryTileSource>,
+    config: MosaicConfig
+) {
+    val edge = maxOf(config.descriptorMaxEdge, GenerationCoordinator.COLLAGE_RENDER_EDGE)
+    val thumbs = tiles.map { it.loadThumbnail(edge) }
+    val sink = MemoryRowSink(image.width, image.height)
+    val plain = config.copy(renderMode = RenderMode.ORIGINAL, colorMatchWeight = 0f)
+    MosaicRenderer().render(
+        result.plan, result.descriptors, thumbs,
+        OutputLayout(1, 1, image.width, image.height, false),
+        plain, sink, target
+    )
+    val distance = distanceReadability(image, target)
+    val texture = textureVisibility(image, sink.toImage())
+    println("SHOWCASE $label distance ${distance.deltaE} ssim ${distance.ssim} texture $texture")
 }
 
 private suspend fun renderLegacy(
@@ -190,6 +223,7 @@ private fun currentCollage(edge: Int, stack: HybridStack, pieces: Int) = MosaicC
         background = CollageBackground.MEAN_COLOR,
         shapeWeight = 0.45f,
         refineSteps = 8,
+        separatePieces = true,
         style = CollageStyle.DENSE,
         stack = stack
     )

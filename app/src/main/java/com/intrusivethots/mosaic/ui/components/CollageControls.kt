@@ -56,7 +56,7 @@ private fun CollageSliders(settings: CollageSettings, onCollage: (CollageSetting
         Text(
             "Shapes are cut from the picture itself, then filled from your library. " +
                 "Large pieces block in regions. Smaller ones follow edges and can overlap. " +
-                "Color strength matches a shape's tone to its region and keeps a little source texture.",
+                "Color strength shifts a shape's average color and keeps the source line art.",
             fontSize = 12.sp,
             color = TextSecondary
         )

@@ -35,7 +35,7 @@ internal suspend fun assembleCollage(
         probes, TopK(config.candidateCount.coerceAtLeast(1))
     )
     val correct = config.renderMode != RenderMode.ORIGINAL && config.colorMatchWeight > 0f
-    val canvas = WorkCanvas(plane)
+    val canvas = WorkCanvas(plane, luminanceGradient(plane))
     val pieces = ArrayList<PlacedPiece>()
     onProgress(0.02f, "Cutting large shapes")
     blockIn(target, config, fit, canvas, pieces, correct)
@@ -63,10 +63,13 @@ private suspend fun blockIn(
     correct: Boolean
 ) {
     val ordered = cutTargetShapes(target, config.collage).sortedByDescending { it.scale }
+    val used = HashSet<Int>()
     for (ordinal in ordered.indices) {
         coroutineContext.ensureActive()
         val cut = ordered[ordinal]
-        val chosen = fit.choose(cut, ordinal) ?: continue
+        val reserved = if (cut.blocking) used else emptySet()
+        val chosen = fit.choose(cut, ordinal, taken = reserved) ?: continue
+        if (cut.blocking) used.add(chosen.tileIndex)
         val tone = paintTone(cut, chosen, fit, correct, config.colorMatchWeight)
         pieces.add(PlacedPiece(cut, chosen, tone[0], tone[1], tone[2]))
         canvas.paint(cut, tone[0], tone[1], tone[2])
@@ -81,7 +84,7 @@ private suspend fun refine(
     pieces: MutableList<PlacedPiece>,
     correct: Boolean
 ) {
-    val detail = (config.collage.pieceCount * 0.16f).toInt().coerceIn(0, 80)
+    val detail = (config.collage.pieceCount * 0.22f).toInt().coerceIn(0, 110)
     if (detail == 0) return
     val short = min(plane.width, plane.height)
     val fine = (config.collage.minScale * short).toInt().coerceIn(4, 12)
@@ -172,7 +175,8 @@ private fun swapIfBetter(
     pull: Float
 ) {
     val piece = pieces[index]
-    val alternate = fit.choose(piece.cut, index, piece.placement.tileIndex, commit = false) ?: return
+    val reserved = if (piece.cut.blocking) blockingTiles(pieces, index) else emptySet()
+    val alternate = fit.choose(piece.cut, index, piece.placement.tileIndex, commit = false, taken = reserved) ?: return
     val tone = paintTone(piece.cut, alternate, fit, correct, pull)
     canvas.rebuild(pieces, index)
     val swapped = canvas.predictedError(piece.cut, tone[0], tone[1], tone[2])
@@ -184,6 +188,15 @@ private fun swapIfBetter(
     piece.l = tone[0]
     piece.a = tone[1]
     piece.b = tone[2]
+}
+
+private fun blockingTiles(pieces: List<PlacedPiece>, skip: Int): Set<Int> {
+    val used = HashSet<Int>()
+    for (index in pieces.indices) {
+        if (index == skip || !pieces[index].cut.blocking) continue
+        used.add(pieces[index].placement.tileIndex)
+    }
+    return used
 }
 
 private fun paintTone(
@@ -236,7 +249,7 @@ private fun statsOf(fit: ShapeFit, probes: ProbeCounter, tiles: Int, pieces: Lis
     return stats
 }
 
-private class WorkCanvas(val plane: LabPlane) {
+private class WorkCanvas(val plane: LabPlane, private val edges: FloatArray) {
     val l = FloatArray(plane.l.size) { meanOf(plane.l) }
     val a = FloatArray(plane.a.size) { meanOf(plane.a) }
     val b = FloatArray(plane.b.size) { meanOf(plane.b) }
@@ -311,9 +324,19 @@ private class WorkCanvas(val plane: LabPlane) {
     private fun errorWeight(blur: Int): FloatArray {
         val fine = FloatArray(l.size) { index -> gap(index, l[index], a[index], b[index]) }
         val blurred = boxBlur(fine, blur)
+        val scale = edgeScale()
         val mixed = FloatArray(l.size)
-        for (index in mixed.indices) mixed[index] = fine[index] * 0.35f + blurred[index] * 0.65f
+        for (index in mixed.indices) {
+            val err = fine[index] * 0.35f + blurred[index] * 0.65f
+            mixed[index] = err * (0.2f + 2.2f * edges[index] / scale)
+        }
         return mixed
+    }
+
+    private fun edgeScale(): Float {
+        var peak = 0.02f
+        for (value in edges) if (value > peak) peak = value
+        return peak
     }
 
     private fun boxBlur(source: FloatArray, radius: Int): FloatArray {
