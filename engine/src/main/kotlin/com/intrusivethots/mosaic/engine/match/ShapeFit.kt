@@ -36,9 +36,11 @@ internal class ShapeFit(
     private val topK: TopK,
     private val sourceEdges: IntArray,
     private val outputWidth: Int,
-    private val outputHeight: Int
+    private val outputHeight: Int,
+    private val faces: List<List<FaceBox>> = emptyList()
 ) {
     private val handful = HandfulPenalty()
+    private val reserved = ArrayList<FaceBox>()
     var comparisons: Long = 0
 
     fun choose(
@@ -62,34 +64,40 @@ internal class ShapeFit(
             cut.meanB,
             config.candidateCount,
             config.maxRepetitionDistance,
-            { tile -> tile !in swatches.indices || refused(tile) },
+            { tile -> tile !in swatches.indices || refused(tile) || faces.getOrNull(tile).isNullOrEmpty() },
             topK,
             probes
         )
-        val angles = sourceAngles(config.collage.rotationRangeDegrees)
         val solve = config.renderMode != RenderMode.ORIGINAL && config.colorMatchWeight > 0f
         var bestTile = -1
-        var bestAngle = 0f
         var bestU = 0.5f
         var bestV = 0.5f
         var bestSpan = MIN_SPAN
+        var bestFace = FaceBox(-1f, -1f, -1f, -1f)
         var bestScore = Float.POSITIVE_INFINITY
         for (slot in 0 until topK.size) {
             val tile = topK.ids[slot]
             if (tile == avoid || tile in taken) continue
+            val library = faces.getOrNull(tile).orEmpty()
+            if (library.isEmpty()) continue
             val penalty = tracker.penalty(tile) + jitter(config.randomSeed, ordinal, tile)
             val edge = sourceEdges.getOrElse(tile) { maxOf(outputWidth, outputHeight) }
-            val span = cropSpan(cut, edge, outputWidth, outputHeight)
-            val scored = scoreTile(swatches[tile], cut, angles, span, penalty, solve, config.collage.shapeWeight)
-            val diverse = scored.score + handful.cost(tile, cut.centerX, cut.centerY, scored.u, scored.v)
+            val piecePx = piecePixels(cut, outputWidth, outputHeight)
+            var span = cropSpan(cut, edge, outputWidth, outputHeight)
+            val need = library.minOf { minimumSpan(it, piecePx, edge) }
+            if (need > span) span = need.coerceAtMost(1f)
+            val scored = scoreTile(swatches[tile], cut, UPRIGHT, span, penalty, solve, config.collage.shapeWeight)
+            val seated = seatOnFace(cut, scored, span, library) ?: continue
+            val diverse = scored.score + seated.drift * DRIFT +
+                handful.cost(tile, cut.centerX, cut.centerY, seated.u, seated.v)
             comparisons++
             if (diverse < bestScore) {
                 bestScore = diverse
                 bestTile = tile
-                bestAngle = scored.angle
-                bestU = scored.u
-                bestV = scored.v
+                bestU = seated.u
+                bestV = seated.v
                 bestSpan = span
+                bestFace = seated.face
             }
         }
         if (bestTile < 0) return null
@@ -97,7 +105,7 @@ internal class ShapeFit(
             tileIndex = bestTile,
             x = cut.centerX,
             y = cut.centerY,
-            angleDegrees = bestAngle,
+            angleDegrees = 0f,
             scale = cut.scale,
             targetL = cut.meanL,
             targetA = cut.meanA,
@@ -105,8 +113,36 @@ internal class ShapeFit(
             mask = cut.mask,
             cropU = bestU,
             cropV = bestV,
-            cropSpan = bestSpan
+            cropSpan = bestSpan,
+            faceLeft = bestFace.left,
+            faceTop = bestFace.top,
+            faceRight = bestFace.right,
+            faceBottom = bestFace.bottom
         )
+    }
+
+    private fun seatOnFace(cut: ShapeCut, scored: Scored, span: Float, library: List<FaceBox>): Seated? {
+        var best: Seated? = null
+        for (face in library) {
+            val clamped = clampToFace(scored.u, scored.v, span, face) ?: continue
+            if (!maskCoversFace(cut.mask, face, clamped.first, clamped.second, span)) continue
+            val placed = outputFace(cut.mask, face, clamped.first, clamped.second, span)
+            if (crowded(placed)) continue
+            val du = clamped.first - scored.u
+            val dv = clamped.second - scored.v
+            val drift = du * du + dv * dv
+            if (best == null || drift < best.drift) best = Seated(clamped.first, clamped.second, placed, drift)
+        }
+        return best
+    }
+
+    private fun crowded(box: FaceBox): Boolean {
+        for (other in reserved) {
+            val sameCut = kotlin.math.abs(other.centerX - box.centerX) < 0.012f &&
+                kotlin.math.abs(other.centerY - box.centerY) < 0.012f
+            if (!sameCut && box.overlapFraction(other) > FACE_OVERLAP) return true
+        }
+        return false
     }
 
     /** Repetition off still uses each source once. A radius is a score penalty, not a refusal. */
@@ -120,6 +156,32 @@ internal class ShapeFit(
         val row = (placement.y * GRID).toInt().coerceIn(0, GRID - 1)
         tracker.record(placement.tileIndex, column, row)
         handful.note(placement.tileIndex, placement.x, placement.y, placement.cropU, placement.cropV)
+        hold(placement)
+    }
+
+    fun release(placement: CutoutPlacement) {
+        forgetFace(placement)
+    }
+
+    fun hold(placement: CutoutPlacement) {
+        forgetFace(placement)
+        if (placement.faceRight <= placement.faceLeft) return
+        reserved.add(FaceBox(placement.faceLeft, placement.faceTop, placement.faceRight, placement.faceBottom))
+    }
+
+    fun syncReserved(placements: List<CutoutPlacement>) {
+        reserved.clear()
+        for (placement in placements) hold(placement)
+    }
+
+    private fun forgetFace(placement: CutoutPlacement) {
+        val face = FaceBox(placement.faceLeft, placement.faceTop, placement.faceRight, placement.faceBottom)
+        reserved.removeAll { other ->
+            val nearCut = kotlin.math.abs(other.centerX - placement.x) < 0.012f &&
+                kotlin.math.abs(other.centerY - placement.y) < 0.012f
+            val sameFace = face.right > face.left && other.overlapFraction(face) > 0.5f
+            nearCut || sameFace
+        }
     }
 
     fun colorAt(placement: CutoutPlacement): FloatArray {
@@ -130,6 +192,13 @@ internal class ShapeFit(
 }
 
 private class Scored(val score: Float, val angle: Float, val u: Float, val v: Float)
+
+private class Seated(val u: Float, val v: Float, val face: FaceBox, val drift: Float)
+
+private fun piecePixels(cut: ShapeCut, outputWidth: Int, outputHeight: Int): Float {
+    val mask = cut.mask
+    return maxOf((mask.right - mask.left) * outputWidth, (mask.bottom - mask.top) * outputHeight)
+}
 
 private fun scoreTile(
     swatch: TileSwatch,
@@ -525,12 +594,6 @@ private fun filledNeighbor(weight: IntArray, grid: Int, x: Int, y: Int): Int? {
     return null
 }
 
-private fun sourceAngles(range: Float): FloatArray {
-    if (range < 1f) return floatArrayOf(0f)
-    if (range < 25f) return floatArrayOf(0f, range, -range)
-    return floatArrayOf(0f, range * 0.5f, -range * 0.5f, range, -range)
-}
-
 /**
  * Crop span that shows the piece at about 1:1 with the source.
  * The floor stops a tiny piece from sampling one texel, and it also refuses an
@@ -569,6 +632,9 @@ private const val CONTENT_PENALTY = 0.02f
 private const val FOCUS_BONUS = -0.035f
 private const val FOCUS_MISS = 0.02f
 private const val SHAPE_SCALE = 0.08f
+private const val DRIFT = 0.35f
+private const val FACE_OVERLAP = 0.34f
+private val UPRIGHT = floatArrayOf(0f)
 private val ANCHORS = floatArrayOf(0.34f, 0.5f, 0.66f)
 private val CROP_SHIFTS = floatArrayOf(-0.10f, -0.05f, 0f, 0.05f, 0.10f)
 private val FLAT_ANCHORS = floatArrayOf(0.24f, 0.4f, 0.56f, 0.72f)
