@@ -347,6 +347,6 @@ class GenerationCoordinator(
 
     companion object {
         const val MAX_IN_MEMORY_PIXELS = 2_500_000L
-        const val COLLAGE_RENDER_EDGE = 128
+        const val COLLAGE_RENDER_EDGE = 768
     }
 }

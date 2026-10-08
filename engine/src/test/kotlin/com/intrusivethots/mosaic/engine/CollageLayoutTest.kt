@@ -15,6 +15,7 @@ import com.intrusivethots.mosaic.engine.match.CutoutPlacement
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.progress.GenerationStage
 import com.intrusivethots.mosaic.engine.quality.distanceReadability
+import com.intrusivethots.mosaic.engine.quality.pieceContentFidelity
 import com.intrusivethots.mosaic.engine.quality.pyramidReadability
 import com.intrusivethots.mosaic.engine.quality.textureVisibility
 import com.intrusivethots.mosaic.engine.quality.luminanceSsim
@@ -224,7 +225,15 @@ class CollageLayoutTest {
         )
         val texture = textureVisibility(image, original)
         val placed = result.plan.placements.size
-        println("distance ΔE ${distance.deltaE} SSIM ${distance.ssim} texture $texture")
+        val fidelity = pieceContentFidelity(image, thumbs, result.descriptors, result.plan.placements)
+        println(
+            "distance ΔE ${distance.deltaE} SSIM ${distance.ssim} texture $texture " +
+                "fidelity ${fidelity.median} p10 ${fidelity.lowDecile} pieces ${fidelity.pieces}"
+        )
+        assertTrue(
+            fidelity.median > 0.70 && fidelity.lowDecile > 0.10,
+            "fidelity ${fidelity.median} p10 ${fidelity.lowDecile} pieces ${fidelity.pieces}"
+        )
         assertTrue(
             painted >= 0.96f,
             "painted $painted analysis ${result.plan.coverage} placed $placed ΔE $delta SSIM $ssim edge $edge texture $texture"

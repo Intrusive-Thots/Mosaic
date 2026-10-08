@@ -85,7 +85,7 @@ internal fun paintShapeRow(
 ) {
     val mask = placement.mask ?: return
     val ny = (y + 0.5f) / outputHeight
-    val edge = if (outline != null && paperRim(config)) paperEdge(outline, ny, outputHeight) else null
+    val edge = if (outline != null && paperRim(config)) paperEdge(outline, ny, outputWidth, outputHeight) else null
     val pad = if (edge != null) RIM_PAD / outputHeight.toFloat() else 0.002f
     if (ny < mask.top - pad || ny > mask.bottom + pad) return
     val extra = if (edge != null) RIM_PAD else 0
@@ -134,41 +134,48 @@ private fun paperRim(config: MosaicConfig): Boolean {
 
 private class PaperEdge(val near: Array<FloatArray>, val shadow: FloatArray)
 
-private fun paperEdge(outline: PieceOutline, ny: Float, outputHeight: Int): PaperEdge {
-    val near = Array(RIM_REACH * 2 + 1) { slot ->
-        outlineCrossings(outline, ny + (slot - RIM_REACH) / outputHeight.toFloat())
+private fun paperEdge(outline: PieceOutline, ny: Float, outputWidth: Int, outputHeight: Int): PaperEdge {
+    val depth = rimDepth(outputWidth)
+    val near = Array(depth * 2 + 1) { slot ->
+        outlineCrossings(outline, ny + (slot - depth) / outputHeight.toFloat())
     }
-    val shadow = outlineCrossings(outline, ny - SHADOW_DY / outputHeight.toFloat())
+    val shadowDy = (outputWidth * 4f / RIM_REFERENCE).roundToInt().coerceIn(2, 5)
+    val shadow = outlineCrossings(outline, ny - shadowDy / outputHeight.toFloat())
     return PaperEdge(near, shadow)
 }
 
 private fun fiberColor(edge: PaperEdge, outputWidth: Int, x: Int, y: Int): Int {
-    val reach = tornReach(x, y)
-    if (reach > 0 && touchesInterior(edge.near, outputWidth, x, reach)) return fiberShade(x, y)
-    val shadowX = x + SHADOW_DX
+    val depth = (edge.near.size - 1) / 2
+    val reach = tornReach(x, y, depth)
+    if (reach > 0 && touchesInterior(edge.near, outputWidth, x, reach, depth)) return fiberShade(x, y)
+    val shadowX = x + (outputWidth * 4f / RIM_REFERENCE).roundToInt().coerceIn(2, 5)
     if (shadowX !in 0 until outputWidth) return 0
     return if (outlineCoverage(edge.shadow, outputWidth, shadowX) >= SOLID) SHADOW else 0
 }
 
-/** Zero leaves a gap; one or two pixels is an uneven torn fiber. */
-private fun tornReach(x: Int, y: Int): Int {
+/** About 3–4 px at a 1680-wide collage, and at least a pixel on a small preview. */
+private fun rimDepth(outputWidth: Int): Int {
+    return (outputWidth * 3.5f / RIM_REFERENCE).roundToInt().coerceIn(1, 4)
+}
+
+/** Uneven torn fiber, never thinner than a visible edge. */
+private fun tornReach(x: Int, y: Int, depth: Int): Int {
     val mixed = (x * 374761393) xor (y * 668265263)
-    val band = (if (mixed < 0) -mixed else mixed) % 7
-    if (band < 2) return 0
-    return if (band < 5) 1 else 2
+    val band = (if (mixed < 0) -mixed else mixed) % 3
+    return (depth - 1 + band / 2).coerceIn(1, depth)
 }
 
 private fun fiberShade(x: Int, y: Int): Int {
-    val wobble = ((x * 17 + y * 31) and 15) - 6
-    val red = (245 + wobble / 2).coerceIn(220, 255)
-    val green = (236 + wobble).coerceIn(210, 255)
-    val blue = (220 + wobble).coerceIn(190, 250)
-    return (210 shl 24) or (red shl 16) or (green shl 8) or blue
+    val wobble = ((x * 17 + y * 31) and 7) - 3
+    val red = (250 + wobble).coerceIn(236, 255)
+    val green = (246 + wobble).coerceIn(230, 255)
+    val blue = (236 + wobble).coerceIn(220, 250)
+    return (235 shl 24) or (red shl 16) or (green shl 8) or blue
 }
 
-private fun touchesInterior(rows: Array<FloatArray>, outputWidth: Int, x: Int, reach: Int): Boolean {
+private fun touchesInterior(rows: Array<FloatArray>, outputWidth: Int, x: Int, reach: Int, depth: Int): Boolean {
     for (dy in -reach..reach) {
-        val row = rows[RIM_REACH + dy]
+        val row = rows[depth + dy]
         for (dx in -reach..reach) {
             val px = x + dx
             if (px !in 0 until outputWidth) continue
@@ -367,75 +374,18 @@ private fun writeLow(
     OkLab.writeLab(field.sampleBilinear(fx, fy), into, 0)
 }
 
-/** Low-frequency base of a source. The render adds the sharp residual back on top. */
+/**
+ * A tiny copy of the source, used only as the low-frequency grade.
+ * The pixels that are drawn stay the sharp full-resolution sample.
+ */
 internal fun softBase(image: PixelImage): PixelImage {
-    var pixels = image.pixels
-    repeat(BASE_PASSES) {
-        pixels = blurVertical(blurHorizontal(pixels, image.width, image.height, BASE_RADIUS), image.width, image.height, BASE_RADIUS)
-    }
-    return PixelImage(image.width, image.height, pixels)
-}
-
-private fun blurHorizontal(source: IntArray, width: Int, height: Int, radius: Int): IntArray {
-    val into = IntArray(source.size)
-    val window = radius * 2 + 1
-    for (y in 0 until height) blurSpan(source, into, y * width, width, radius, window)
-    return into
-}
-
-private fun blurVertical(source: IntArray, width: Int, height: Int, radius: Int): IntArray {
-    val into = IntArray(source.size)
-    val window = radius * 2 + 1
-    for (x in 0 until width) blurColumn(source, into, x, width, height, radius, window)
-    return into
-}
-
-private fun blurSpan(source: IntArray, into: IntArray, row: Int, width: Int, radius: Int, window: Int) {
-    var red = 0
-    var green = 0
-    var blue = 0
-    for (dx in -radius..radius) {
-        val pixel = source[row + dx.coerceIn(0, width - 1)]
-        red += (pixel ushr 16) and 255
-        green += (pixel ushr 8) and 255
-        blue += pixel and 255
-    }
-    for (x in 0 until width) {
-        into[row + x] = OPAQUE or ((red / window) shl 16) or ((green / window) shl 8) or (blue / window)
-        val lose = source[row + (x - radius).coerceIn(0, width - 1)]
-        val gain = source[row + (x + radius + 1).coerceIn(0, width - 1)]
-        red += ((gain ushr 16) and 255) - ((lose ushr 16) and 255)
-        green += ((gain ushr 8) and 255) - ((lose ushr 8) and 255)
-        blue += (gain and 255) - (lose and 255)
-    }
-}
-
-private fun blurColumn(
-    source: IntArray,
-    into: IntArray,
-    x: Int,
-    width: Int,
-    height: Int,
-    radius: Int,
-    window: Int
-) {
-    var red = 0
-    var green = 0
-    var blue = 0
-    for (dy in -radius..radius) {
-        val pixel = source[dy.coerceIn(0, height - 1) * width + x]
-        red += (pixel ushr 16) and 255
-        green += (pixel ushr 8) and 255
-        blue += pixel and 255
-    }
-    for (y in 0 until height) {
-        into[y * width + x] = OPAQUE or ((red / window) shl 16) or ((green / window) shl 8) or (blue / window)
-        val lose = source[(y - radius).coerceIn(0, height - 1) * width + x]
-        val gain = source[(y + radius + 1).coerceIn(0, height - 1) * width + x]
-        red += ((gain ushr 16) and 255) - ((lose ushr 16) and 255)
-        green += ((gain ushr 8) and 255) - ((lose ushr 8) and 255)
-        blue += (gain and 255) - (lose and 255)
-    }
+    val longEdge = maxOf(image.width, image.height)
+    val edge = minOf(GRADE_EDGE, (longEdge / 8).coerceAtLeast(2))
+    if (longEdge <= edge) return image
+    val scale = edge.toFloat() / longEdge.toFloat()
+    val width = (image.width * scale).toInt().coerceAtLeast(1)
+    val height = (image.height * scale).toInt().coerceAtLeast(1)
+    return image.resizeAreaAverage(width, height)
 }
 
 private fun toneFromSamples(
@@ -535,11 +485,8 @@ private const val TONE_STEPS = 7
 private const val BLOCKING_SCALE = 0.055f
 private const val BLOCK_DETAIL = 1f
 private const val DETAIL_KEEP = 1f
-private const val RIM_PAD = 6
-private const val RIM_REACH = 2
-private const val SHADOW_DX = 3
-private const val SHADOW_DY = 3
+private const val RIM_PAD = 10
+private const val RIM_REFERENCE = 1680f
+private const val GRADE_EDGE = 40
 private const val SOLID = 200
-private const val SHADOW = 48 shl 24
-private const val BASE_RADIUS = 12
-private const val BASE_PASSES = 2
+private const val SHADOW = 72 shl 24

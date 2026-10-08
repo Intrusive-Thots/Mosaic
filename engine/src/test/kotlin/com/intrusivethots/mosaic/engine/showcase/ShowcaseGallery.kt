@@ -13,6 +13,7 @@ import com.intrusivethots.mosaic.engine.config.planOutput
 import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
 import com.intrusivethots.mosaic.engine.coord.GenerationResult
 import com.intrusivethots.mosaic.engine.quality.distanceReadability
+import com.intrusivethots.mosaic.engine.quality.pieceContentFidelity
 import com.intrusivethots.mosaic.engine.quality.textureVisibility
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.downscaleLongEdge
@@ -31,11 +32,14 @@ internal const val FULL_EDGE = 1680
 internal const val STRIP_EDGE = 1680
 private const val COLLAGE_SEED = 4
 private const val GRID_SEED = 7
+private const val NORMAL_PIECES = 1800
+private const val DENSE_PIECES = 3400
 
 internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File, prefix: String = "") {
     destination.mkdirs()
     val panelTarget = library.target.downscaleLongEdge(PANEL_EDGE)
     val fullTarget = library.target.downscaleLongEdge(FULL_EDGE)
+    val collageTarget = library.target.fitLongEdge(FULL_EDGE)
     val cutouts = sources(library.cutouts, "cutout")
     val photos = sources(library.photos, "photo")
     val opaque = sources(library.photos, "grid")
@@ -43,9 +47,9 @@ internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File, 
     writeCollageRow(panelTarget, cutouts, photos, destination, prefix)
     writeShapeRow(panelTarget, cutouts, destination, prefix)
     writeHybridRow(panelTarget, cutouts, destination, prefix)
-    val fullCollage = render(fullTarget, cutouts, currentCollage(FULL_EDGE, HybridStack.CUTOUTS, 720), "${prefix}full")
+    val fullCollage = render(collageTarget, cutouts, currentCollage(FULL_EDGE, HybridStack.CUTOUTS, NORMAL_PIECES), "${prefix}full")
     writePng(fullCollage, listOf(File(destination, "${prefix}cutout-collage-output.png")))
-    val dense = render(fullTarget, cutouts, denseCollage(FULL_EDGE), "${prefix}dense")
+    val dense = render(collageTarget, cutouts, denseCollage(FULL_EDGE), "${prefix}dense")
     writePng(dense, listOf(File(destination, "${prefix}cutout-collage-dense.png")))
     val grid = render(fullTarget, opaque, gridConfig(80, FULL_EDGE))
     writePng(grid, listOf(File(destination, "${prefix}showcase-grid.png")))
@@ -75,8 +79,8 @@ private suspend fun writeCollageRow(
     prefix: String
 ) {
     val coarse = render(target, cutouts, coarseCollage(PANEL_EDGE))
-    val current = render(target, cutouts, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 720))
-    val photo = render(target, photos, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 720))
+    val current = render(target, cutouts, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, NORMAL_PIECES))
+    val photo = render(target, photos, currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, NORMAL_PIECES))
     val strip = rowOf(listOf(target.fitted(current), coarse, current, photo))
     writePng(strip.downscaleLongEdge(STRIP_EDGE), listOf(File(destination, "${prefix}cutout-collage.png")))
     writePng(photo, listOf(File(destination, "${prefix}cutout-collage-photo.png")))
@@ -91,7 +95,7 @@ private suspend fun writeShapeRow(
     val blockedIn = currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 160).let { config ->
         config.copy(collage = config.collage.copy(minScale = 0.08f, maxScale = 0.2f, overlap = 0.2f))
     }
-    val detailed = currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, 720)
+    val detailed = currentCollage(PANEL_EDGE, HybridStack.CUTOUTS, NORMAL_PIECES)
     val large = render(target, cutouts, blockedIn)
     val fine = render(target, cutouts, detailed)
     val strip = rowOf(listOf(target.fitted(fine), large, fine))
@@ -143,7 +147,13 @@ private suspend fun reportRead(
     )
     val distance = distanceReadability(image, target)
     val texture = textureVisibility(image, sink.toImage())
-    println("SHOWCASE $label distance ${distance.deltaE} ssim ${distance.ssim} texture $texture")
+    val native = tiles.map { it.loadThumbnail(4096) }
+    val fidelity = pieceContentFidelity(image, native, result.descriptors, result.plan.placements)
+    val placed = result.plan.placements.size
+    println(
+        "SHOWCASE $label distance ${distance.deltaE} ssim ${distance.ssim} texture $texture " +
+            "placed $placed fidelity ${fidelity.median} p10 ${fidelity.lowDecile}"
+    )
 }
 
 private suspend fun renderLegacy(
@@ -194,9 +204,9 @@ private fun coarseCollage(edge: Int) = currentCollage(edge, HybridStack.CUTOUTS,
     )
 }
 
-private fun denseCollage(edge: Int) = currentCollage(edge, HybridStack.CUTOUTS, 1100).let { config ->
+private fun denseCollage(edge: Int) = currentCollage(edge, HybridStack.CUTOUTS, DENSE_PIECES).let { config ->
     config.copy(
-        collage = config.collage.copy(minScale = 0.018f, maxScale = 0.07f, refineSteps = 12, shapeWeight = 0.45f)
+        collage = config.collage.copy(minScale = 0.008f, maxScale = 0.03f, refineSteps = 6, shapeWeight = 0.45f)
     )
 }
 
@@ -215,8 +225,8 @@ private fun currentCollage(edge: Int, stack: HybridStack, pieces: Int) = MosaicC
     usageBalanceWeight = 0.2f,
     collage = CollageSettings(
         pieceCount = pieces,
-        minScale = 0.022f,
-        maxScale = 0.09f,
+        minScale = 0.012f,
+        maxScale = 0.05f,
         rotationRangeDegrees = 16f,
         overlap = 0.32f,
         coverageGoal = 0.98f,
@@ -232,6 +242,15 @@ private fun currentCollage(edge: Int, stack: HybridStack, pieces: Int) = MosaicC
 private fun MosaicConfig.stack(stack: HybridStack) = copy(collage = collage.copy(stack = stack))
 
 private fun PixelImage.fitted(frame: PixelImage): PixelImage = resizeToHeight(frame.height)
+
+private fun PixelImage.fitLongEdge(edge: Int): PixelImage {
+    val longEdge = maxOf(width, height)
+    if (longEdge == edge) return this
+    val scale = edge.toFloat() / longEdge.toFloat()
+    val targetWidth = (width * scale).toInt().coerceAtLeast(1)
+    val targetHeight = (height * scale).toInt().coerceAtLeast(1)
+    return resizeAreaAverage(targetWidth, targetHeight)
+}
 
 private fun PixelImage.resizeToHeight(targetHeight: Int): PixelImage {
     if (height == targetHeight) return this

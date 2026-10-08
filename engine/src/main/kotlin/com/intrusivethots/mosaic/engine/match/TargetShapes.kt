@@ -36,35 +36,160 @@ internal fun cutTargetShapes(target: PixelImage, settings: CollageSettings): Lis
     val plane = labPlane(work)
     val budgets = layerBudgets(settings.pieceCount)
     val short = min(plane.width, plane.height).toFloat()
-    val requested = settings.maxScale.coerceAtLeast(0.18f)
-    val coarseStep = (requested * short).toInt().coerceIn(14, (short / 2.5f).toInt().coerceAtLeast(14))
-    val fineStep = (settings.minScale * short * 1.7f).toInt().coerceIn(5, (coarseStep / 2).coerceAtLeast(5))
-    val grow = (settings.overlap * coarseStep * 0.12f).toInt().coerceIn(1, 3)
-    val coarseLabels = mergeSmall(
-        mergeByColor(slic(plane, coarseStep, COARSE_COMPACT), plane),
-        plane.width,
-        plane.height,
-        budgets.coarse
-    )
-    val coarse = cutsFromLabels(coarseLabels, plane, grow)
-    val fine = if (fineStep < coarseStep) {
-        val labels = slic(plane, fineStep, FINE_COMPACT)
-        val ranked = cutsFromLabels(labels, plane, grow.coerceAtLeast(1)).filter { it.scale <= 0.07f }
-        strongest(ranked, plane, budgets.fine)
+    val flatStep = (short * FLAT_FRACTION).toInt().coerceIn(14, (short / 3f).toInt().coerceAtLeast(14))
+    val flat = flatCuts(plane, flatStep, budgets.coarse)
+    val detailStep = detailStep(plane, budgets.fine)
+    val detail = if (detailStep < flatStep) {
+        coveredCuts(slic(plane, detailStep, FINE_COMPACT), plane, budgets.fine, DETAIL_GROW, emptyList())
     } else {
         emptyList()
     }
-    val edges = edgeCuts(plane, budgets.edge, grow.coerceAtLeast(2))
-    return coarse + fine + edges
+    val edges = edgeCuts(plane, budgets.edge, DETAIL_GROW)
+    return flat + detail + edges
 }
 
 private class Budgets(val coarse: Int, val fine: Int, val edge: Int)
 
 private fun layerBudgets(pieceCount: Int): Budgets {
-    val edge = (pieceCount * 0.1f).toInt().coerceIn(0, 72)
-    val fine = (pieceCount * 0.06f).toInt().coerceIn(0, 48)
-    val coarse = (pieceCount * 0.34f).toInt().coerceIn(6, 42)
+    val coarse = (pieceCount * 0.04f).toInt().coerceIn(2, 48)
+    val edge = (pieceCount * 0.12f).toInt().coerceIn(0, 280)
+    val fine = (pieceCount - coarse - edge).coerceAtLeast(pieceCount / 2)
     return Budgets(coarse, fine, edge)
+}
+
+/** Large pieces only where the target is actually flat. Busy areas stay for the small cuts. */
+private fun flatCuts(plane: LabPlane, step: Int, budget: Int): List<ShapeCut> {
+    if (budget <= 0) return emptyList()
+    val labels = mergeSimilar(slic(plane, step, COARSE_COMPACT), plane)
+    val flats = coveredCuts(labels, plane, Int.MAX_VALUE, 1, emptyList())
+        .filter { it.spread < FLAT_SPREAD }
+    return largestPerArea(flats, budget)
+}
+
+/** Joins neighboring cuts of the same flat color, so a sky stays one piece instead of a grid. */
+private fun mergeSimilar(labels: IntArray, plane: LabPlane): IntArray {
+    val maxId = labels.maxOrNull() ?: return labels
+    if (maxId < 0) return labels
+    val count = IntArray(maxId + 1)
+    val sumL = FloatArray(maxId + 1)
+    val sumA = FloatArray(maxId + 1)
+    val sumB = FloatArray(maxId + 1)
+    for (index in labels.indices) {
+        val id = labels[index]
+        if (id !in count.indices) continue
+        count[id]++
+        sumL[id] += plane.l[index]
+        sumA[id] += plane.a[index]
+        sumB[id] += plane.b[index]
+    }
+    val parent = IntArray(maxId + 1) { it }
+    val minX = IntArray(maxId + 1) { plane.width }
+    val minY = IntArray(maxId + 1) { plane.height }
+    val maxX = IntArray(maxId + 1) { -1 }
+    val maxY = IntArray(maxId + 1) { -1 }
+    for (y in 0 until plane.height) {
+        val row = y * plane.width
+        for (x in 0 until plane.width) {
+            val id = labels[row + x]
+            if (id !in count.indices) continue
+            if (x < minX[id]) minX[id] = x
+            if (y < minY[id]) minY[id] = y
+            if (x > maxX[id]) maxX[id] = x
+            if (y > maxY[id]) maxY[id] = y
+        }
+    }
+    val limit = (min(plane.width, plane.height) * FLAT_LIMIT).toInt().coerceAtLeast(8)
+    for (y in 0 until plane.height) {
+        val row = y * plane.width
+        for (x in 0 until plane.width) {
+            val id = labels[row + x]
+            if (x + 1 < plane.width) {
+                uniteIfClose(parent, count, sumL, sumA, sumB, minX, minY, maxX, maxY, limit, id, labels[row + x + 1])
+            }
+            if (y + 1 < plane.height) {
+                uniteIfClose(
+                    parent, count, sumL, sumA, sumB, minX, minY, maxX, maxY, limit, id, labels[row + plane.width + x]
+                )
+            }
+        }
+    }
+    for (index in labels.indices) {
+        val id = labels[index]
+        if (id in parent.indices) labels[index] = findParent(parent, id)
+    }
+    return labels
+}
+
+private fun uniteIfClose(
+    parent: IntArray,
+    count: IntArray,
+    sumL: FloatArray,
+    sumA: FloatArray,
+    sumB: FloatArray,
+    minX: IntArray,
+    minY: IntArray,
+    maxX: IntArray,
+    maxY: IntArray,
+    limit: Int,
+    left: Int,
+    right: Int
+) {
+    if (left == right || left !in count.indices || right !in count.indices) return
+    val rootL = findParent(parent, left)
+    val rootR = findParent(parent, right)
+    if (rootL == rootR || count[rootL] == 0 || count[rootR] == 0) return
+    val boxW = maxOf(maxX[rootL], maxX[rootR]) - minOf(minX[rootL], minX[rootR])
+    val boxH = maxOf(maxY[rootL], maxY[rootR]) - minOf(minY[rootL], minY[rootR])
+    if (maxOf(boxW, boxH) > limit) return
+    val dl = sumL[rootL] / count[rootL] - sumL[rootR] / count[rootR]
+    val da = sumA[rootL] / count[rootL] - sumA[rootR] / count[rootR]
+    val db = sumB[rootL] / count[rootL] - sumB[rootR] / count[rootR]
+    if (dl * dl + da * da + db * db >= FLAT_MERGE) return
+    val keep = min(rootL, rootR)
+    val drop = maxOf(rootL, rootR)
+    parent[drop] = keep
+    count[keep] += count[drop]
+    sumL[keep] += sumL[drop]
+    sumA[keep] += sumA[drop]
+    sumB[keep] += sumB[drop]
+    minX[keep] = minOf(minX[keep], minX[drop])
+    minY[keep] = minOf(minY[keep], minY[drop])
+    maxX[keep] = maxOf(maxX[keep], maxX[drop])
+    maxY[keep] = maxOf(maxY[keep], maxY[drop])
+}
+
+private fun findParent(parent: IntArray, id: Int): Int {
+    var current = id
+    while (parent[current] != current) {
+        parent[current] = parent[parent[current]]
+        current = parent[current]
+    }
+    return current
+}
+
+/** One large piece per part of the picture, so a flat sky and a flat field both survive. */
+private fun largestPerArea(cuts: List<ShapeCut>, budget: Int): List<ShapeCut> {
+    if (cuts.size <= budget) return cuts.sortedByDescending { it.scale }
+    val columns = sqrt(budget.toFloat()).toInt().coerceAtLeast(1)
+    val rows = (budget / columns).coerceAtLeast(1)
+    val bins = Array(columns * rows) { ArrayList<ShapeCut>() }
+    for (cut in cuts) {
+        val cx = (cut.centerX * columns).toInt().coerceIn(0, columns - 1)
+        val cy = (cut.centerY * rows).toInt().coerceIn(0, rows - 1)
+        bins[cy * columns + cx].add(cut)
+    }
+    val picked = ArrayList<ShapeCut>(budget)
+    for (bin in bins) {
+        val best = bin.maxByOrNull { it.scale } ?: continue
+        picked.add(best)
+    }
+    return picked.sortedByDescending { it.scale }.take(budget)
+}
+
+private fun detailStep(plane: LabPlane, budget: Int): Int {
+    val pixels = plane.width * plane.height
+    val safe = budget.coerceAtLeast(1)
+    return sqrt(pixels.toFloat() / safe.toFloat()).toInt().coerceIn(3, 24)
 }
 
 internal class LabPlane(
@@ -233,119 +358,6 @@ private fun moveSeeds(plane: LabPlane, seeds: MutableList<Seed>, labels: IntArra
     }
 }
 
-private class RegionMean(var count: Int, var l: Float, var a: Float, var b: Float)
-
-private fun mergeByColor(labels: IntArray, plane: LabPlane): IntArray {
-    val means = regionMeans(labels, plane)
-    val gradient = gradientMap(plane.l, plane.width, plane.height)
-    repeat(56) {
-        val seam = weakestSeam(labels, plane, means, gradient) ?: return labels
-        if (seam.delta > COLOR_MERGE) return labels
-        relabel(labels, seam.from, seam.into)
-        foldMean(means, seam.from, seam.into)
-    }
-    return labels
-}
-
-private fun regionMeans(labels: IntArray, plane: LabPlane): Array<RegionMean?> {
-    val maxId = labels.maxOrNull() ?: return emptyArray()
-    val means = arrayOfNulls<RegionMean>(maxId + 1)
-    for (index in labels.indices) {
-        val id = labels[index]
-        if (id !in means.indices) continue
-        val current = means[id]
-        if (current == null) {
-            means[id] = RegionMean(1, plane.l[index], plane.a[index], plane.b[index])
-        } else {
-            current.count++
-            current.l += plane.l[index]
-            current.a += plane.a[index]
-            current.b += plane.b[index]
-        }
-    }
-    return means
-}
-
-private class SeamChoice(val from: Int, val into: Int, val delta: Float)
-
-private fun weakestSeam(
-    labels: IntArray,
-    plane: LabPlane,
-    means: Array<RegionMean?>,
-    gradient: FloatArray
-): SeamChoice? {
-    val pixels = HashMap<Long, Int>()
-    val energy = HashMap<Long, Float>()
-    noteSeams(labels, plane.width, plane.height, gradient, pixels, energy)
-    var bestKey = -1L
-    var bestDelta = Float.POSITIVE_INFINITY
-    for ((key, count) in pixels) {
-        if (count <= 0) continue
-        val edge = (energy[key] ?: 0f) / count.toFloat()
-        if (edge > EDGE_BLOCK) continue
-        val delta = seamDelta(means, key)
-        if (delta < bestDelta) {
-            bestDelta = delta
-            bestKey = key
-        }
-    }
-    if (bestKey < 0L) return null
-    val from = (bestKey ushr 32).toInt()
-    val into = bestKey.toInt()
-    return SeamChoice(from, into, bestDelta)
-}
-
-private fun noteSeams(
-    labels: IntArray,
-    width: Int,
-    height: Int,
-    gradient: FloatArray,
-    pixels: HashMap<Long, Int>,
-    energy: HashMap<Long, Float>
-) {
-    for (y in 0 until height) {
-        val row = y * width
-        for (x in 0 until width) {
-            val id = labels[row + x]
-            if (x + 1 < width) noteSeam(labels[row + x + 1], id, gradient[row + x], pixels, energy)
-            if (y + 1 < height) noteSeam(labels[row + width + x], id, gradient[row + x], pixels, energy)
-        }
-    }
-}
-
-private fun noteSeam(neighbor: Int, id: Int, gradient: Float, pixels: HashMap<Long, Int>, energy: HashMap<Long, Float>) {
-    if (neighbor == id || neighbor < 0 || id < 0) return
-    val key = seamKey(id, neighbor)
-    pixels[key] = (pixels[key] ?: 0) + 1
-    energy[key] = (energy[key] ?: 0f) + gradient
-}
-
-private fun seamKey(first: Int, second: Int): Long {
-    val low = min(first, second)
-    val high = maxOf(first, second)
-    return (low.toLong() shl 32) or high.toLong()
-}
-
-private fun seamDelta(means: Array<RegionMean?>, key: Long): Float {
-    val left = means.getOrNull((key ushr 32).toInt())
-    val right = means.getOrNull(key.toInt())
-    if (left == null || right == null || left.count == 0 || right.count == 0) return Float.POSITIVE_INFINITY
-    val dl = left.l / left.count - right.l / right.count
-    val da = left.a / left.count - right.a / right.count
-    val db = left.b / left.count - right.b / right.count
-    return dl * dl + da * da + db * db
-}
-
-private fun foldMean(means: Array<RegionMean?>, from: Int, into: Int) {
-    val source = means.getOrNull(from) ?: return
-    val target = means.getOrNull(into) ?: return
-    target.count += source.count
-    target.l += source.l
-    target.a += source.a
-    target.b += source.b
-    source.count = 0
-}
-
 private fun fillUnlabeled(labels: IntArray, width: Int, height: Int) {
     repeat(3) { sweepUnlabeled(labels, width, height) }
     for (index in labels.indices) {
@@ -446,6 +458,104 @@ private fun relabel(labels: IntArray, from: Int, to: Int) {
     for (index in labels.indices) {
         if (labels[index] == from) labels[index] = to
     }
+}
+
+private fun coveredCuts(
+    labels: IntArray,
+    plane: LabPlane,
+    budget: Int,
+    grow: Int,
+    skip: List<ShapeCut>
+): List<ShapeCut> {
+    if (budget <= 0) return emptyList()
+    val regions = scanRegions(labels, plane)
+    val open = regions.filter { region ->
+        val centerX = (region.minX + region.maxX) * 0.5f / plane.width
+        val centerY = (region.minY + region.maxY) * 0.5f / plane.height
+        !insideAny(skip, centerX, centerY)
+    }
+    val chosen = if (open.size <= budget) open else spreadRegions(open, budget, plane.width, plane.height)
+    val cuts = ArrayList<ShapeCut>(chosen.size)
+    for (region in chosen) {
+        val cut = cutFromRegion(labels, plane, region, grow) ?: continue
+        cuts.add(cut)
+    }
+    return cuts
+}
+
+private fun insideAny(cuts: List<ShapeCut>, x: Float, y: Float): Boolean {
+    for (cut in cuts) {
+        if (cut.mask.contains(x, y)) return true
+    }
+    return false
+}
+
+private class Region(
+    val id: Int,
+    val minX: Int,
+    val minY: Int,
+    val maxX: Int,
+    val maxY: Int,
+    val count: Int
+)
+
+private fun scanRegions(labels: IntArray, plane: LabPlane): List<Region> {
+    val maxId = labels.maxOrNull() ?: return emptyList()
+    val count = IntArray(maxId + 1)
+    val minX = IntArray(maxId + 1) { plane.width }
+    val minY = IntArray(maxId + 1) { plane.height }
+    val maxX = IntArray(maxId + 1) { -1 }
+    val maxY = IntArray(maxId + 1) { -1 }
+    for (y in 0 until plane.height) {
+        val row = y * plane.width
+        for (x in 0 until plane.width) {
+            val id = labels[row + x]
+            if (id !in count.indices) continue
+            count[id]++
+            if (x < minX[id]) minX[id] = x
+            if (y < minY[id]) minY[id] = y
+            if (x > maxX[id]) maxX[id] = x
+            if (y > maxY[id]) maxY[id] = y
+        }
+    }
+    val regions = ArrayList<Region>()
+    for (id in count.indices) {
+        if (count[id] < 4 || maxX[id] < minX[id]) continue
+        regions.add(Region(id, minX[id], minY[id], maxX[id], maxY[id], count[id]))
+    }
+    return regions
+}
+
+/** Keeps pieces scattered over the picture when there are more regions than the budget. */
+private fun spreadRegions(regions: List<Region>, budget: Int, width: Int, height: Int): List<Region> {
+    val columns = sqrt(budget.toFloat()).toInt().coerceAtLeast(1)
+    val rows = (budget / columns).coerceAtLeast(1)
+    val bins = Array(columns * rows) { ArrayList<Region>() }
+    for (region in regions) {
+        val cx = ((region.minX + region.maxX) * 0.5f / width * columns).toInt().coerceIn(0, columns - 1)
+        val cy = ((region.minY + region.maxY) * 0.5f / height * rows).toInt().coerceIn(0, rows - 1)
+        bins[cy * columns + cx].add(region)
+    }
+    val picked = ArrayList<Region>(budget)
+    var round = 0
+    while (picked.size < budget) {
+        var added = false
+        for (bin in bins) {
+            if (round >= bin.size || picked.size >= budget) continue
+            picked.add(bin[round])
+            added = true
+        }
+        if (!added) break
+        round++
+    }
+    return picked
+}
+
+private fun cutFromRegion(labels: IntArray, plane: LabPlane, region: Region, grow: Int): ShapeCut? {
+    val grown = growBox(region.minX, region.minY, region.maxX, region.maxY, plane.width, plane.height, grow)
+    val core = raster(labels, region.id, grown, plane.width, false)
+    val padded = if (grow > 0) raster(labels, region.id, grown, plane.width, true) else core
+    return shapeCut(padded, core, grown, plane, region.count)
 }
 
 internal fun cutsFromLabels(labels: IntArray, plane: LabPlane, grow: Int): List<ShapeCut> {
@@ -664,7 +774,7 @@ private fun sampleStats(hits: BooleanArray, box: Box, plane: LabPlane): SampleSt
 }
 
 private fun packMask(hits: BooleanArray, width: Int, height: Int): Triple<Int, Int, ByteArray> {
-    val soft = soften(hits, width, height)
+    val soft = soften(hits)
     if (width <= PieceMask.MAX_EDGE && height <= PieceMask.MAX_EDGE) {
         return Triple(width, height, soft)
     }
@@ -684,30 +794,13 @@ private fun packMask(hits: BooleanArray, width: Int, height: Int): Triple<Int, I
     return Triple(packedW, packedH, alpha)
 }
 
-private fun soften(hits: BooleanArray, width: Int, height: Int): ByteArray {
+/** Hard interior. The output outline anti-aliases the rim, so the mask does not blur the photo. */
+private fun soften(hits: BooleanArray): ByteArray {
     val alpha = ByteArray(hits.size)
-    for (y in 0 until height) {
-        for (x in 0 until width) {
-            alpha[y * width + x] = neighborCoverage(hits, width, height, x, y)
-        }
+    for (index in hits.indices) {
+        alpha[index] = if (hits[index]) OPAQUE_MASK else 0
     }
     return alpha
-}
-
-private fun neighborCoverage(hits: BooleanArray, width: Int, height: Int, x: Int, y: Int): Byte {
-    var sum = 0
-    var seen = 0
-    for (dy in -1..1) {
-        val py = y + dy
-        if (py !in 0 until height) continue
-        for (dx in -1..1) {
-            val px = x + dx
-            if (px !in 0 until width) continue
-            seen++
-            if (hits[py * width + px]) sum++
-        }
-    }
-    return ((sum * 255) / seen.coerceAtLeast(1)).toByte()
 }
 
 private fun averageAlpha(alpha: ByteArray, stride: Int, x0: Int, x1: Int, y0: Int, y1: Int): Byte {
@@ -721,20 +814,6 @@ private fun averageAlpha(alpha: ByteArray, stride: Int, x0: Int, x1: Int, y0: In
         }
     }
     return (sum / seen.coerceAtLeast(1)).toByte()
-}
-
-private fun strongest(cuts: List<ShapeCut>, plane: LabPlane, budget: Int): List<ShapeCut> {
-    if (budget <= 0 || cuts.isEmpty()) return emptyList()
-    val gradient = gradientMap(plane.l, plane.width, plane.height)
-    val ranked = cuts.sortedByDescending { cut -> edgeEnergy(cut, gradient, plane.width, plane.height) }
-    return ranked.take(budget)
-}
-
-private fun edgeEnergy(cut: ShapeCut, gradient: FloatArray, width: Int, height: Int): Float {
-    val mask = cut.mask
-    val x = ((mask.left + mask.right) * 0.5f * width).toInt().coerceIn(0, width - 1)
-    val y = ((mask.top + mask.bottom) * 0.5f * height).toInt().coerceIn(0, height - 1)
-    return gradient[y * width + x]
 }
 
 private fun edgeCuts(plane: LabPlane, budget: Int, grow: Int): List<ShapeCut> {
@@ -852,6 +931,10 @@ private const val COARSE_COMPACT = 0.0012f
 private const val FINE_COMPACT = 0.004f
 private const val SAMPLE_LIMIT = 5
 private const val PATCH = 16
-private const val COLOR_MERGE = 0.0032f
-private const val EDGE_BLOCK = 0.07f
 private const val BLOCKING_SCALE = 0.055f
+private const val FLAT_FRACTION = 0.16f
+private const val FLAT_SPREAD = 0.03f
+private const val FLAT_MERGE = 0.0032f
+private const val FLAT_LIMIT = 0.45f
+private const val DETAIL_GROW = 1
+private const val OPAQUE_MASK = 255.toByte()

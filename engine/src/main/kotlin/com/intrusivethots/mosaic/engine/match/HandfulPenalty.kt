@@ -44,7 +44,7 @@ internal class HandfulPenalty {
     }
 
     private companion object {
-        const val CAPACITY = 320
+        const val CAPACITY = 4096
         const val HANDFUL = 4
         const val NEAR = 0.16f
         const val CROP_NEAR = 0.22f

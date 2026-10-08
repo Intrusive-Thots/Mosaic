@@ -29,10 +29,12 @@ internal suspend fun assembleCollage(
     val plane = labPlane(workingCopy(target))
     val swatches = buildSwatches(thumbnails, descriptors)
     val probes = ProbeCounter()
+    val edges = IntArray(thumbnails.size) { index -> maxOf(thumbnails[index].width, thumbnails[index].height) }
     val fit = ShapeFit(
         swatches, index, config,
         UsageTracker(descriptors.size, config.maxRepetitionDistance, config.allowTileRepetition, config.usageBalanceWeight),
-        probes, TopK(config.candidateCount.coerceAtLeast(1))
+        probes, TopK(config.candidateCount.coerceAtLeast(1)),
+        edges, target.width, target.height
     )
     val correct = config.renderMode != RenderMode.ORIGINAL && config.colorMatchWeight > 0f
     val canvas = WorkCanvas(plane, luminanceGradient(plane))
@@ -52,7 +54,14 @@ internal suspend fun assembleCollage(
 
 internal class Assembled(val placements: List<CutoutPlacement>, val stats: MatchStats)
 
-private class PlacedPiece(val cut: ShapeCut, var placement: CutoutPlacement, var l: Float, var a: Float, var b: Float)
+private class PlacedPiece(
+    val cut: ShapeCut,
+    var placement: CutoutPlacement,
+    var l: Float,
+    var a: Float,
+    var b: Float,
+    val required: Boolean
+)
 
 private suspend fun blockIn(
     target: PixelImage,
@@ -68,7 +77,7 @@ private suspend fun blockIn(
         val cut = ordered[ordinal]
         val chosen = fit.choose(cut, ordinal) ?: continue
         val tone = paintTone(cut, chosen, fit, correct, config.colorMatchWeight)
-        pieces.add(PlacedPiece(cut, chosen, tone[0], tone[1], tone[2]))
+        pieces.add(PlacedPiece(cut, chosen, tone[0], tone[1], tone[2], required = true))
         canvas.paint(cut, tone[0], tone[1], tone[2])
     }
 }
@@ -132,7 +141,7 @@ private fun tryBlob(
     val after = canvas.predictedError(cut, tone[0], tone[1], tone[2])
     if (before - after < ACCEPT * maskArea(cut)) return
     fit.keep(chosen)
-    pieces.add(PlacedPiece(cut, chosen, tone[0], tone[1], tone[2]))
+    pieces.add(PlacedPiece(cut, chosen, tone[0], tone[1], tone[2], required = false))
     canvas.paint(cut, tone[0], tone[1], tone[2])
     markTaken(plane, cut, taken)
 }
@@ -140,7 +149,7 @@ private fun tryBlob(
 private fun relax(fit: ShapeFit, canvas: WorkCanvas, pieces: MutableList<PlacedPiece>, correct: Boolean, pull: Float) {
     var index = pieces.lastIndex
     while (index >= 0) {
-        val blocking = pieces[index].cut.blocking
+        val blocking = pieces[index].cut.blocking || pieces[index].required
         if (!blocking && dropIfUseless(canvas, pieces, index)) {
             index--
             continue

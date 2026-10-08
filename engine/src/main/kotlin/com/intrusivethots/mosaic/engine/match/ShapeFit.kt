@@ -33,7 +33,10 @@ internal class ShapeFit(
     private val config: MosaicConfig,
     private val tracker: UsageTracker,
     private val probes: ProbeCounter,
-    private val topK: TopK
+    private val topK: TopK,
+    private val sourceEdges: IntArray,
+    private val outputWidth: Int,
+    private val outputHeight: Int
 ) {
     private val handful = HandfulPenalty()
     var comparisons: Long = 0
@@ -53,30 +56,30 @@ internal class ShapeFit(
     }
 
     private fun select(cut: ShapeCut, ordinal: Int, avoid: Int, taken: Set<Int>): CutoutPlacement? {
-        val column = (cut.centerX * GRID).toInt().coerceIn(0, GRID - 1)
-        val row = (cut.centerY * GRID).toInt().coerceIn(0, GRID - 1)
         index.fillCandidates(
             cut.meanL,
             cut.meanA,
             cut.meanB,
             config.candidateCount,
             config.maxRepetitionDistance,
-            { tile -> tile !in swatches.indices || tracker.blocked(tile, column, row) },
+            { tile -> tile !in swatches.indices || refused(tile) },
             topK,
             probes
         )
         val angles = sourceAngles(config.collage.rotationRangeDegrees)
-        val span = cropSpan(cut)
         val solve = config.renderMode != RenderMode.ORIGINAL && config.colorMatchWeight > 0f
         var bestTile = -1
         var bestAngle = 0f
         var bestU = 0.5f
         var bestV = 0.5f
+        var bestSpan = MIN_SPAN
         var bestScore = Float.POSITIVE_INFINITY
         for (slot in 0 until topK.size) {
             val tile = topK.ids[slot]
             if (tile == avoid || tile in taken) continue
             val penalty = tracker.penalty(tile) + jitter(config.randomSeed, ordinal, tile)
+            val edge = sourceEdges.getOrElse(tile) { maxOf(outputWidth, outputHeight) }
+            val span = cropSpan(cut, edge, outputWidth, outputHeight)
             val scored = scoreTile(swatches[tile], cut, angles, span, penalty, solve, config.collage.shapeWeight)
             val diverse = scored.score + handful.cost(tile, cut.centerX, cut.centerY, scored.u, scored.v)
             comparisons++
@@ -86,6 +89,7 @@ internal class ShapeFit(
                 bestAngle = scored.angle
                 bestU = scored.u
                 bestV = scored.v
+                bestSpan = span
             }
         }
         if (bestTile < 0) return null
@@ -101,8 +105,14 @@ internal class ShapeFit(
             mask = cut.mask,
             cropU = bestU,
             cropV = bestV,
-            cropSpan = span
+            cropSpan = bestSpan
         )
+    }
+
+    /** Repetition off still uses each source once. A radius is a score penalty, not a refusal. */
+    private fun refused(tile: Int): Boolean {
+        if (config.allowTileRepetition) return false
+        return tracker.blocked(tile, 0, 0)
     }
 
     fun keep(placement: CutoutPlacement) {
@@ -246,7 +256,30 @@ private fun anchorScore(
     val color = sampleError(swatch, cut, turnCos, turnSin, anchorU, anchorV, span, solve)
     if (color == Float.POSITIVE_INFINITY) return color
     val subject = subjectCost(swatch.salientU, swatch.salientV, anchorU, anchorV, span, sourceBusy(swatch))
-    return color + penalty + shape + subject
+    val focus = if (coversSalient(swatch, anchorU, anchorV, span)) FOCUS_BONUS else FOCUS_MISS
+    return color + penalty + shape + subject + contentCost(swatch, anchorU, anchorV, span) + focus
+}
+
+private fun coversSalient(swatch: TileSwatch, anchorU: Float, anchorV: Float, span: Float): Boolean {
+    val half = span * 0.5f
+    val du = anchorU - swatch.salientU
+    val dv = anchorV - swatch.salientV
+    return du <= half && du >= -half && dv <= half && dv >= -half
+}
+
+/** A blank patch is a poor collage piece even when its average color is close. */
+private fun contentCost(swatch: TileSwatch, anchorU: Float, anchorV: Float, span: Float): Float {
+    var peak = 0f
+    val half = span * 0.5f
+    for (y in 0 until 3) {
+        for (x in 0 until 3) {
+            val u = anchorU + (x - 1) * half
+            val v = anchorV + (y - 1) * half
+            val spread = swatch.spread[swatchCell(swatch, u, v)]
+            if (spread > peak) peak = spread
+        }
+    }
+    return if (peak < CONTENT_SPREAD) CONTENT_PENALTY else 0f
 }
 
 private fun prefer(best: Scored, score: Float, angle: Float, anchorU: Float, anchorV: Float): Scored {
@@ -498,12 +531,21 @@ private fun sourceAngles(range: Float): FloatArray {
     return floatArrayOf(0f, range * 0.5f, -range * 0.5f, range, -range)
 }
 
-private fun cropSpan(cut: ShapeCut): Float {
-    if (cut.blocking) return FLAT_SPAN
+/**
+ * Crop span that shows the piece at about 1:1 with the source.
+ * The floor stops a tiny piece from sampling one texel, and it also refuses an
+ * enlargement past about 1.25×. Flat pieces may take a wider crop. They stay sharp.
+ */
+private fun cropSpan(cut: ShapeCut, sourceEdge: Int, outputWidth: Int, outputHeight: Int): Float {
     val mask = cut.mask
-    val wide = mask.right - mask.left
-    val tall = mask.bottom - mask.top
-    return maxOf(wide, tall).coerceIn(0.16f, 0.4f)
+    val pieceW = (mask.right - mask.left) * outputWidth
+    val pieceH = (mask.bottom - mask.top) * outputHeight
+    val piecePx = maxOf(pieceW, pieceH)
+    val sourcePx = sourceEdge.coerceAtLeast(1).toFloat()
+    val native = piecePx / sourcePx
+    val floor = maxOf(MIN_SPAN, native / MAX_UPSCALE)
+    val cap = if (cut.blocking && cut.spread < BUSY_SPREAD) FLAT_CAP else DETAIL_CAP
+    return native.coerceIn(floor, maxOf(cap, floor)).coerceAtMost(1f)
 }
 
 private fun jitter(seed: Int, ordinal: Int, tile: Int): Float {
@@ -515,9 +557,17 @@ private fun jitter(seed: Int, ordinal: Int, tile: Int): Float {
 private const val SWATCH = 12
 private const val GRID = 12
 private const val FLAT_SPAN = 0.2f
+private const val MIN_SPAN = 0.04f
+private const val DETAIL_CAP = 0.28f
+private const val FLAT_CAP = 0.85f
+private const val MAX_UPSCALE = 1.25f
 private const val FLAT_TEXTURE = 1.2f
 private const val BUSY_SPREAD = 0.04f
 private const val SUBJECT_SPREAD = 0.004f
+private const val CONTENT_SPREAD = 0.006f
+private const val CONTENT_PENALTY = 0.02f
+private const val FOCUS_BONUS = -0.035f
+private const val FOCUS_MISS = 0.02f
 private const val SHAPE_SCALE = 0.08f
 private val ANCHORS = floatArrayOf(0.34f, 0.5f, 0.66f)
 private val CROP_SHIFTS = floatArrayOf(-0.10f, -0.05f, 0f, 0.05f, 0.10f)
