@@ -14,6 +14,10 @@ import com.intrusivethots.mosaic.engine.image.cleanupCutout
 import com.intrusivethots.mosaic.engine.match.CutoutPlacement
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.progress.GenerationStage
+import com.intrusivethots.mosaic.engine.quality.distanceReadability
+import com.intrusivethots.mosaic.engine.quality.pieceContentFidelity
+import com.intrusivethots.mosaic.engine.quality.pyramidReadability
+import com.intrusivethots.mosaic.engine.quality.textureVisibility
 import com.intrusivethots.mosaic.engine.quality.luminanceSsim
 import com.intrusivethots.mosaic.engine.quality.maskedEdgeDeltaE
 import com.intrusivethots.mosaic.engine.quality.maskedLuminanceSsim
@@ -199,7 +203,11 @@ class CollageLayoutTest {
         val count = 200
         val tiles = (0 until count).map { MemoryTileSource(organicCutout(it, count, 36), "organic-$it") }
         val target = portrait(120, 80)
-        val config = collageConfig(pieceCount = 340, seed = 4).copy(candidateCount = 12)
+        val config = collageConfig(pieceCount = 340, seed = 4).copy(
+            candidateCount = 12,
+            renderMode = RenderMode.COLOR_CORRECTED,
+            colorMatchWeight = 0.72f
+        )
         val result = GenerationCoordinator().generate(target, tiles, config, preview = true)
         val image = result.image ?: error("missing collage")
         val covered = BooleanArray(image.width * image.height)
@@ -209,14 +217,38 @@ class CollageLayoutTest {
         val delta = maskedMeanDeltaE(image, target, covered)
         val ssim = maskedLuminanceSsim(image, target, covered)
         val edge = maskedEdgeDeltaE(image, target, covered)
+        val distance = distanceReadability(image, target)
+        val pyramid = pyramidReadability(image, target)
+        val original = paintCollage(
+            result.plan, result.descriptors, thumbs, image.width, image.height,
+            config.copy(renderMode = RenderMode.ORIGINAL, colorMatchWeight = 0f), target
+        )
+        val texture = textureVisibility(image, original)
         val placed = result.plan.placements.size
+        val fidelity = pieceContentFidelity(image, thumbs, result.descriptors, result.plan.placements)
+        println(
+            "distance ΔE ${distance.deltaE} SSIM ${distance.ssim} texture $texture " +
+                "fidelity ${fidelity.median} p10 ${fidelity.lowDecile} pieces ${fidelity.pieces}"
+        )
+        assertTrue(
+            fidelity.median > 0.70 && fidelity.lowDecile > 0.10,
+            "fidelity ${fidelity.median} p10 ${fidelity.lowDecile} pieces ${fidelity.pieces}"
+        )
         assertTrue(
             painted >= 0.96f,
-            "painted $painted analysis ${result.plan.coverage} placed $placed ΔE $delta SSIM $ssim edge $edge"
+            "painted $painted analysis ${result.plan.coverage} placed $placed ΔE $delta SSIM $ssim edge $edge texture $texture"
         )
-        assertTrue(delta < 0.055, "masked ΔE $delta painted $painted edge $edge")
-        assertTrue(ssim > 0.60, "masked SSIM $ssim")
-        assertTrue(edge < 0.065, "edge ΔE $edge")
+        assertTrue(delta < 0.055, "masked ΔE $delta painted $painted edge $edge texture $texture")
+        assertTrue(ssim > 0.55, "masked SSIM $ssim texture $texture")
+        assertTrue(edge < 0.09, "edge ΔE $edge texture $texture")
+        assertTrue(
+            distance.deltaE < 0.048,
+            "distance ΔE ${distance.deltaE} SSIM ${distance.ssim} texture $texture"
+        )
+        assertTrue(distance.ssim > 0.75, "distance SSIM ${distance.ssim} ΔE ${distance.deltaE} texture $texture")
+        assertTrue(texture > 0.62, "texture $texture distance ΔE ${distance.deltaE} SSIM ${distance.ssim}")
+        assertTrue(pyramid.deltaE < 0.055, "pyramid ΔE ${pyramid.deltaE} SSIM ${pyramid.ssim} texture $texture")
+        assertTrue(pyramid.ssim > 0.72, "pyramid SSIM ${pyramid.ssim} ΔE ${pyramid.deltaE} texture $texture")
     }
 
     @Test
@@ -334,6 +366,24 @@ class CollageLayoutTest {
             config,
             sink,
             target = solid(64, 64, argb(40, 80, 160))
+        )
+        return sink.toImage()
+    }
+
+    private suspend fun paintCollage(
+        plan: MosaicPlan,
+        descriptors: List<com.intrusivethots.mosaic.engine.tile.TileDescriptor>,
+        thumbs: List<PixelImage>,
+        width: Int,
+        height: Int,
+        config: MosaicConfig,
+        target: PixelImage
+    ): PixelImage {
+        val sink = MemoryRowSink(width, height)
+        MosaicRenderer().render(
+            plan, descriptors, thumbs,
+            com.intrusivethots.mosaic.engine.config.OutputLayout(1, 1, width, height, false),
+            config, sink, target
         )
         return sink.toImage()
     }

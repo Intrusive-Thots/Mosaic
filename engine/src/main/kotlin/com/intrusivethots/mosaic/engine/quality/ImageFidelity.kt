@@ -3,8 +3,16 @@ package com.intrusivethots.mosaic.engine.quality
 import com.intrusivethots.mosaic.engine.color.OkLab
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
+import com.intrusivethots.mosaic.engine.image.sampleBilinear
+import com.intrusivethots.mosaic.engine.match.CutoutPlacement
+import com.intrusivethots.mosaic.engine.match.PieceMask
+import com.intrusivethots.mosaic.engine.render.solidPaper
+import com.intrusivethots.mosaic.engine.tile.TileDescriptor
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * Cell-averaged OKLab distance between a mosaic and the picture it is trying to depict.
@@ -108,6 +116,147 @@ fun maskedEdgeDeltaE(rendered: PixelImage, reference: PixelImage, covered: Boole
         count++
     }
     return if (count == 0) 0.0 else sum / count
+}
+
+/**
+ * Mean target-edge strength beside piece boundaries, divided by the mean edge strength
+ * of the picture. A boundary may sit one or two pixels off the gradient peak when a
+ * cut traces that edge, so each boundary pixel uses the strongest target edge within
+ * two pixels. Above 1 means the cuts follow stronger edges than the picture average.
+ * [owners] is the topmost piece index per pixel of the rendered canvas, or -1 where
+ * nothing was painted.
+ */
+fun pieceBoundaryAlignment(
+    owners: IntArray,
+    renderedWidth: Int,
+    renderedHeight: Int,
+    reference: PixelImage
+): Double {
+    val width = renderedWidth
+    val height = renderedHeight
+    if (width < 2 || height < 2 || owners.size != width * height) return 0.0
+    val tone = luminance(align(reference, width, height))
+    var edgeSum = 0.0
+    var edgeCount = 0
+    var boundarySum = 0.0
+    var boundaryCount = 0
+    for (y in 0 until height - 1) {
+        val row = y * width
+        for (x in 0 until width - 1) {
+            val index = row + x
+            val magnitude = gradientAt(tone, width, height, index).toDouble()
+            edgeSum += magnitude
+            edgeCount++
+            val owner = owners[index]
+            if (owner < 0) continue
+            val rightCut = owners[index + 1] >= 0 && owners[index + 1] != owner
+            val downCut = owners[index + width] >= 0 && owners[index + width] != owner
+            if (!rightCut && !downCut) continue
+            boundarySum += nearbyGradient(tone, width, height, x, y).toDouble()
+            boundaryCount++
+        }
+    }
+    if (boundaryCount == 0 || edgeCount == 0 || edgeSum <= 1e-8) return 0.0
+    return (boundarySum / boundaryCount) / (edgeSum / edgeCount)
+}
+
+private fun nearbyGradient(tone: FloatArray, width: Int, height: Int, x: Int, y: Int): Float {
+    var best = 0f
+    for (dy in -2..2) {
+        val py = y + dy
+        if (py !in 0 until height) continue
+        for (dx in -2..2) {
+            val px = x + dx
+            if (px !in 0 until width) continue
+            val magnitude = gradientAt(tone, width, height, py * width + px)
+            if (magnitude > best) best = magnitude
+        }
+    }
+    return best
+}
+
+/**
+ * How the collage reads from across the room. Both images are area-averaged to 64 pixels
+ * wide, then scored. High-frequency faces and scenery drop out, so a low ΔE and a high
+ * SSIM mean the big color masses survived.
+ */
+class DistanceRead(val deltaE: Double, val ssim: Double)
+
+fun distanceReadability(rendered: PixelImage, reference: PixelImage, width: Int = 64): DistanceRead {
+    val safe = width.coerceIn(16, 256)
+    val height = (rendered.height.toFloat() * safe / rendered.width.toFloat()).toInt().coerceAtLeast(8)
+    val left = rendered.resizeAreaAverage(safe, height)
+    val right = reference.resizeAreaAverage(safe, height)
+    return DistanceRead(meanCellDeltaE(left, right, safe, height), luminanceSsim(left, right))
+}
+
+/**
+ * Mean absolute luminance deviation from a 3×3 box. Flat paper scores near zero.
+ * Line art, eyes, and type score higher.
+ */
+fun highFrequencyEnergy(image: PixelImage): Double {
+    if (image.width < 3 || image.height < 3) return 0.0
+    val tone = luminance(image)
+    var sum = 0.0
+    var count = 0
+    for (y in 1 until image.height - 1) {
+        val row = y * image.width
+        for (x in 1 until image.width - 1) {
+            sum += abs(tone[row + x] - boxMean(tone, image.width, x, y))
+            count++
+        }
+    }
+    return if (count == 0) 0.0 else sum / count
+}
+
+/**
+ * High-frequency energy kept after color correction, relative to the same plan
+ * rendered from the source crops with no recoloring. 1 means the line art survived.
+ */
+fun textureVisibility(corrected: PixelImage, original: PixelImage): Double {
+    val sourceImage = if (original.width == corrected.width && original.height == corrected.height) {
+        original
+    } else {
+        original.resizeAreaAverage(corrected.width, corrected.height)
+    }
+    val source = highFrequencyEnergy(sourceImage)
+    if (source < 1e-5) return 1.0
+    return highFrequencyEnergy(corrected) / source
+}
+
+private fun boxMean(tone: FloatArray, width: Int, x: Int, y: Int): Float {
+    var sum = 0f
+    for (dy in -1..1) {
+        val row = (y + dy) * width
+        for (dx in -1..1) sum += tone[row + x + dx]
+    }
+    return sum / 9f
+}
+
+/**
+ * OKLab ΔE and luminance SSIM on a four-level pyramid. Coarser levels count more,
+ * so a missed color mass costs more than texture inside a piece.
+ * Weights run from fine to coarse: 0.10, 0.20, 0.30, 0.40.
+ */
+fun pyramidReadability(rendered: PixelImage, reference: PixelImage): DistanceRead {
+    val weights = doubleArrayOf(0.10, 0.20, 0.30, 0.40)
+    var image = rendered
+    var target = reference
+    var delta = 0.0
+    var structure = 0.0
+    var weightSum = 0.0
+    for (level in weights.indices) {
+        val weight = weights[level]
+        val columns = image.width.coerceAtMost(48).coerceAtLeast(4)
+        val rows = image.height.coerceAtMost(48).coerceAtLeast(4)
+        delta += weight * meanCellDeltaE(image, target, columns, rows)
+        structure += weight * luminanceSsim(image, target)
+        weightSum += weight
+        if (image.width <= 24 || image.height <= 16) break
+        image = image.resizeAreaAverage(image.width / 2, (image.height / 2).coerceAtLeast(8))
+        target = target.resizeAreaAverage(image.width, image.height)
+    }
+    return DistanceRead(delta / weightSum, structure / weightSum)
 }
 
 fun luminanceSsim(rendered: PixelImage, reference: PixelImage): Double {
@@ -252,6 +401,172 @@ private fun globalSsim(left: FloatArray, right: FloatArray): Double {
     }
     val norm = (count - 1).coerceAtLeast(1)
     return ssimFromMoments(meanLeft, meanRight, varLeft / norm, varRight / norm, covariance / norm)
+}
+
+/**
+ * How much of each source crop is still visible after rendering.
+ * Each piece is compared, at the crop's own pixel size, to the sharp ungraded source.
+ * The score is the SSIM contrast and structure terms, so a smooth color grade does not
+ * count as detail and a blur or an upscale does. [median] and [lowDecile] summarize the pieces.
+ */
+class PieceFidelity(val median: Double, val lowDecile: Double, val pieces: Int)
+
+fun pieceContentFidelity(
+    rendered: PixelImage,
+    sources: List<PixelImage>,
+    descriptors: List<TileDescriptor>,
+    placements: List<CutoutPlacement>
+): PieceFidelity {
+    val scores = ArrayList<Double>(placements.size)
+    val owners = visibleOwners(rendered.width, rendered.height, placements)
+    val paper = HashMap<Int, PixelImage>()
+    for (index in placements.indices) {
+        val placement = placements[index]
+        val source = sources.getOrNull(placement.tileIndex) ?: continue
+        val descriptor = descriptors.getOrNull(placement.tileIndex) ?: continue
+        val filled = paper.getOrPut(placement.tileIndex) { solidPaper(source) }
+        val score = pieceStructure(rendered, filled, descriptor, placement, owners, index) ?: continue
+        scores.add(score)
+    }
+    if (scores.isEmpty()) return PieceFidelity(0.0, 0.0, 0)
+    scores.sort()
+    val median = scores[scores.size / 2]
+    val decileIndex = (scores.size * 0.10f).toInt().coerceIn(0, scores.lastIndex)
+    return PieceFidelity(median, scores[decileIndex], scores.size)
+}
+
+/** Last placement to cover a pixel wins, matching the painter's order. */
+private fun visibleOwners(width: Int, height: Int, placements: List<CutoutPlacement>): IntArray {
+    val owners = IntArray(width * height) { -1 }
+    for (index in placements.indices) {
+        val mask = placements[index].mask ?: continue
+        stampOwner(owners, width, height, mask, index)
+    }
+    return owners
+}
+
+private fun stampOwner(owners: IntArray, width: Int, height: Int, mask: PieceMask, owner: Int) {
+    val left = (mask.left * width).toInt().coerceIn(0, width - 1)
+    val right = (mask.right * width).toInt().coerceIn(left, width - 1)
+    val top = (mask.top * height).toInt().coerceIn(0, height - 1)
+    val bottom = (mask.bottom * height).toInt().coerceIn(top, height - 1)
+    for (y in top..bottom) {
+        val row = y * width
+        val ny = (y + 0.5f) / height.toFloat()
+        for (x in left..right) {
+            if (mask.contains((x + 0.5f) / width.toFloat(), ny)) owners[row + x] = owner
+        }
+    }
+}
+
+private fun pieceStructure(
+    rendered: PixelImage,
+    source: PixelImage,
+    descriptor: TileDescriptor,
+    placement: CutoutPlacement,
+    owners: IntArray,
+    owner: Int
+): Double? {
+    val mask = placement.mask ?: return null
+    val spanX = (descriptor.contentRight - descriptor.contentLeft).coerceAtLeast(0.01f)
+    val native = (placement.cropSpan * spanX * source.width).toInt().coerceIn(10, 36)
+    val drawn = FloatArray(native * native)
+    val sharp = FloatArray(native * native)
+    val radians = Math.toRadians(placement.angleDegrees.toDouble())
+    val turnCos = cos(radians).toFloat()
+    val turnSin = sin(radians).toFloat()
+    var inside = 0
+    var maskSamples = 0
+    for (y in 0 until native) {
+        val v = (y + 0.5f) / native.toFloat()
+        for (x in 0 until native) {
+            val u = (x + 0.5f) / native.toFloat()
+            val nx = mask.left + u * (mask.right - mask.left)
+            val ny = mask.top + v * (mask.bottom - mask.top)
+            val index = y * native + x
+            if (!mask.contains(nx, ny)) {
+                drawn[index] = -1f
+                continue
+            }
+            maskSamples++
+            val px = (nx * (rendered.width - 1)).toInt().coerceIn(0, rendered.width - 1)
+            val py = (ny * (rendered.height - 1)).toInt().coerceIn(0, rendered.height - 1)
+            if (owners[py * rendered.width + px] != owner) {
+                drawn[index] = -1f
+                continue
+            }
+            inside++
+            drawn[index] = renderedLuma(rendered, nx, ny)
+            sharp[index] = sourceLuma(source, descriptor, placement, u, v, turnCos, turnSin)
+        }
+    }
+    if (inside < 12 || maskSamples == 0 || inside < maskSamples * 0.4f) return null
+    return contrastStructure(drawn, sharp)
+}
+
+private fun renderedLuma(image: PixelImage, nx: Float, ny: Float): Float {
+    val x = nx * (image.width - 1).coerceAtLeast(1)
+    val y = ny * (image.height - 1).coerceAtLeast(1)
+    return OkLab.fromArgb(image.sampleBilinear(x, y)).l
+}
+
+private fun sourceLuma(
+    source: PixelImage,
+    descriptor: TileDescriptor,
+    placement: CutoutPlacement,
+    u: Float,
+    v: Float,
+    turnCos: Float,
+    turnSin: Float
+): Float {
+    val localX = u - 0.5f
+    val localY = v - 0.5f
+    val rotatedX = localX * turnCos - localY * turnSin
+    val rotatedY = localX * turnSin + localY * turnCos
+    val su = (placement.cropU + rotatedX * placement.cropSpan).coerceIn(0f, 1f)
+    val sv = (placement.cropV + rotatedY * placement.cropSpan).coerceIn(0f, 1f)
+    val spanX = (descriptor.contentRight - descriptor.contentLeft).coerceAtLeast(0.01f)
+    val spanY = (descriptor.contentBottom - descriptor.contentTop).coerceAtLeast(0.01f)
+    val sx = (descriptor.contentLeft + su * spanX) * (source.width - 1).coerceAtLeast(1)
+    val sy = (descriptor.contentTop + sv * spanY) * (source.height - 1).coerceAtLeast(1)
+    return OkLab.fromArgb(source.sampleBilinear(sx, sy)).l
+}
+
+/** SSIM contrast times structure. A flat pair scores 1. A blur lowers the contrast term. */
+private fun contrastStructure(left: FloatArray, right: FloatArray): Double? {
+    var count = 0
+    var sumLeft = 0.0
+    var sumRight = 0.0
+    for (index in left.indices) {
+        if (left[index] < 0f) continue
+        count++
+        sumLeft += left[index]
+        sumRight += right[index]
+    }
+    if (count < 12) return null
+    val meanLeft = sumLeft / count
+    val meanRight = sumRight / count
+    var varLeft = 0.0
+    var varRight = 0.0
+    var covariance = 0.0
+    for (index in left.indices) {
+        if (left[index] < 0f) continue
+        val dl = left[index] - meanLeft
+        val dr = right[index] - meanRight
+        varLeft += dl * dl
+        varRight += dr * dr
+        covariance += dl * dr
+    }
+    varLeft /= count
+    varRight /= count
+    covariance /= count
+    if (varLeft < 1e-6 && varRight < 1e-6) return 1.0
+    val c2 = 0.03 * 0.03
+    val leftDev = sqrt(varLeft)
+    val rightDev = sqrt(varRight)
+    val contrast = (2.0 * leftDev * rightDev + c2) / (varLeft + varRight + c2)
+    val structure = (covariance + c2 / 2.0) / (leftDev * rightDev + c2 / 2.0)
+    return (contrast * structure).coerceIn(0.0, 1.0)
 }
 
 private fun ssimFromMoments(

@@ -31,16 +31,17 @@ class MosaicRenderer(
         sink: RowSink,
         target: PixelImage? = null,
         coverage: BooleanArray? = null,
+        owners: IntArray? = null,
         onProgress: (Float) -> Unit = {}
     ) {
         val stack = config.validated().effectiveStack()
         if (stack == HybridStack.GRID_UNDER || stack == HybridStack.COLLAGE_UNDER) {
-            renderHybrid(plan, descriptors, thumbnails, layout, config, sink, target, stack, coverage, onProgress)
+            renderHybrid(plan, descriptors, thumbnails, layout, config, sink, target, stack, coverage, owners, onProgress)
             return
         }
         if (plan.placements.isNotEmpty() && stack.usesCollage()) {
             collageRenderer.render(
-                plan, descriptors, thumbnails, layout, config, target, sink, coverage, onProgress
+                plan, descriptors, thumbnails, layout, config, target, sink, coverage, owners, onProgress
             )
             return
         }
@@ -228,10 +229,12 @@ class MosaicRenderer(
         target: PixelImage?,
         stack: HybridStack,
         coverage: BooleanArray?,
+        owners: IntArray?,
         onProgress: (Float) -> Unit
     ) {
         val collageOnTop = stack == HybridStack.GRID_UNDER
-        val sprites = collageRenderer.sprites(plan, descriptors, thumbnails, layout.width, layout.height)
+        val sprites = collageRenderer.sprites(plan, descriptors, thumbnails, layout.width, layout.height, target)
+        val field = lowFrequencyField(target)
         val mean = if (target == null) 0xFF18181C.toInt() else meanOf(target)
         val useTarget = config.collage.background == CollageBackground.TARGET && target != null
         val row = IntArray(layout.width)
@@ -242,10 +245,10 @@ class MosaicRenderer(
             if (y % 8 == 0) coroutineContext.ensureActive()
             if (collageOnTop) {
                 fillUniformRow(plan, descriptors, thumbnails, layout, config, y, row)
-                paintCutouts(row, y, sprites, config, layout.width, coverage)
+                paintCutouts(row, y, sprites, config, layout, coverage, owners, field)
             } else {
                 collageRenderer.paintBackground(row, y, layout.width, layout.height, target, useTarget, mean)
-                paintCutouts(row, y, sprites, config, layout.width, coverage)
+                paintCutouts(row, y, sprites, config, layout, coverage, owners, field)
                 fillUniformRow(plan, descriptors, thumbnails, layout, config, y, gridRow)
                 overlayGrid(row, gridRow, y, layout, grout, coverage)
             }
@@ -263,13 +266,24 @@ class MosaicRenderer(
         y: Int,
         sprites: List<CollageRenderer.Sprite>,
         config: MosaicConfig,
-        width: Int,
-        coverage: BooleanArray?
+        layout: OutputLayout,
+        coverage: BooleanArray?,
+        owners: IntArray?,
+        field: PixelImage?
     ) {
-        for (sprite in sprites) {
+        val width = layout.width
+        for (index in sprites.indices) {
+            val sprite = sprites[index]
+            if (sprite.placement.mask != null) {
+                paintShapeRow(
+                    row, y, width, layout.height, sprite.source, sprite.base, sprite.descriptor, sprite.placement,
+                    config, coverage, owners, index, sprite.tone, field, sprite.outline
+                )
+                continue
+            }
             if (config.collage.separatePieces) collageRenderer.paintShadow(row, y, sprite, width)
             if (y < sprite.draw.top || y > sprite.draw.bottom) continue
-            collageRenderer.paintSprite(row, y, sprite, config, coverage, width)
+            collageRenderer.paintSprite(row, y, sprite, config, coverage, width, owners = owners, owner = index)
         }
     }
 

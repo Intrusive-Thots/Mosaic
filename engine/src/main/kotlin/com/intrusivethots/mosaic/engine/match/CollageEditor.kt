@@ -16,6 +16,11 @@ class CollageEditor(
     fun hit(plan: MosaicPlan, x: Float, y: Float): Int {
         for (index in plan.placements.indices.reversed()) {
             val piece = plan.placements[index]
+            val mask = piece.mask
+            if (mask != null) {
+                if (mask.contains(x, y)) return index
+                continue
+            }
             val dx = piece.x - x
             val dy = piece.y - y
             val reach = piece.scale * 0.55f
@@ -54,10 +59,13 @@ class CollageEditor(
         plan: MosaicPlan,
         x: Float,
         y: Float,
-        radius: Float = 0.12f
+        radius: Float = 0.12f,
+        thumbnails: List<PixelImage> = emptyList()
     ): MosaicPlan {
         val tokens = descriptors.map { it.key.token() }
-        val replaced = placer.replaceRegion(target, descriptors, index, config, tokens, plan.placements, x, y, radius)
+        val replaced = placer.replaceRegion(
+            target, descriptors, index, config, tokens, plan.placements, x, y, radius, thumbnails
+        )
         return plan.withPlacements(replaced.placements, replaced.coverage)
     }
 }
@@ -87,7 +95,11 @@ private fun CutoutPlacement.copy(tileIndex: Int = this.tileIndex, pinned: Boolea
     targetL,
     targetA,
     targetB,
-    pinned
+    pinned,
+    mask,
+    cropU,
+    cropV,
+    cropSpan
 )
 
 internal fun regionDistance(x: Float, y: Float, centerX: Float, centerY: Float): Float {

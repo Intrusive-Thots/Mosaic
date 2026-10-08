@@ -9,5 +9,9 @@ class CutoutPlacement(
     val targetL: Float,
     val targetA: Float,
     val targetB: Float,
-    val pinned: Boolean = false
+    val pinned: Boolean = false,
+    val mask: PieceMask? = null,
+    val cropU: Float = 0.5f,
+    val cropV: Float = 0.5f,
+    val cropSpan: Float = 0.55f
 )

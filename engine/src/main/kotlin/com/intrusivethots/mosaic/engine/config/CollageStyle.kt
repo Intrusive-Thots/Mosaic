@@ -5,11 +5,11 @@ package com.intrusivethots.mosaic.engine.config
  * shadows, outlines, coverage, and how hard shape matching pulls.
  */
 enum class CollageStyle(val label: String) {
-    PAPER("Paper collage"),
-    STAMP("Stamp collage"),
-    PAINTERLY("Painterly overlap"),
-    SPARSE("Sparse artistic"),
-    DENSE("Dense coverage")
+    PAPER("Torn paper"),
+    STAMP("Hard cuts"),
+    PAINTERLY("Soft overlap"),
+    SPARSE("Fewer shapes"),
+    DENSE("Shaped coverage")
 }
 
 enum class HybridStack(val label: String) {

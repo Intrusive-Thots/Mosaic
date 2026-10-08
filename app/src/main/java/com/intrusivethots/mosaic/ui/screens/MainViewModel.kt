@@ -357,9 +357,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         pendingUndo = plan
         pendingEpoch += 1
         val config = _state.value.config
-        planEdit = { current, descriptors, image, index ->
+        planEdit = { current, descriptors, image, index, thumbs ->
             com.intrusivethots.mosaic.engine.match.CollageEditor().regenerate(
-                image, descriptors, index, config, current, point.first, point.second, 0.14f
+                image, descriptors, index, config, current, point.first, point.second, 0.14f, thumbs
             )
         }
         runGeneration(preview = true, title = "", commitPending = true)

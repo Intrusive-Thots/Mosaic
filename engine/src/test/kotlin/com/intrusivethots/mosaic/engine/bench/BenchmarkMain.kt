@@ -17,11 +17,13 @@ import com.intrusivethots.mosaic.engine.config.planCollageOutput
 import com.intrusivethots.mosaic.engine.config.planGrid
 import com.intrusivethots.mosaic.engine.match.CollagePlacer
 import com.intrusivethots.mosaic.engine.portrait
+import com.intrusivethots.mosaic.engine.quality.distanceReadability
 import com.intrusivethots.mosaic.engine.quality.luminanceSsim
 import com.intrusivethots.mosaic.engine.quality.maskedEdgeDeltaE
 import com.intrusivethots.mosaic.engine.quality.maskedLuminanceSsim
 import com.intrusivethots.mosaic.engine.quality.maskedMeanDeltaE
 import com.intrusivethots.mosaic.engine.quality.meanCellDeltaE
+import com.intrusivethots.mosaic.engine.quality.pieceBoundaryAlignment
 import com.intrusivethots.mosaic.engine.organicCutout
 import com.intrusivethots.mosaic.engine.photoCutout
 import com.intrusivethots.mosaic.engine.writePng
@@ -280,7 +282,7 @@ private suspend fun runCollageCase(tileCount: Int, pieceCount: Int): BenchResult
     val placer = CollagePlacer()
     lateinit var matched: Pair<com.intrusivethots.mosaic.engine.match.MosaicPlan, com.intrusivethots.mosaic.engine.match.MatchStats>
     val matchMs = measureNanoTime {
-        matched = placer.place(target, descriptors, index, config, descriptors.map { it.key.token() })
+        matched = placer.place(target, descriptors, index, config, descriptors.map { it.key.token() }, thumbs)
     }.ms()
     val layout = planCollageOutput(target.width, target.height, config, preview = true)
     val renderMs = measureNanoTime {
@@ -348,6 +350,7 @@ private suspend fun paintedScores(
     config: MosaicConfig
 ): SampleScores {
     val covered = BooleanArray(image.width * image.height)
+    val owners = IntArray(covered.size) { -1 }
     MosaicRenderer().render(
         result.plan,
         result.descriptors,
@@ -356,20 +359,30 @@ private suspend fun paintedScores(
         config,
         MemoryRowSink(image.width, image.height),
         target,
-        covered
+        covered,
+        owners
     )
-    return scoreImage(image, target, covered)
+    return scoreImage(image, target, covered, pieceBoundaryAlignment(owners, image.width, image.height, target))
 }
 
-private fun scoreImage(image: PixelImage, target: PixelImage, covered: BooleanArray): SampleScores {
+private fun scoreImage(
+    image: PixelImage,
+    target: PixelImage,
+    covered: BooleanArray,
+    alignment: Double = 0.0
+): SampleScores {
     val painted = covered.count { it }.toFloat() / covered.size.toFloat()
+    val distance = distanceReadability(image, target)
     return SampleScores(
         wholeDelta = meanCellDeltaE(image, target, 14, 9),
         wholeSsim = luminanceSsim(image, target),
         maskedDelta = maskedMeanDeltaE(image, target, covered),
         maskedSsim = maskedLuminanceSsim(image, target, covered),
         edgeDelta = maskedEdgeDeltaE(image, target, covered),
-        painted = painted
+        painted = painted,
+        alignment = alignment,
+        distanceDelta = distance.deltaE,
+        distanceSsim = distance.ssim
     )
 }
 
@@ -390,19 +403,28 @@ private fun sampleNote(
     appendLine("Its edge score uses pixels that differ from the target mean color, because that file has no coverage mask.")
     appendLine("Output is locked to 280×180 so this row lines up with the previous residual file.")
     appendLine("Masked scores count only pixels a cutout painted. Edge ΔE is the top quarter of reference luminance gradients.")
+    appendLine("Edge alignment is mean target-edge strength within two pixels of a piece boundary,")
+    appendLine("divided by the picture average. Above 1 means cuts follow edges.")
+    appendLine("The stamp row is the previous placer on this same portrait. Its alignment used the edge pixel itself.")
+    appendLine("Distance ΔE and distance SSIM compare both images after area-averaging to 64 pixels wide.")
+    appendLine("The previous shaped row is the run before flat crops and tone transfer. Its distance was not stored.")
     appendLine()
-    appendLine("| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Pixels painted |")
-    appendLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
-    appendLine("| Underlayer sample | 0.0475 | 0.7655 | 0.0989 | 0.6873 | — | 59% |")
+    appendLine("| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Alignment | Distance ΔE | Distance SSIM |")
+    appendLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    appendLine("| Underlayer sample | 0.0475 | 0.7655 | 0.0989 | 0.6873 | — | 59% | — | — | — |")
     append("| Previous residual | ${fmt(previous.wholeDelta)} | ${fmt(previous.wholeSsim)} | ")
     append("${fmt(previous.maskedDelta)} | ${fmt(previous.maskedSsim)} | ${fmt(previous.edgeDelta)} | ")
-    appendLine("${pct(previous.painted)} |")
-    append("| This run | ${fmt(organic.wholeDelta)} | ${fmt(organic.wholeSsim)} | ")
+    appendLine("${pct(previous.painted)} | — | ${fmt(previous.distanceDelta)} | ${fmt(previous.distanceSsim)} |")
+    appendLine("| Stamp collage | 0.0323 | 0.7045 | 0.0447 | 0.7061 | 0.0527 | 94% | 3.211 | — | — |")
+    appendLine("| Previous shaped | 0.0341 | 0.7417 | 0.0488 | 0.7417 | 0.0556 | 100% | 10.4693 | — | — |")
+    append("| Shaped collage | ${fmt(organic.wholeDelta)} | ${fmt(organic.wholeSsim)} | ")
     append("${fmt(organic.maskedDelta)} | ${fmt(organic.maskedSsim)} | ${fmt(organic.edgeDelta)} | ")
-    appendLine("${pct(organic.painted)} |")
+    append("${pct(organic.painted)} | ${fmt(organic.alignment)} | ")
+    appendLine("${fmt(organic.distanceDelta)} | ${fmt(organic.distanceSsim)} |")
     append("| Photo textures | ${fmt(photo.wholeDelta)} | ${fmt(photo.wholeSsim)} | ")
     append("${fmt(photo.maskedDelta)} | ${fmt(photo.maskedSsim)} | ${fmt(photo.edgeDelta)} | ")
-    appendLine("${pct(photo.painted)} |")
+    append("${pct(photo.painted)} | ${fmt(photo.alignment)} | ")
+    appendLine("${fmt(photo.distanceDelta)} | ${fmt(photo.distanceSsim)} |")
     appendLine()
     append(faces)
 }
@@ -417,7 +439,10 @@ private data class SampleScores(
     val maskedDelta: Double,
     val maskedSsim: Double,
     val edgeDelta: Double,
-    val painted: Float
+    val painted: Float,
+    val alignment: Double = 0.0,
+    val distanceDelta: Double = 0.0,
+    val distanceSsim: Double = 0.0
 )
 
 private fun sampleImage(name: String): List<File> = listOf(
@@ -503,9 +528,9 @@ private fun renderReport(
     appendLine()
     appendLine("## Cutout collage")
     appendLine()
-    appendLine("Each placement queries the OKLab index once. Large pieces land first. A finer pass adds small pieces")
-    appendLine("on edges, including over a pixel that is already covered when that lowers the error.")
-    appendLine("Shape agreement re-ranks that short list. It does not scan the library again.")
+    appendLine("The target is cut into coarse regions, finer edge regions, and contour strokes.")
+    appendLine("Each shape is filled from the source crop, rotation, and scale that best match its color.")
+    appendLine("Later shapes overlap freely. The index is queried once per shape, then only that short list is scored.")
     appendLine("Full scan is requested pieces × cutouts × 12 angles.")
     appendLine("The 900-piece row uses the same scale range as the rows above, so the extra time is the larger budget.")
     appendLine()
@@ -691,14 +716,15 @@ private suspend fun featureNote(
         appendLine("## Shape, density, and hybrid")
         appendLine()
         appendLine("Same portrait and 240 organic cutouts, seed 4, correction off, mean-color background.")
-        appendLine("Color-only sets shape weight to 0. Shape-aware sets it to 0.9. Both stay at 280×180 and 320 pieces.")
+        appendLine("Color-only and shape-aware both cut the same target shapes at 280×180 and 320 pieces.")
+        appendLine("Shape weight changes the score. The shape-aware row pays a Fourier penalty the color-only row does not.")
         appendLine("engine/build/reports/benchmarks/images/cutout-shape-compare.png is the target, color-only, then shape-aware.")
         appendLine("Dense coverage asks for 1,200 pieces at the High Quality scale range (2–11%) on a 560×360 canvas.")
         appendLine("engine/build/reports/benchmarks/images/cutout-hybrid.png is cutouts only, grid under collage, then collage under grid, all 280×180.")
         appendLine("docs/images/studio-phone-mock.png is a labeled layout mock of the phone Studio. It is not a device screenshot.")
         appendLine()
-        appendLine("| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Generate ms |")
-        appendLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+        appendLine("| | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Alignment | Distance ΔE | Distance SSIM | Generate ms |")
+        appendLine("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
         appendScore("Color only", colorScores, colorOnly.ms)
         appendScore("Shape-aware", shapeScores, shaped.ms)
         appendScore("Dense 1200", denseScores, dense.ms)
@@ -711,7 +737,8 @@ private suspend fun featureNote(
 private fun StringBuilder.appendScore(label: String, scores: SampleScores, ms: Double) {
     append("| $label | ${fmt(scores.wholeDelta)} | ${fmt(scores.wholeSsim)} | ")
     append("${fmt(scores.maskedDelta)} | ${fmt(scores.maskedSsim)} | ${fmt(scores.edgeDelta)} | ")
-    appendLine("${pct(scores.painted)} | ${"%.0f".format(ms)} |")
+    append("${pct(scores.painted)} | ${fmt(scores.alignment)} | ")
+    appendLine("${fmt(scores.distanceDelta)} | ${fmt(scores.distanceSsim)} | ${"%.0f".format(ms)} |")
 }
 
 private fun faceNote(previous: PixelImage, current: PixelImage, target: PixelImage): String {

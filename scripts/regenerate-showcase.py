@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Download the showcase sources and rebuild the docs/images comparisons.
 
+    python3 scripts/regenerate-showcase.py
+    python3 scripts/regenerate-showcase.py rick
+
 Source pictures are copyrighted. They are written only to showcase-sources/,
 which is gitignored. The committed pictures are the generated mosaics.
 """
@@ -14,6 +17,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ROOT / "docs" / "showcase" / "sources.tsv"
 OUTPUT = ROOT / "showcase-sources"
 USER_AGENT = "MosaicShowcase/1.0 (non-commercial demonstration; local regeneration)"
+THEMES = {
+    "naruto": (ROOT / "docs" / "showcase" / "sources.tsv", ROOT / "showcase-sources"),
+    "rick": (ROOT / "docs" / "showcase" / "rick-sources.tsv", ROOT / "showcase-sources" / "rick"),
+}
 TARGET_EDGE = 1920
 TILE_EDGE = 512
 
@@ -120,11 +127,17 @@ def fetch_all(rows: list[tuple[str, str, str]]) -> None:
 
 
 def main() -> None:
+    global SOURCES, OUTPUT
+    theme = sys.argv[1] if len(sys.argv) > 1 else "naruto"
+    if theme not in THEMES:
+        raise SystemExit(f"Unknown showcase theme {theme!r}. Use naruto or rick.")
+    SOURCES, OUTPUT = THEMES[theme]
     rows = read_sources()
     fetch_all(rows)
     gradle = ROOT / "gradlew"
+    command = [str(gradle), ":engine:showcase", "--offline", "--no-daemon", f"-PshowcaseTheme={theme}"]
     completed = subprocess.run(
-        [str(gradle), ":engine:showcase", "--offline", "--no-daemon"],
+        command,
         cwd=ROOT,
         check=False,
     )

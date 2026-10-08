@@ -54,22 +54,22 @@ fun CollageControls(
 @Composable
 private fun CollageSliders(settings: CollageSettings, onCollage: (CollageSettings) -> Unit) {
         Text(
-            "Large pieces land first, then smaller ones on edges and features. " +
-                "Draft through Maximum set the budget, scale, and adjustment effort. " +
-                "The background is flat unless you choose the target photo.",
+            "Shapes are cut from the picture itself, then filled from your library. " +
+                "Large pieces block in regions. Smaller ones follow edges and can overlap. " +
+                "Color strength gives each piece a light grade toward the target and leaves the source photo readable.",
             fontSize = 12.sp,
             color = TextSecondary
         )
     LabeledSlider("Pieces: ${settings.pieceCount}", settings.pieceCount.toFloat(), 8f, 4000f, AccentAmber) {
         onCollage(settings.copy(pieceCount = it.roundToInt()))
     }
-    LabeledSlider("Smallest scale: ${(settings.minScale * 100).roundToInt()}%", settings.minScale, 0.015f, 0.4f, AccentAmber) {
+    LabeledSlider("Fine shapes: ${(settings.minScale * 100).roundToInt()}%", settings.minScale, 0.015f, 0.4f, AccentAmber) {
         onCollage(settings.copy(minScale = it))
     }
-    LabeledSlider("Largest scale: ${(settings.maxScale * 100).roundToInt()}%", settings.maxScale, 0.12f, 0.7f, AccentAmber) {
+    LabeledSlider("Large shapes: ${(settings.maxScale * 100).roundToInt()}%", settings.maxScale, 0.12f, 0.7f, AccentAmber) {
         onCollage(settings.copy(maxScale = it.coerceAtLeast(settings.minScale)))
     }
-    LabeledSlider("Rotation: ±${settings.rotationRangeDegrees.roundToInt()}°", settings.rotationRangeDegrees, 0f, 180f, AccentAmber) {
+    LabeledSlider("Texture rotation: ±${settings.rotationRangeDegrees.roundToInt()}°", settings.rotationRangeDegrees, 0f, 180f, AccentAmber) {
         onCollage(settings.copy(rotationRangeDegrees = it))
     }
     LabeledSlider("Overlap: ${(settings.overlap * 100).roundToInt()}%", settings.overlap, 0f, 1f, AccentAmber) {
