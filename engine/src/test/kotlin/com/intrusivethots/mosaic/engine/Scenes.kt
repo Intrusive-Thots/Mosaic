@@ -43,7 +43,7 @@ fun hueTile(index: Int, count: Int, size: Int = 24): PixelImage {
  * Irregular cutout with a seeded outline and a second color inside it.
  * Transparent texels are zero, so they do not store a fringe color.
  */
-fun organicCutout(index: Int, count: Int, size: Int = 40): PixelImage {
+fun organicCutout(index: Int, count: Int, size: Int = 40, markFace: Boolean = true): PixelImage {
     val hue = paletteHue(index, count)
     val saturation = paletteSaturation(index)
     val value = paletteValue(index)
@@ -56,8 +56,8 @@ fun organicCutout(index: Int, count: Int, size: Int = 40): PixelImage {
     val center = (size - 1) / 2f
     val phases = FloatArray(5) { harmonic -> ((index * 17 + harmonic * 13) % 64) * 0.098175f }
     val amps = floatArrayOf(0.07f, 0.055f, 0.04f, 0.03f, 0.02f)
-    val blobX = center + ((index % 7) - 3) * size * 0.05f
-    val blobY = center + ((index % 5) - 2) * size * 0.05f
+    val blobX = center + ((index % 7) - 3) * size * 0.04f
+    val blobY = center + size * 0.16f
     val blobR = size * (0.14f + (index % 4) * 0.025f)
     for (y in 0 until size) {
         for (x in 0 until size) {
@@ -89,6 +89,7 @@ fun organicCutout(index: Int, count: Int, size: Int = 40): PixelImage {
             )
         }
     }
+    if (markFace) stampCartoonFace(pixels, size, size)
     return PixelImage(size, size, pixels)
 }
 
@@ -104,6 +105,7 @@ fun photoCutout(index: Int, count: Int, size: Int = 40): PixelImage {
         val alpha = mask.pixels[pixel] ushr 24
         pixels[pixel] = if (alpha == 0) 0 else (alpha shl 24) or (texture.pixels[pixel] and 0x00FFFFFF)
     }
+    stampCartoonFace(pixels, size, size)
     return PixelImage(size, size, pixels)
 }
 
@@ -155,6 +157,7 @@ fun shapedCutout(index: Int, count: Int, size: Int = 28): PixelImage {
             }
         }
     }
+    stampCartoonFace(pixels, size, size)
     return PixelImage(size, size, pixels)
 }
 
@@ -198,6 +201,130 @@ fun scene(width: Int, height: Int): PixelImage {
         }
     }
     return PixelImage(width, height, pixels)
+}
+
+/**
+ * White sclera and a dark pupil. Light paper still shows the pupils, and a near-black
+ * tile still shows the sclera, so either eye finder accepts the source.
+ */
+fun stampCartoonFace(pixels: IntArray, width: Int, height: Int) {
+    val dark = centerIsDark(pixels, width, height)
+    val minRadius = if (dark) 3 else 2
+    var radius = minRadius
+    var seat = eyeSeat(pixels, width, height, radius)
+    if (seat == null && dark) {
+        radius = 3
+        seat = forcedSeat(width, height, radius)
+    }
+    val placed = seat ?: return
+    val pupil = if (dark) 1 else 2
+    paintEye(pixels, width, height, placed[0], placed[2], radius, pupil)
+    paintEye(pixels, width, height, placed[1], placed[2], radius, pupil)
+}
+
+private fun centerIsDark(pixels: IntArray, width: Int, height: Int): Boolean {
+    val x = (width / 2).coerceIn(0, width - 1)
+    val y = (height / 2).coerceIn(0, height - 1)
+    val pixel = pixels[y * width + x]
+    if ((pixel ushr 24) < 128) return false
+    return channelLuma(pixel) < 0.28f
+}
+
+private fun channelLuma(pixel: Int): Float {
+    val red = (pixel ushr 16) and 255
+    val green = (pixel ushr 8) and 255
+    val blue = pixel and 255
+    return (red * 299 + green * 587 + blue * 114) / 255000f
+}
+
+/** Last resort for a near-black tile whose margin leaves no full disk. */
+private fun forcedSeat(width: Int, height: Int, radius: Int): IntArray? {
+    val gap = radius + 1
+    val cy = (height * 0.48f).toInt().coerceIn(radius, (height - 1 - radius).coerceAtLeast(radius))
+    var left = width / 2 - gap
+    var right = width / 2 + gap
+    val shift = when {
+        left - radius < 0 -> radius - left
+        right + radius >= width -> width - 1 - radius - right
+        else -> 0
+    }
+    left += shift
+    right += shift
+    if (left - radius < 0 || right + radius >= width) return null
+    return intArrayOf(left, right, cy)
+}
+
+private fun eyeSeat(pixels: IntArray, width: Int, height: Int, radius: Int): IntArray? {
+    val gap = radius + 1
+    var best: IntArray? = null
+    var bestOpaque = 0
+    val needed = diskCount(radius) * 2
+    for (cy in (height * 0.34f).toInt()..(height * 0.62f).toInt()) {
+        for (shift in -3..3) {
+            val cx = width / 2 + shift
+            val left = cx - gap
+            val right = cx + gap
+            val opaque = opaqueCount(pixels, width, height, left, cy, radius) +
+                opaqueCount(pixels, width, height, right, cy, radius)
+            if (opaque == needed) return intArrayOf(left, right, cy)
+            if (opaque > bestOpaque) {
+                bestOpaque = opaque
+                best = intArrayOf(left, right, cy)
+            }
+        }
+    }
+    return if (bestOpaque >= needed * 3 / 4) best else null
+}
+
+private fun diskCount(radius: Int): Int {
+    var count = 0
+    val r2 = radius * radius
+    for (y in -radius..radius) {
+        for (x in -radius..radius) if (x * x + y * y <= r2) count++
+    }
+    return count
+}
+
+private fun opaqueCount(pixels: IntArray, width: Int, height: Int, cx: Int, cy: Int, radius: Int): Int {
+    val r2 = radius * radius
+    var opaque = 0
+    for (y in (cy - radius).coerceAtLeast(0)..(cy + radius).coerceAtMost(height - 1)) {
+        for (x in (cx - radius).coerceAtLeast(0)..(cx + radius).coerceAtMost(width - 1)) {
+            val dx = x - cx
+            val dy = y - cy
+            if (dx * dx + dy * dy > r2) continue
+            if ((pixels[y * width + x] ushr 24) >= 128) opaque++
+        }
+    }
+    return opaque
+}
+
+private fun paintEye(pixels: IntArray, width: Int, height: Int, cx: Int, cy: Int, radius: Int, pupil: Int) {
+    val luma = diskLuma(pixels, width, height, cx, cy)
+    val darkField = luma < 0.28f
+    val pupilRadius = if (darkField) pupil.coerceIn(1, (radius - 1).coerceAtLeast(1)) else pupil.coerceAtLeast(2)
+    if (darkField) paintDisk(pixels, width, height, cx, cy, radius, argb(250, 250, 248))
+    paintDisk(pixels, width, height, cx, cy, pupilRadius, argb(8, 8, 12))
+}
+
+private fun diskLuma(pixels: IntArray, width: Int, height: Int, cx: Int, cy: Int): Float {
+    val pixel = pixels[cy.coerceIn(0, height - 1) * width + cx.coerceIn(0, width - 1)]
+    val red = (pixel ushr 16) and 255
+    val green = (pixel ushr 8) and 255
+    val blue = pixel and 255
+    return (red * 299 + green * 587 + blue * 114) / 255000f
+}
+
+private fun paintDisk(pixels: IntArray, width: Int, height: Int, cx: Int, cy: Int, radius: Int, color: Int) {
+    val r2 = radius * radius
+    for (y in (cy - radius).coerceAtLeast(0)..(cy + radius).coerceAtMost(height - 1)) {
+        for (x in (cx - radius).coerceAtLeast(0)..(cx + radius).coerceAtMost(width - 1)) {
+            val dx = x - cx
+            val dy = y - cy
+            if (dx * dx + dy * dy > r2) continue
+            pixels[y * width + x] = color
+        }
+    }
 }
 
 private fun hsvToRgb(hue: Float, saturation: Float, value: Float): Triple<Int, Int, Int> {

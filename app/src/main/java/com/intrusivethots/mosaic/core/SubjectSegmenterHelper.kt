@@ -53,7 +53,11 @@ object SubjectSegmenterHelper {
         val extracted = try {
             val result = segmenter.process(InputImage.fromBitmap(bitmap, 0)).await()
             result.subjects.mapNotNull { subject -> subject.bitmap }
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
+            emptyList()
+        } catch (failure: LinkageError) {
+            emptyList()
+        } catch (oom: OutOfMemoryError) {
             emptyList()
         }
         if (extracted.isEmpty()) return emptyList()

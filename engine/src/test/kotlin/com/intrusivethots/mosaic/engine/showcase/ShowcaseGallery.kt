@@ -20,7 +20,10 @@ import com.intrusivethots.mosaic.engine.image.downscaleLongEdge
 import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
 import com.intrusivethots.mosaic.engine.legacy.LegacyRgbMatcher
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
+import com.intrusivethots.mosaic.engine.match.CartoonFaceFinder
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
+import com.intrusivethots.mosaic.engine.match.pieceFloor
+import com.intrusivethots.mosaic.engine.match.visibleSizes
 import com.intrusivethots.mosaic.engine.render.MemoryRowSink
 import com.intrusivethots.mosaic.engine.render.MosaicRenderer
 import com.intrusivethots.mosaic.engine.tile.MemoryTileSource
@@ -29,6 +32,7 @@ import java.io.File
 
 internal const val PANEL_EDGE = 840
 internal const val FULL_EDGE = 1680
+private const val SHOWCASE_PIXELS = 2_400_000L
 internal const val STRIP_EDGE = 1680
 private const val COLLAGE_SEED = 4
 private const val GRID_SEED = 7
@@ -37,9 +41,11 @@ private const val DENSE_PIECES = 3400
 
 internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File, prefix: String = "") {
     destination.mkdirs()
+    reportFaces(prefix, library.cutouts)
     val panelTarget = library.target.downscaleLongEdge(PANEL_EDGE)
-    val fullTarget = library.target.downscaleLongEdge(FULL_EDGE)
-    val collageTarget = library.target.fitLongEdge(FULL_EDGE)
+    val fullEdge = outputEdge(library.target, FULL_EDGE)
+    val fullTarget = library.target.fitLongEdge(fullEdge)
+    val collageTarget = fullTarget
     val cutouts = sources(library.cutouts, "cutout")
     val photos = sources(library.photos, "photo")
     val opaque = sources(library.photos, "grid")
@@ -47,11 +53,17 @@ internal suspend fun writeShowcase(library: ShowcaseLibrary, destination: File, 
     writeCollageRow(panelTarget, cutouts, photos, destination, prefix)
     writeShapeRow(panelTarget, cutouts, destination, prefix)
     writeHybridRow(panelTarget, cutouts, destination, prefix)
-    val fullCollage = render(collageTarget, cutouts, currentCollage(FULL_EDGE, HybridStack.CUTOUTS, NORMAL_PIECES), "${prefix}full")
+    val fullCollage = render(
+        collageTarget,
+        cutouts,
+        currentCollage(fullEdge, HybridStack.CUTOUTS, NORMAL_PIECES).longEdge(library.target, fullEdge),
+        "${prefix}full"
+    )
     writePng(fullCollage, listOf(File(destination, "${prefix}cutout-collage-output.png")))
-    val dense = render(collageTarget, cutouts, denseCollage(FULL_EDGE), "${prefix}dense")
+    writeReviewArtifacts(fullCollage, collageTarget, destination, prefix)
+    val dense = render(collageTarget, cutouts, denseCollage(fullEdge).longEdge(library.target, fullEdge), "${prefix}dense")
     writePng(dense, listOf(File(destination, "${prefix}cutout-collage-dense.png")))
-    val grid = render(fullTarget, opaque, gridConfig(80, FULL_EDGE))
+    val grid = render(fullTarget, opaque, gridConfig(80, fullEdge).longEdge(library.target, fullEdge))
     writePng(grid, listOf(File(destination, "${prefix}showcase-grid.png")))
     copyArtifacts(destination, prefix)
 }
@@ -150,10 +162,25 @@ private suspend fun reportRead(
     val native = tiles.map { it.loadThumbnail(4096) }
     val fidelity = pieceContentFidelity(image, native, result.descriptors, result.plan.placements)
     val placed = result.plan.placements.size
+    val floor = pieceFloor(config.collage.minPiece, image.width, image.height)
+    val sizes = visibleSizes(result.plan.placements.map { it.mask }, image.width, image.height)
+    val shortMin = sizes.minOfOrNull { it.shortOfShort } ?: 0f
+    val areaMin = sizes.minOfOrNull { it.areaOfImage } ?: 0f
+    val faced = result.plan.placements.count { it.faceRight > it.faceLeft }
     println(
         "SHOWCASE $label distance ${distance.deltaE} ssim ${distance.ssim} texture $texture " +
-            "placed $placed fidelity ${fidelity.median} p10 ${fidelity.lowDecile}"
+            "placed $placed fidelity ${fidelity.median} p10 ${fidelity.lowDecile} faces $faced " +
+            "visibleShort $shortMin visibleArea $areaMin floorShort ${floor.shortOfShort} floorArea ${floor.areaOfImage}"
     )
+}
+
+private fun reportFaces(prefix: String, images: List<PixelImage>) {
+    var detected = 0
+    for (image in images) {
+        if (CartoonFaceFinder.find(image).isNotEmpty()) detected++
+    }
+    val name = if (prefix.isEmpty()) "naruto" else prefix.removeSuffix("-")
+    println("SHOWCASE $name faces detected $detected excluded ${images.size - detected} of ${images.size}")
 }
 
 private suspend fun renderLegacy(
@@ -241,6 +268,24 @@ private fun currentCollage(edge: Int, stack: HybridStack, pieces: Int) = MosaicC
 
 private fun MosaicConfig.stack(stack: HybridStack) = copy(collage = collage.copy(stack = stack))
 
+/** Custom width is the output width, so a portrait must set the height or it grows past the long edge. */
+private fun MosaicConfig.longEdge(target: PixelImage, edge: Int): MosaicConfig {
+    return if (target.width >= target.height) {
+        copy(customOutputWidth = edge, customOutputHeight = 0)
+    } else {
+        copy(customOutputWidth = 0, customOutputHeight = edge)
+    }
+}
+
+private fun outputEdge(target: PixelImage, edge: Int): Int {
+    val longSide = maxOf(target.width, target.height).coerceAtLeast(1)
+    val shortSide = minOf(target.width, target.height).coerceAtLeast(1)
+    val pixels = edge.toLong() * edge.toLong() * shortSide / longSide
+    if (pixels <= SHOWCASE_PIXELS) return edge
+    val scale = kotlin.math.sqrt(SHOWCASE_PIXELS.toDouble() / pixels.toDouble())
+    return (edge * scale).toInt().coerceAtLeast(1)
+}
+
 private fun PixelImage.fitted(frame: PixelImage): PixelImage = resizeToHeight(frame.height)
 
 private fun PixelImage.fitLongEdge(edge: Int): PixelImage {
@@ -271,6 +316,44 @@ private fun rowOf(images: List<PixelImage>, gap: Int = 12): PixelImage {
         originX += image.width + gap
     }
     return PixelImage(width, height, pixels)
+}
+
+private fun writeReviewArtifacts(image: PixelImage, target: PixelImage, destination: File, prefix: String) {
+    val theme = if (prefix.isEmpty()) "naruto" else prefix.removeSuffix("-")
+    val artifacts = File("/opt/cursor/artifacts")
+    artifacts.mkdirs()
+    writeJpeg(image.downscaleLongEdge(300), File(artifacts, "thumb-$theme-300.jpg"))
+    writeJpeg(centerSquare(image, 720), File(artifacts, "crop-$theme-1to1.jpg"))
+    writePng(image, listOf(File(artifacts, "preview-$theme-collage.png")))
+    val strip = rowOf(listOf(target.fitted(image), image)).downscaleLongEdge(STRIP_EDGE)
+    writePng(strip, listOf(File(artifacts, "compare-$theme-strip.png"), File(destination, "${prefix}target-collage.png")))
+}
+
+private fun centerSquare(image: PixelImage, maxEdge: Int): PixelImage {
+    val side = minOf(image.width, image.height, maxEdge)
+    val x0 = (image.width - side) / 2
+    val y0 = (image.height - side) / 2
+    val pixels = IntArray(side * side)
+    for (y in 0 until side) {
+        System.arraycopy(image.pixels, (y0 + y) * image.width + x0, pixels, y * side, side)
+    }
+    return PixelImage(side, side, pixels)
+}
+
+private fun writeJpeg(image: PixelImage, file: File) {
+    val buffered = java.awt.image.BufferedImage(image.width, image.height, java.awt.image.BufferedImage.TYPE_INT_RGB)
+    val rgb = IntArray(image.pixels.size)
+    for (index in image.pixels.indices) rgb[index] = image.pixels[index] and 0x00FFFFFF
+    buffered.setRGB(0, 0, image.width, image.height, rgb, 0, image.width)
+    val writer = javax.imageio.ImageIO.getImageWritersByFormatName("jpg").next()
+    val param = writer.defaultWriteParam
+    param.compressionMode = javax.imageio.ImageWriteParam.MODE_EXPLICIT
+    param.compressionQuality = 0.9f
+    javax.imageio.stream.FileImageOutputStream(file).use { output ->
+        writer.output = output
+        writer.write(null, javax.imageio.IIOImage(buffered, null, null), param)
+    }
+    writer.dispose()
 }
 
 private fun copyArtifacts(destination: File, prefix: String) {

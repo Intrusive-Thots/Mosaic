@@ -20,10 +20,13 @@ internal class ShapedCollage {
         index: TileIndex,
         config: MosaicConfig,
         onSnapshot: suspend (List<CutoutPlacement>, String) -> Unit,
-        onProgress: (Float, String) -> Unit
+        onProgress: (Float, String) -> Unit,
+        knownFaces: List<List<FaceBox>>? = null
     ): Pair<MosaicPlan, MatchStats> {
         val validated = config.validated()
-        val assembled = assembleCollage(target, descriptors, thumbnails, index, validated, onSnapshot, onProgress)
+        val assembled = assembleCollage(
+            target, descriptors, thumbnails, index, validated, onSnapshot, onProgress, knownFaces
+        )
         val coverage = if (assembled.placements.isEmpty()) 0f else 1f
         val tokens = descriptors.map { it.key.token() }
         return planOf(assembled.placements, validated, target, tokens, coverage) to assembled.stats
