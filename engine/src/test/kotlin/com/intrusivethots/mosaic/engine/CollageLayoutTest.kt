@@ -15,6 +15,7 @@ import com.intrusivethots.mosaic.engine.match.CutoutPlacement
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.progress.GenerationStage
 import com.intrusivethots.mosaic.engine.quality.distanceReadability
+import com.intrusivethots.mosaic.engine.quality.pyramidReadability
 import com.intrusivethots.mosaic.engine.quality.luminanceSsim
 import com.intrusivethots.mosaic.engine.quality.maskedEdgeDeltaE
 import com.intrusivethots.mosaic.engine.quality.maskedLuminanceSsim
@@ -215,6 +216,7 @@ class CollageLayoutTest {
         val ssim = maskedLuminanceSsim(image, target, covered)
         val edge = maskedEdgeDeltaE(image, target, covered)
         val distance = distanceReadability(image, target)
+        val pyramid = pyramidReadability(image, target)
         val placed = result.plan.placements.size
         assertTrue(
             painted >= 0.96f,
@@ -225,6 +227,8 @@ class CollageLayoutTest {
         assertTrue(edge < 0.09, "edge ΔE $edge")
         assertTrue(distance.deltaE < 0.048, "distance ΔE ${distance.deltaE} SSIM ${distance.ssim}")
         assertTrue(distance.ssim > 0.75, "distance SSIM ${distance.ssim} ΔE ${distance.deltaE}")
+        assertTrue(pyramid.deltaE < 0.055, "pyramid ΔE ${pyramid.deltaE} SSIM ${pyramid.ssim}")
+        assertTrue(pyramid.ssim > 0.72, "pyramid SSIM ${pyramid.ssim} ΔE ${pyramid.deltaE}")
     }
 
     @Test

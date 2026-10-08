@@ -182,6 +182,32 @@ fun distanceReadability(rendered: PixelImage, reference: PixelImage, width: Int 
     return DistanceRead(meanCellDeltaE(left, right, safe, height), luminanceSsim(left, right))
 }
 
+/**
+ * OKLab ΔE and luminance SSIM on a four-level pyramid. Coarser levels count more,
+ * so a missed color mass costs more than texture inside a piece.
+ * Weights run from fine to coarse: 0.10, 0.20, 0.30, 0.40.
+ */
+fun pyramidReadability(rendered: PixelImage, reference: PixelImage): DistanceRead {
+    val weights = doubleArrayOf(0.10, 0.20, 0.30, 0.40)
+    var image = rendered
+    var target = reference
+    var delta = 0.0
+    var structure = 0.0
+    var weightSum = 0.0
+    for (level in weights.indices) {
+        val weight = weights[level]
+        val columns = image.width.coerceAtMost(48).coerceAtLeast(4)
+        val rows = image.height.coerceAtMost(48).coerceAtLeast(4)
+        delta += weight * meanCellDeltaE(image, target, columns, rows)
+        structure += weight * luminanceSsim(image, target)
+        weightSum += weight
+        if (image.width <= 24 || image.height <= 16) break
+        image = image.resizeAreaAverage(image.width / 2, (image.height / 2).coerceAtLeast(8))
+        target = target.resizeAreaAverage(image.width, image.height)
+    }
+    return DistanceRead(delta / weightSum, structure / weightSum)
+}
+
 fun luminanceSsim(rendered: PixelImage, reference: PixelImage): Double {
     val aligned = if (reference.width == rendered.width && reference.height == rendered.height) {
         reference

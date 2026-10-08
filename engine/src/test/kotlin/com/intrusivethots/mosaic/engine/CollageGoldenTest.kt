@@ -14,7 +14,7 @@ class CollageGoldenTest {
     }
 
     companion object {
-        const val COLLAGE_SHA256 = "a1c941d3b17cbfdc28f6c1e7c8ad36f1ec8e7f2e70aa8efd1638c40fd8536850"
+        const val COLLAGE_SHA256 = "be3f7ed724d9623208eb609dffbc1584d891d6c7cdaeb95c18ec8a831f02c5a9"
 
         suspend fun renderCollageGolden() = GenerationCoordinator().generate(
             target = scene(72, 48),

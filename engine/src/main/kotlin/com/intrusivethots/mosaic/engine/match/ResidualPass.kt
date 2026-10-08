@@ -1,0 +1,452 @@
+package com.intrusivethots.mosaic.engine.match
+
+import com.intrusivethots.mosaic.engine.config.MosaicConfig
+import com.intrusivethots.mosaic.engine.config.RenderMode
+import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.index.ProbeCounter
+import com.intrusivethots.mosaic.engine.index.TileIndex
+import com.intrusivethots.mosaic.engine.index.TopK
+import com.intrusivethots.mosaic.engine.tile.TileDescriptor
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
+import kotlin.math.min
+import kotlin.math.sqrt
+
+/**
+ * Closed loop for the shaped collage. Large color masses go down first. Later pieces
+ * are added only where the working canvas still misses the target, and a short pass
+ * can drop or replace a piece that does not earn its place.
+ */
+internal suspend fun assembleCollage(
+    target: PixelImage,
+    descriptors: List<TileDescriptor>,
+    thumbnails: List<PixelImage>,
+    index: TileIndex,
+    config: MosaicConfig,
+    onSnapshot: suspend (List<CutoutPlacement>, String) -> Unit,
+    onProgress: (Float, String) -> Unit
+): Assembled {
+    val plane = labPlane(workingCopy(target))
+    val swatches = buildSwatches(thumbnails, descriptors)
+    val probes = ProbeCounter()
+    val fit = ShapeFit(
+        swatches, index, config,
+        UsageTracker(descriptors.size, config.maxRepetitionDistance, config.allowTileRepetition, config.usageBalanceWeight),
+        probes, TopK(config.candidateCount.coerceAtLeast(1))
+    )
+    val correct = config.renderMode != RenderMode.ORIGINAL && config.colorMatchWeight > 0f
+    val canvas = WorkCanvas(plane)
+    val pieces = ArrayList<PlacedPiece>()
+    onProgress(0.02f, "Cutting large shapes")
+    blockIn(target, config, fit, canvas, pieces, correct)
+    onSnapshot(pieces.map { it.placement }, "Cutting large shapes")
+    onProgress(0.45f, "Cutting edge shapes")
+    coroutineContext.ensureActive()
+    refine(plane, config, fit, canvas, pieces, correct)
+    coroutineContext.ensureActive()
+    relax(fit, canvas, pieces, correct, config.colorMatchWeight)
+    onSnapshot(pieces.map { it.placement }, "Cutting edge shapes")
+    onProgress(1f, "Cutting edge shapes")
+    return Assembled(pieces.map { it.placement }, statsOf(fit, probes, descriptors.size, pieces))
+}
+
+internal class Assembled(val placements: List<CutoutPlacement>, val stats: MatchStats)
+
+private class PlacedPiece(val cut: ShapeCut, var placement: CutoutPlacement, var l: Float, var a: Float, var b: Float)
+
+private suspend fun blockIn(
+    target: PixelImage,
+    config: MosaicConfig,
+    fit: ShapeFit,
+    canvas: WorkCanvas,
+    pieces: MutableList<PlacedPiece>,
+    correct: Boolean
+) {
+    val ordered = cutTargetShapes(target, config.collage).sortedByDescending { it.scale }
+    for (ordinal in ordered.indices) {
+        coroutineContext.ensureActive()
+        val cut = ordered[ordinal]
+        val chosen = fit.choose(cut, ordinal) ?: continue
+        val tone = paintTone(cut, chosen, fit, correct, config.colorMatchWeight)
+        pieces.add(PlacedPiece(cut, chosen, tone[0], tone[1], tone[2]))
+        canvas.paint(cut, tone[0], tone[1], tone[2])
+    }
+}
+
+private suspend fun refine(
+    plane: LabPlane,
+    config: MosaicConfig,
+    fit: ShapeFit,
+    canvas: WorkCanvas,
+    pieces: MutableList<PlacedPiece>,
+    correct: Boolean
+) {
+    val detail = (config.collage.pieceCount * 0.16f).toInt().coerceIn(0, 80)
+    if (detail == 0) return
+    val short = min(plane.width, plane.height)
+    val fine = (config.collage.minScale * short).toInt().coerceIn(4, 12)
+    val taken = BooleanArray(plane.l.size)
+    val broadCount = detail / 3
+    val pull = config.colorMatchWeight
+    wave(plane, fit, canvas, pieces, correct, pull, broadCount, (fine * 2).coerceAtMost(short / 5), plane.height / 8, taken)
+    wave(plane, fit, canvas, pieces, correct, pull, detail - broadCount, fine, fine, taken)
+}
+
+private suspend fun wave(
+    plane: LabPlane,
+    fit: ShapeFit,
+    canvas: WorkCanvas,
+    pieces: MutableList<PlacedPiece>,
+    correct: Boolean,
+    pull: Float,
+    count: Int,
+    radius: Int,
+    blur: Int,
+    taken: BooleanArray
+) {
+    if (count <= 0) return
+    val peaks = canvas.peaks(count, radius, blur)
+    for (peak in peaks) {
+        coroutineContext.ensureActive()
+        if (taken[peak]) continue
+        tryBlob(plane, fit, canvas, pieces, correct, pull, peak, radius, taken)
+    }
+}
+
+private fun tryBlob(
+    plane: LabPlane,
+    fit: ShapeFit,
+    canvas: WorkCanvas,
+    pieces: MutableList<PlacedPiece>,
+    correct: Boolean,
+    pull: Float,
+    peak: Int,
+    radius: Int,
+    taken: BooleanArray
+) {
+    val cut = errorBlob(plane, peak % plane.width, peak / plane.width, radius) ?: return
+    val before = canvas.maskedError(cut)
+    if (before < ACCEPT * maskArea(cut)) return
+    val chosen = fit.choose(cut, pieces.size, commit = false) ?: return
+    val tone = paintTone(cut, chosen, fit, correct, pull)
+    val after = canvas.predictedError(cut, tone[0], tone[1], tone[2])
+    if (before - after < ACCEPT * maskArea(cut)) return
+    fit.keep(chosen)
+    pieces.add(PlacedPiece(cut, chosen, tone[0], tone[1], tone[2]))
+    canvas.paint(cut, tone[0], tone[1], tone[2])
+    markTaken(plane, cut, taken)
+}
+
+private fun relax(fit: ShapeFit, canvas: WorkCanvas, pieces: MutableList<PlacedPiece>, correct: Boolean, pull: Float) {
+    var index = pieces.lastIndex
+    while (index >= 0) {
+        val blocking = pieces[index].cut.blocking
+        if (!blocking && dropIfUseless(canvas, pieces, index)) {
+            index--
+            continue
+        }
+        swapIfBetter(fit, canvas, pieces, index, correct, pull)
+        index--
+    }
+}
+
+private fun dropIfUseless(canvas: WorkCanvas, pieces: MutableList<PlacedPiece>, index: Int): Boolean {
+    val before = canvas.totalError()
+    canvas.rebuild(pieces, index)
+    val without = canvas.totalError()
+    if (without <= before) {
+        pieces.removeAt(index)
+        return true
+    }
+    val kept = pieces[index]
+    canvas.paint(kept.cut, kept.l, kept.a, kept.b)
+    return false
+}
+
+private fun swapIfBetter(
+    fit: ShapeFit,
+    canvas: WorkCanvas,
+    pieces: MutableList<PlacedPiece>,
+    index: Int,
+    correct: Boolean,
+    pull: Float
+) {
+    val piece = pieces[index]
+    val alternate = fit.choose(piece.cut, index, piece.placement.tileIndex, commit = false) ?: return
+    val tone = paintTone(piece.cut, alternate, fit, correct, pull)
+    canvas.rebuild(pieces, index)
+    val swapped = canvas.predictedError(piece.cut, tone[0], tone[1], tone[2])
+    canvas.paint(piece.cut, piece.l, piece.a, piece.b)
+    if (swapped + ACCEPT * maskArea(piece.cut) >= canvas.maskedError(piece.cut)) return
+    fit.keep(alternate)
+    canvas.paint(piece.cut, tone[0], tone[1], tone[2])
+    piece.placement = alternate
+    piece.l = tone[0]
+    piece.a = tone[1]
+    piece.b = tone[2]
+}
+
+private fun paintTone(
+    cut: ShapeCut,
+    placement: CutoutPlacement,
+    fit: ShapeFit,
+    correct: Boolean,
+    pull: Float
+): FloatArray {
+    val src = fit.colorAt(placement)
+    if (!correct) return src
+    val center = 1f - (1f - pull) * (1f - pull)
+    return floatArrayOf(
+        src[0] + (cut.meanL - src[0]) * center,
+        src[1] + (cut.meanA - src[1]) * center,
+        src[2] + (cut.meanB - src[2]) * center
+    )
+}
+
+private fun markTaken(plane: LabPlane, cut: ShapeCut, taken: BooleanArray) {
+    val mask = cut.mask
+    val x0 = (mask.left * plane.width).toInt().coerceIn(0, plane.width - 1)
+    val x1 = (mask.right * plane.width).toInt().coerceIn(x0, plane.width - 1)
+    val y0 = (mask.top * plane.height).toInt().coerceIn(0, plane.height - 1)
+    val y1 = (mask.bottom * plane.height).toInt().coerceIn(y0, plane.height - 1)
+    for (y in y0..y1) {
+        val row = y * plane.width
+        for (x in x0..x1) {
+            if (mask.contains((x + 0.5f) / plane.width, (y + 0.5f) / plane.height)) taken[row + x] = true
+        }
+    }
+}
+
+private fun maskArea(cut: ShapeCut): Float {
+    val mask = cut.mask
+    var count = 0
+    for (value in mask.alpha) if ((value.toInt() and 255) > 128) count++
+    return count.toFloat().coerceAtLeast(1f)
+}
+
+private fun statsOf(fit: ShapeFit, probes: ProbeCounter, tiles: Int, pieces: List<PlacedPiece>): MatchStats {
+    val stats = MatchStats()
+    stats.comparisons = fit.comparisons
+    stats.probes = probes.probes
+    stats.usage = IntArray(tiles)
+    for (piece in pieces) {
+        val tile = piece.placement.tileIndex
+        if (tile in stats.usage.indices) stats.usage[tile]++
+    }
+    return stats
+}
+
+private class WorkCanvas(val plane: LabPlane) {
+    val l = FloatArray(plane.l.size) { meanOf(plane.l) }
+    val a = FloatArray(plane.a.size) { meanOf(plane.a) }
+    val b = FloatArray(plane.b.size) { meanOf(plane.b) }
+
+    fun paint(cut: ShapeCut, pl: Float, pa: Float, pb: Float) {
+        visit(cut) { index ->
+            l[index] = pl
+            a[index] = pa
+            b[index] = pb
+        }
+    }
+
+    fun rebuild(pieces: List<PlacedPiece>, skip: Int) {
+        l.fill(meanOf(plane.l))
+        a.fill(meanOf(plane.a))
+        b.fill(meanOf(plane.b))
+        for (index in pieces.indices) {
+            if (index == skip) continue
+            val piece = pieces[index]
+            paint(piece.cut, piece.l, piece.a, piece.b)
+        }
+    }
+
+    fun maskedError(cut: ShapeCut): Float {
+        var sum = 0f
+        var count = 0
+        visit(cut) { index ->
+            sum += gap(index, l[index], a[index], b[index])
+            count++
+        }
+        return sum
+    }
+
+    fun predictedError(cut: ShapeCut, pl: Float, pa: Float, pb: Float): Float {
+        var sum = 0f
+        visit(cut) { index -> sum += gap(index, pl, pa, pb) }
+        return sum
+    }
+
+    fun totalError(): Float {
+        var sum = 0.0
+        val step = (l.size / 6000).coerceAtLeast(1)
+        var index = 0
+        var count = 0
+        while (index < l.size) {
+            sum += gap(index, l[index], a[index], b[index])
+            count++
+            index += step
+        }
+        return (sum * l.size / count.coerceAtLeast(1)).toFloat()
+    }
+
+    fun peaks(budget: Int, spacing: Int, blur: Int): IntArray {
+        val weight = errorWeight(blur)
+        val step = spacing.coerceAtLeast(3)
+        val found = ArrayList<Peak>()
+        var y = step / 2
+        while (y < plane.height) {
+            var x = step / 2
+            while (x < plane.width) {
+                val peak = localPeak(weight, x, y, step)
+                val score = weight[peak]
+                if (score > PEAK) found.add(Peak(peak, score * score * score * score))
+                x += step
+            }
+            y += step
+        }
+        found.sortByDescending { it.score }
+        return spreadPeaks(found, budget, step)
+    }
+
+    private fun errorWeight(blur: Int): FloatArray {
+        val fine = FloatArray(l.size) { index -> gap(index, l[index], a[index], b[index]) }
+        val blurred = boxBlur(fine, blur)
+        val mixed = FloatArray(l.size)
+        for (index in mixed.indices) mixed[index] = fine[index] * 0.35f + blurred[index] * 0.65f
+        return mixed
+    }
+
+    private fun boxBlur(source: FloatArray, radius: Int): FloatArray {
+        val reach = radius.coerceIn(1, 40)
+        val wide = FloatArray(source.size)
+        blurRows(source, wide, reach)
+        val out = FloatArray(source.size)
+        blurColumns(wide, out, reach)
+        return out
+    }
+
+    private fun blurRows(source: FloatArray, into: FloatArray, reach: Int) {
+        val width = plane.width
+        for (y in 0 until plane.height) {
+            val row = y * width
+            for (x in 0 until width) {
+            val start = row + (x - reach).coerceAtLeast(0)
+            val end = row + (x + reach).coerceAtMost(width - 1)
+            into[row + x] = spanMean(source, start, end)
+        }
+        }
+    }
+
+    private fun blurColumns(source: FloatArray, into: FloatArray, reach: Int) {
+        val width = plane.width
+        for (x in 0 until width) {
+            for (y in 0 until plane.height) {
+                val y0 = (y - reach).coerceAtLeast(0)
+                val y1 = (y + reach).coerceAtMost(plane.height - 1)
+                into[y * width + x] = columnMean(source, x, y0, y1, width)
+            }
+        }
+    }
+
+    private fun spanMean(source: FloatArray, start: Int, end: Int): Float {
+        var sum = 0f
+        var count = 0
+        for (index in start..end) {
+            sum += source[index]
+            count++
+        }
+        return sum / count.coerceAtLeast(1)
+    }
+
+    private fun columnMean(source: FloatArray, x: Int, y0: Int, y1: Int, width: Int): Float {
+        var sum = 0f
+        var count = 0
+        for (y in y0..y1) {
+            sum += source[y * width + x]
+            count++
+        }
+        return sum / count.coerceAtLeast(1)
+    }
+
+    private fun spreadPeaks(found: List<Peak>, budget: Int, spacing: Int): IntArray {
+        val chosen = IntArray(budget)
+        var count = 0
+        val minDist = spacing * spacing
+        for (peak in found) {
+            if (count >= budget) break
+            if (!separated(chosen, count, peak.index, minDist)) continue
+            chosen[count] = peak.index
+            count++
+        }
+        return chosen.copyOf(count)
+    }
+
+    private fun separated(chosen: IntArray, count: Int, index: Int, minDist: Int): Boolean {
+        val x = index % plane.width
+        val y = index / plane.width
+        for (slot in 0 until count) {
+            val other = chosen[slot]
+            val dx = other % plane.width - x
+            val dy = other / plane.width - y
+            if (dx * dx + dy * dy < minDist) return false
+        }
+        return true
+    }
+
+    private fun localPeak(weight: FloatArray, x: Int, y: Int, step: Int): Int {
+        var best = y * plane.width + x
+        var score = weight[best]
+        val y0 = (y - step / 2).coerceAtLeast(0)
+        val y1 = (y + step / 2).coerceAtMost(plane.height - 1)
+        val x0 = (x - step / 2).coerceAtLeast(0)
+        val x1 = (x + step / 2).coerceAtMost(plane.width - 1)
+        for (py in y0..y1) {
+            val row = py * plane.width
+            for (px in x0..x1) {
+                if (weight[row + px] <= score) continue
+                score = weight[row + px]
+                best = row + px
+            }
+        }
+        return best
+    }
+
+    private fun visit(cut: ShapeCut, body: (Int) -> Unit) {
+        val mask = cut.mask
+        val x0 = (mask.left * plane.width).toInt().coerceIn(0, plane.width - 1)
+        val x1 = ((mask.right * plane.width).toInt() - 1).coerceIn(x0, plane.width - 1)
+        val y0 = (mask.top * plane.height).toInt().coerceIn(0, plane.height - 1)
+        val y1 = ((mask.bottom * plane.height).toInt() - 1).coerceIn(y0, plane.height - 1)
+        for (y in y0..y1) {
+            for (x in x0..x1) {
+                if (!mask.contains((x + 0.5f) / plane.width, (y + 0.5f) / plane.height)) continue
+                body(y * plane.width + x)
+            }
+        }
+    }
+
+    private fun gap(index: Int, pl: Float, pa: Float, pb: Float): Float {
+        val dl = pl - plane.l[index]
+        val da = pa - plane.a[index]
+        val db = pb - plane.b[index]
+        return sqrt(dl * dl + da * da + db * db)
+    }
+}
+
+private fun meanOf(values: FloatArray): Float {
+    var sum = 0.0
+    val step = (values.size / 4000).coerceAtLeast(1)
+    var count = 0
+    var index = 0
+    while (index < values.size) {
+        sum += values[index]
+        count++
+        index += step
+    }
+    return (sum / count.coerceAtLeast(1)).toFloat()
+}
+
+private class Peak(val index: Int, val score: Float)
+
+private const val ACCEPT = 0.012f
+private const val PEAK = 0.035f

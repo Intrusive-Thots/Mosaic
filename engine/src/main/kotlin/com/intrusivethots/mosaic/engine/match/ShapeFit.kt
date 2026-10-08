@@ -2,6 +2,7 @@ package com.intrusivethots.mosaic.engine.match
 
 import com.intrusivethots.mosaic.engine.color.OkLab
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
+import com.intrusivethots.mosaic.engine.config.RenderMode
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.index.ProbeCounter
 import com.intrusivethots.mosaic.engine.index.TileIndex
@@ -33,7 +34,7 @@ internal class ShapeFit(
 ) {
     var comparisons: Long = 0
 
-    fun choose(cut: ShapeCut, ordinal: Int): CutoutPlacement? {
+    fun choose(cut: ShapeCut, ordinal: Int, avoid: Int = -1, commit: Boolean = true): CutoutPlacement? {
         val column = (cut.centerX * GRID).toInt().coerceIn(0, GRID - 1)
         val row = (cut.centerY * GRID).toInt().coerceIn(0, GRID - 1)
         index.fillCandidates(
@@ -48,6 +49,7 @@ internal class ShapeFit(
         )
         val angles = sourceAngles(config.collage.rotationRangeDegrees)
         val span = cropSpan(cut)
+        val solve = config.renderMode != RenderMode.ORIGINAL && config.colorMatchWeight > 0f
         var bestTile = -1
         var bestAngle = 0f
         var bestU = 0.5f
@@ -55,8 +57,9 @@ internal class ShapeFit(
         var bestScore = Float.POSITIVE_INFINITY
         for (slot in 0 until topK.size) {
             val tile = topK.ids[slot]
+            if (tile == avoid) continue
             val penalty = tracker.penalty(tile) + jitter(config.randomSeed, ordinal, tile)
-            val scored = scoreTile(swatches[tile], cut, angles, span, penalty)
+            val scored = scoreTile(swatches[tile], cut, angles, span, penalty, solve)
             comparisons++
             if (scored.score < bestScore) {
                 bestScore = scored.score
@@ -67,8 +70,7 @@ internal class ShapeFit(
             }
         }
         if (bestTile < 0) return null
-        tracker.record(bestTile, column, row)
-        return CutoutPlacement(
+        val placement = CutoutPlacement(
             tileIndex = bestTile,
             x = cut.centerX,
             y = cut.centerY,
@@ -82,13 +84,34 @@ internal class ShapeFit(
             cropV = bestV,
             cropSpan = span
         )
+        if (commit) keep(placement)
+        return placement
+    }
+
+    fun keep(placement: CutoutPlacement) {
+        val column = (placement.x * GRID).toInt().coerceIn(0, GRID - 1)
+        val row = (placement.y * GRID).toInt().coerceIn(0, GRID - 1)
+        tracker.record(placement.tileIndex, column, row)
+    }
+
+    fun colorAt(placement: CutoutPlacement): FloatArray {
+        val swatch = swatches.getOrNull(placement.tileIndex)
+            ?: return floatArrayOf(placement.targetL, placement.targetA, placement.targetB)
+        return swatchAt(swatch, placement.cropU, placement.cropV)
     }
 }
 
 private class Scored(val score: Float, val angle: Float, val u: Float, val v: Float)
 
-private fun scoreTile(swatch: TileSwatch, cut: ShapeCut, angles: FloatArray, span: Float, penalty: Float): Scored {
-    if (cut.blocking) return scoreFlat(swatch, cut, penalty)
+private fun scoreTile(
+    swatch: TileSwatch,
+    cut: ShapeCut,
+    angles: FloatArray,
+    span: Float,
+    penalty: Float,
+    solve: Boolean
+): Scored {
+    if (cut.blocking) return scoreFlat(swatch, cut, penalty, solve)
     var best = Scored(Float.POSITIVE_INFINITY, 0f, 0.5f, 0.5f)
     for (angle in angles) {
         val radians = Math.toRadians(angle.toDouble())
@@ -96,7 +119,7 @@ private fun scoreTile(swatch: TileSwatch, cut: ShapeCut, angles: FloatArray, spa
         val sin = sin(radians).toFloat()
         for (anchorV in ANCHORS) {
             for (anchorU in ANCHORS) {
-                val score = sampleError(swatch, cut, cos, sin, anchorU, anchorV, span) + penalty
+                val score = sampleError(swatch, cut, cos, sin, anchorU, anchorV, span, solve) + penalty
                 if (score < best.score) best = Scored(score, angle, anchorU, anchorV)
             }
         }
@@ -111,10 +134,14 @@ private fun sampleError(
     sin: Float,
     anchorU: Float,
     anchorV: Float,
-    span: Float
+    span: Float,
+    solve: Boolean
 ): Float {
-    var sum = 0f
     val count = cut.sampleU.size
+    if (count == 0) return Float.POSITIVE_INFINITY
+    val srcL = FloatArray(count)
+    val srcA = FloatArray(count)
+    val srcB = FloatArray(count)
     for (index in 0 until count) {
         val localX = cut.sampleU[index] - 0.5f
         val localY = cut.sampleV[index] - 0.5f
@@ -124,9 +151,28 @@ private fun sampleError(
         val v = anchorV + rotatedY * span
         if (u !in 0.02f..0.98f || v !in 0.02f..0.98f) return Float.POSITIVE_INFINITY
         val color = swatchAt(swatch, u, v)
-        val dl = color[0] - cut.sampleL[index]
-        val da = color[1] - cut.sampleA[index]
-        val db = color[2] - cut.sampleB[index]
+        srcL[index] = color[0]
+        srcA[index] = color[1]
+        srcB[index] = color[2]
+    }
+    if (solve) return fitPaired(srcL, srcA, srcB, cut.sampleL, cut.sampleA, cut.sampleB, count).cost
+    return rawError(srcL, srcA, srcB, cut, swatch, anchorU, anchorV)
+}
+
+private fun rawError(
+    srcL: FloatArray,
+    srcA: FloatArray,
+    srcB: FloatArray,
+    cut: ShapeCut,
+    swatch: TileSwatch,
+    anchorU: Float,
+    anchorV: Float
+): Float {
+    var sum = 0f
+    for (index in srcL.indices) {
+        val dl = srcL[index] - cut.sampleL[index]
+        val da = srcA[index] - cut.sampleA[index]
+        val db = srcB[index] - cut.sampleB[index]
         sum += dl * dl + da * da + db * db
     }
     val mean = swatchAt(swatch, anchorU, anchorV)
@@ -134,24 +180,32 @@ private fun sampleError(
     val meanDa = mean[1] - cut.meanA
     val meanDb = mean[2] - cut.meanB
     sum += 4f * (meanDl * meanDl + meanDa * meanDa + meanDb * meanDb)
-    return if (count == 0) Float.POSITIVE_INFINITY else sum / (count + 4f)
+    return sum / (srcL.size + 4f)
 }
 
 private class WindowColor(val l: Float, val a: Float, val b: Float, val spread: Float)
 
-private fun scoreFlat(swatch: TileSwatch, cut: ShapeCut, penalty: Float): Scored {
+private fun scoreFlat(swatch: TileSwatch, cut: ShapeCut, penalty: Float, solve: Boolean): Scored {
     var best = Scored(Float.POSITIVE_INFINITY, 0f, 0.5f, 0.5f)
     for (anchorV in FLAT_ANCHORS) {
         for (anchorU in FLAT_ANCHORS) {
             val window = windowColor(swatch, anchorU, anchorV)
-            val dl = window.l - cut.meanL
-            val da = window.a - cut.meanA
-            val db = window.b - cut.meanB
-            val score = (dl * dl + da * da + db * db) * 6f + window.spread * 9f + penalty
+            val score = flatScore(window, cut, penalty, solve)
             if (score < best.score) best = Scored(score, 0f, anchorU, anchorV)
         }
     }
     return best
+}
+
+private fun flatScore(window: WindowColor, cut: ShapeCut, penalty: Float, solve: Boolean): Float {
+    val texture = window.spread * 9f
+    if (!solve) {
+        val dl = window.l - cut.meanL
+        val da = window.a - cut.meanA
+        val db = window.b - cut.meanB
+        return (dl * dl + da * da + db * db) * 6f + texture + penalty
+    }
+    return meanToneCost(window.l, window.a, window.b, cut.meanL, cut.meanA, cut.meanB) * 6f + texture + penalty
 }
 
 private fun windowColor(swatch: TileSwatch, anchorU: Float, anchorV: Float): WindowColor {

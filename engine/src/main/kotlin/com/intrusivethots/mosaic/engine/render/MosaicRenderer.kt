@@ -278,7 +278,7 @@ class MosaicRenderer(
             if (sprite.placement.mask != null) {
                 paintShapeRow(
                     row, y, width, layout.height, sprite.source, sprite.descriptor, sprite.placement,
-                    config, target, coverage, owners, index, sprite.tone, field
+                    config, target, coverage, owners, index, sprite.tone, field, sprite.outline
                 )
                 continue
             }

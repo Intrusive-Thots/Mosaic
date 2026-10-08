@@ -64,7 +64,7 @@ private fun layerBudgets(pieceCount: Int): Budgets {
     return Budgets(coarse, fine, edge)
 }
 
-private class LabPlane(
+internal class LabPlane(
     val width: Int,
     val height: Int,
     val l: FloatArray,
@@ -72,7 +72,7 @@ private class LabPlane(
     val b: FloatArray
 )
 
-private fun workingCopy(target: PixelImage): PixelImage {
+internal fun workingCopy(target: PixelImage): PixelImage {
     val longEdge = maxOf(target.width, target.height)
     if (longEdge <= WORK_EDGE) return target
     val scale = WORK_EDGE.toFloat() / longEdge.toFloat()
@@ -81,7 +81,7 @@ private fun workingCopy(target: PixelImage): PixelImage {
     return target.resizeAreaAverage(width, height)
 }
 
-private fun labPlane(image: PixelImage): LabPlane {
+internal fun labPlane(image: PixelImage): LabPlane {
     val count = image.width * image.height
     val l = FloatArray(count)
     val a = FloatArray(count)
@@ -368,7 +368,7 @@ private fun labeledNeighbor(labels: IntArray, width: Int, height: Int, x: Int, y
     return -1
 }
 
-private fun mergeSmall(labels: IntArray, width: Int, height: Int, budget: Int): IntArray {
+internal fun mergeSmall(labels: IntArray, width: Int, height: Int, budget: Int): IntArray {
     val maxId = labels.maxOrNull() ?: return labels
     val area = IntArray(maxId + 1)
     for (label in labels) if (label in area.indices) area[label]++
@@ -445,7 +445,7 @@ private fun relabel(labels: IntArray, from: Int, to: Int) {
     }
 }
 
-private fun cutsFromLabels(labels: IntArray, plane: LabPlane, grow: Int): List<ShapeCut> {
+internal fun cutsFromLabels(labels: IntArray, plane: LabPlane, grow: Int): List<ShapeCut> {
     val maxId = labels.maxOrNull() ?: return emptyList()
     val cuts = ArrayList<ShapeCut>()
     for (id in 0..maxId) {
@@ -479,7 +479,7 @@ private fun cutForLabel(labels: IntArray, plane: LabPlane, id: Int, grow: Int): 
     return shapeCut(padded, core, grown, plane, count)
 }
 
-private class Box(val x: Int, val y: Int, val right: Int, val bottom: Int) {
+internal class Box(val x: Int, val y: Int, val right: Int, val bottom: Int) {
     val width: Int get() = right - x + 1
     val height: Int get() = bottom - y + 1
 }
@@ -522,7 +522,7 @@ private fun nearLabel(labels: IntArray, id: Int, stride: Int, x: Int, y: Int): B
     return false
 }
 
-private fun shapeCut(
+internal fun shapeCut(
     hits: BooleanArray,
     core: BooleanArray,
     box: Box,
@@ -541,6 +541,21 @@ private fun shapeCut(
         mask, stats.centerX, stats.centerY, scale, stats.meanL, stats.meanA, stats.meanB,
         stats.u, stats.v, stats.l, stats.a, stats.b, stats.spread, scale >= BLOCKING_SCALE
     )
+}
+
+internal fun cutFromMask(
+    hits: BooleanArray,
+    boxWidth: Int,
+    boxHeight: Int,
+    originX: Int,
+    originY: Int,
+    plane: LabPlane
+): ShapeCut? {
+    var count = 0
+    for (hit in hits) if (hit) count++
+    if (count < 4) return null
+    val box = Box(originX, originY, originX + boxWidth - 1, originY + boxHeight - 1)
+    return shapeCut(hits, hits, box, plane, count)
 }
 
 private class SampleStats(

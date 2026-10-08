@@ -6,10 +6,10 @@ Heap is the change in `totalMemory - freeMemory` around the case and is only an 
 
 | Tiles | Grid | Load ms | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full-library comparisons | Heap MB |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100 | 40×40 | 1.1 | 4.5 | 0.2 | 49.3 | 49.4 | 104.5 | 84135 | 160000 | 0.6 |
-| 500 | 60×60 | 2.3 | 51.1 | 0.5 | 46.6 | 111.5 | 212.0 | 233676 | 1800000 | 1.9 |
-| 1000 | 80×80 | 4.4 | 22.5 | 0.6 | 68.4 | 195.5 | 291.5 | 415996 | 6400000 | 4.1 |
-| 5000 | 120×120 | 13.4 | 119.6 | 3.0 | 145.7 | 439.7 | 721.5 | 936000 | 72000000 | 13.5 |
+| 100 | 40×40 | 1.0 | 4.6 | 0.2 | 48.8 | 48.9 | 103.5 | 84135 | 160000 | 0.6 |
+| 500 | 60×60 | 2.2 | 47.2 | 0.4 | 52.8 | 108.9 | 211.5 | 233676 | 1800000 | 1.9 |
+| 1000 | 80×80 | 4.1 | 22.4 | 0.6 | 65.5 | 194.9 | 287.5 | 415996 | 6400000 | 4.0 |
+| 5000 | 120×120 | 13.1 | 115.2 | 2.7 | 141.5 | 439.7 | 712.2 | 936000 | 72000000 | 13.6 |
 
 Probes are candidate color checks inside OKLab bins, capped per cell so a large library is not scanned in full.
 The full-library column is cells × tiles, which is what the 1.x matcher did.
@@ -20,7 +20,7 @@ The full-library column is cells × tiles, which is what the 1.x matcher did.
 
 | Tiles | Grid | Analyze ms | Match ms | Render ms | Total ms | Probes | Full scan |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 500 | 40×40 | 26.1 | 79.8 | 87.4 | 199.4 | 103890 | 800000 |
+| 500 | 40×40 | 22.8 | 43.7 | 85.4 | 158.1 | 103890 | 800000 |
 
 ## Cutout collage
 
@@ -32,9 +32,9 @@ The 900-piece row uses the same scale range as the rows above, so the extra time
 
 | Cutouts | Requested | Placed | Analyze ms | Index ms | Match ms | Render ms | Total ms | Probes | Full scan | Note |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 200 | 160 | 44 | 4.2 | 0.2 | 63.3 | 6.9 | 74.7 | 1662 | 384000 | coverage 100% |
-| 600 | 280 | 51 | 14.5 | 0.3 | 36.1 | 5.5 | 56.3 | 2208 | 2016000 | coverage 100% |
-| 400 | 900 | 83 | 9.7 | 0.2 | 31.8 | 5.4 | 47.1 | 3365 | 4320000 | coverage 100% |
+| 200 | 160 | 44 | 4.2 | 0.2 | 266.9 | 28.5 | 299.8 | 4071 | 384000 | coverage 100% |
+| 600 | 280 | 58 | 13.5 | 0.3 | 262.0 | 30.4 | 306.1 | 6737 | 2016000 | coverage 100% |
+| 400 | 900 | 81 | 6.5 | 0.2 | 282.8 | 29.6 | 319.2 | 9576 | 4320000 | coverage 100% |
 
 ## Hybrid stack
 
@@ -43,7 +43,7 @@ Time includes grid matching, collage placement, and the stacked render.
 
 | Cutouts | Requested | Placed | Total ms | Probes | Note |
 | ---: | ---: | ---: | ---: | ---: | --- |
-| 200 | 160 | 44 | 51.7 | 11464 | grid under collage |
+| 200 | 160 | 44 | 438.2 | 13868 | grid under collage |
 
 ## Matching quality
 
@@ -56,7 +56,7 @@ Both sides use the original tile pixels and the same renderer. Left is average-R
 | OKLab default | 0.0436 | 0.6559 |
 
 Sample collage on the portrait scene, 240 cutouts, 320 requested, seed 4, mean-color background.
-Organic run placed 61 pieces. Photo-texture run placed 61 pieces.
+Organic run placed 60 pieces. Photo-texture run placed 56 pieces.
 engine/build/reports/benchmarks/images/cutout-collage.png is the target, the previous collage, this collage, and a photo-texture collage.
 The photo textures are generated in this repository. They are not third-party photographs.
 The previous collage is the committed output from the residual placer before the detail pass.
@@ -75,14 +75,14 @@ The previous shaped row is the run before flat crops and tone transfer. Its dist
 | Previous residual | 0.0334 | 0.6746 | 0.0477 | 0.6779 | 0.0563 | 96% | — | 0.0444 | 0.8026 |
 | Stamp collage | 0.0323 | 0.7045 | 0.0447 | 0.7061 | 0.0527 | 94% | 3.211 | — | — |
 | Previous shaped | 0.0341 | 0.7417 | 0.0488 | 0.7417 | 0.0556 | 100% | 10.4693 | — | — |
-| Shaped collage | 0.0359 | 0.8605 | 0.0425 | 0.8605 | 0.0588 | 100% | 32.5000 | 0.0410 | 0.8541 |
-| Photo textures | 0.0368 | 0.8788 | 0.0429 | 0.8788 | 0.0521 | 100% | 32.5000 | 0.0416 | 0.8912 |
+| Shaped collage | 0.0288 | 0.9153 | 0.0353 | 0.9153 | 0.0522 | 100% | 30.1340 | 0.0331 | 0.9294 |
+| Photo textures | 0.0298 | 0.9104 | 0.0373 | 0.9104 | 0.0464 | 100% | 29.1004 | 0.0353 | 0.9250 |
 
 Mean absolute RGB error in face windows on the 280×180 canvas, previous residual versus this run.
-- Left eye: 37.1 → 40.2
-- Right eye: 45.1 → 39.4
-- Mouth: 18.8 → 22.0
-- Cheek: 16.2 → 9.2
+- Left eye: 37.1 → 22.8
+- Right eye: 45.1 → 20.9
+- Mouth: 18.8 → 12.1
+- Cheek: 16.2 → 7.7
 
 
 ## Shape, density, and hybrid
@@ -97,9 +97,9 @@ docs/images/studio-phone-mock.png is a labeled layout mock of the phone Studio. 
 
 | | Whole ΔE | Whole SSIM | Masked ΔE | Masked SSIM | Edge ΔE | Painted | Alignment | Distance ΔE | Distance SSIM | Generate ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Color only | 0.0359 | 0.8605 | 0.0425 | 0.8605 | 0.0588 | 100% | 32.5000 | 0.0410 | 0.8541 | 98 |
-| Shape-aware | 0.0359 | 0.8605 | 0.0425 | 0.8605 | 0.0588 | 100% | 32.5000 | 0.0410 | 0.8541 | 89 |
-| Dense 1200 | 0.0367 | 0.8869 | 0.0434 | 0.8869 | 0.0434 | 100% | 15.1046 | 0.0417 | 0.8493 | 162 |
-| Grid under collage | 0.0359 | 0.8605 | 0.0425 | 0.8605 | 0.0588 | 100% | 32.5000 | 0.0410 | 0.8541 | 90 |
-| Collage under grid | 0.0213 | 0.3784 | 0.0319 | 0.3503 | 0.0355 | 16% | 32.5000 | 0.0342 | 0.8021 | 89 |
+| Color only | 0.0288 | 0.9153 | 0.0353 | 0.9153 | 0.0522 | 100% | 30.1340 | 0.0331 | 0.9294 | 920 |
+| Shape-aware | 0.0288 | 0.9153 | 0.0353 | 0.9153 | 0.0522 | 100% | 30.1340 | 0.0331 | 0.9294 | 920 |
+| Dense 1200 | 0.0296 | 0.9212 | 0.0358 | 0.9212 | 0.0358 | 100% | 31.5644 | 0.0338 | 0.9318 | 1032 |
+| Grid under collage | 0.0285 | 0.9210 | 0.0350 | 0.9210 | 0.0518 | 100% | 30.1340 | 0.0328 | 0.9321 | 907 |
+| Collage under grid | 0.0209 | 0.3829 | 0.0321 | 0.3476 | 0.0349 | 16% | 30.1340 | 0.0335 | 0.8054 | 911 |
 

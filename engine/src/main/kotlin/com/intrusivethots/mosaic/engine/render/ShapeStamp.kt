@@ -8,6 +8,8 @@ import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
 import com.intrusivethots.mosaic.engine.image.sampleBilinear
 import com.intrusivethots.mosaic.engine.match.CutoutPlacement
 import com.intrusivethots.mosaic.engine.match.PieceMask
+import com.intrusivethots.mosaic.engine.match.fitPaired
+import com.intrusivethots.mosaic.engine.match.meanFit
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -30,7 +32,14 @@ internal class RegionTone(
     val tgtL: Float,
     val tgtA: Float,
     val tgtB: Float,
-    val tgtSpread: Float
+    val tgtSpread: Float,
+    val gainL: Float = 1f,
+    val offL: Float = 0f,
+    val gainA: Float = 1f,
+    val offA: Float = 0f,
+    val gainB: Float = 1f,
+    val offB: Float = 0f,
+    val kappa: Float = 1f
 )
 
 internal fun lowFrequencyField(target: PixelImage?): PixelImage? {
@@ -67,7 +76,8 @@ internal fun paintShapeRow(
     owners: IntArray?,
     owner: Int,
     tone: RegionTone? = null,
-    field: PixelImage? = null
+    field: PixelImage? = null,
+    outline: PieceOutline? = null
 ) {
     val mask = placement.mask ?: return
     val ny = (y + 0.5f) / outputHeight
@@ -78,10 +88,11 @@ internal fun paintShapeRow(
     val turnCos = cos(radians).toFloat()
     val turnSin = sin(radians).toFloat()
     val lab = FloatArray(3)
+    val crossings = if (outline == null) null else outlineCrossings(outline, ny)
     for (x in left..right) {
         val color = cutPixel(
             source, descriptor, placement, mask, config, target, field, tone,
-            x, y, outputWidth, outputHeight, turnCos, turnSin, lab
+            x, y, outputWidth, outputHeight, turnCos, turnSin, lab, crossings
         )
         if (color == 0) continue
         val index = y * outputWidth + x
@@ -107,11 +118,13 @@ private fun cutPixel(
     outputHeight: Int,
     turnCos: Float,
     turnSin: Float,
-    lab: FloatArray
+    lab: FloatArray,
+    crossings: FloatArray?
 ): Int {
     val nx = (x + 0.5f) / outputWidth
     val ny = (y + 0.5f) / outputHeight
-    val cover = maskCoverage(mask, nx, ny)
+    val traced = if (crossings == null) -1 else outlineCoverage(crossings, outputWidth, x)
+    val cover = if (traced >= 0) traced else maskCoverage(mask, nx, ny)
     if (cover < 12) return 0
     val sampled = sourceColor(source, descriptor, placement, mask, nx, ny, turnCos, turnSin)
     if ((sampled ushr 24) < 128) return 0
@@ -245,7 +258,7 @@ private fun harmonize(
     val center = 1f - (1f - strength) * (1f - strength)
     val srcSpread = tone.srcSpread.coerceAtLeast(0.004f)
     val ratio = (tone.tgtSpread / srcSpread).coerceIn(0.05f, 1.15f)
-    val keep = ratio * (0.55f + 0.45f * (1f - center))
+    val keep = if (tone.kappa < 0.5f) tone.kappa else ratio * (0.55f + 0.45f * (1f - center))
     var l = tone.tgtL + (lab[0] - tone.srcL) * keep
     var a = tone.tgtA + (lab[1] - tone.srcA) * keep
     var b = tone.tgtB + (lab[2] - tone.srcB) * keep
@@ -283,6 +296,12 @@ private fun toneFromSamples(
     var tgtL2 = 0.0
     var count = 0
     val lab = FloatArray(3)
+    val sampledL = FloatArray(TONE_STEPS * TONE_STEPS)
+    val sampledA = FloatArray(TONE_STEPS * TONE_STEPS)
+    val sampledB = FloatArray(TONE_STEPS * TONE_STEPS)
+    val sampledTgtL = FloatArray(TONE_STEPS * TONE_STEPS)
+    val sampledTgtA = FloatArray(TONE_STEPS * TONE_STEPS)
+    val sampledTgtB = FloatArray(TONE_STEPS * TONE_STEPS)
     for (stepY in 1 until TONE_STEPS) {
         val ny = mask.top + (mask.bottom - mask.top) * stepY / TONE_STEPS.toFloat()
         for (stepX in 1 until TONE_STEPS) {
@@ -295,6 +314,9 @@ private fun toneFromSamples(
             srcA += lab[1]
             srcB += lab[2]
             srcL2 += lab[0] * lab[0]
+            sampledL[count] = lab[0]
+            sampledA[count] = lab[1]
+            sampledB[count] = lab[2]
             val tx = (nx * (target.width - 1)).roundToInt().coerceIn(0, target.width - 1)
             val ty = (ny * (target.height - 1)).roundToInt().coerceIn(0, target.height - 1)
             OkLab.writeLab(target.pixel(tx, ty), lab, 0)
@@ -302,25 +324,94 @@ private fun toneFromSamples(
             tgtA += lab[1]
             tgtB += lab[2]
             tgtL2 += lab[0] * lab[0]
+            sampledTgtL[count] = lab[0]
+            sampledTgtA[count] = lab[1]
+            sampledTgtB[count] = lab[2]
             count++
         }
     }
     if (count == 0) {
-        return RegionTone(placement.targetL, placement.targetA, placement.targetB, 0.02f, placement.targetL, placement.targetA, placement.targetB, 0.02f)
+        return RegionTone(
+            placement.targetL, placement.targetA, placement.targetB, 0.02f,
+            placement.targetL, placement.targetA, placement.targetB, 0.02f
+        )
     }
     val n = count.toDouble()
+    val meanL = (srcL / n).toFloat()
+    val meanA = (srcA / n).toFloat()
+    val meanB = (srcB / n).toFloat()
+    val targetL = (tgtL / n).toFloat()
+    val targetA = (tgtA / n).toFloat()
+    val targetB = (tgtB / n).toFloat()
+    val blocking = placement.scale >= BLOCKING_SCALE
+    val fit = if (blocking) {
+        meanFit(meanL, meanA, meanB, targetL, targetA, targetB)
+    } else {
+        fitPaired(sampledL, sampledA, sampledB, sampledTgtL, sampledTgtA, sampledTgtB, count)
+    }
     return RegionTone(
-        (srcL / n).toFloat(),
-        (srcA / n).toFloat(),
-        (srcB / n).toFloat(),
-        sqrt(((srcL2 / n) - (srcL / n) * (srcL / n)).coerceAtLeast(0.0)).toFloat(),
-        (tgtL / n).toFloat(),
-        (tgtA / n).toFloat(),
-        (tgtB / n).toFloat(),
-        sqrt(((tgtL2 / n) - (tgtL / n) * (tgtL / n)).coerceAtLeast(0.0)).toFloat()
+        meanL,
+        meanA,
+        meanB,
+        sqrt(((srcL2 / n) - meanL * meanL).coerceAtLeast(0.0)).toFloat(),
+        targetL,
+        targetA,
+        targetB,
+        sqrt(((tgtL2 / n) - targetL * targetL).coerceAtLeast(0.0)).toFloat(),
+        fit.gainL,
+        fit.offL,
+        fit.gainA,
+        fit.offA,
+        fit.gainB,
+        fit.offB,
+        if (blocking) BLOCK_DETAIL else DETAIL_KEEP
     )
 }
 
+internal fun flattenPaper(image: PixelImage): PixelImage {
+    var current = image
+    repeat(FLATTEN_PASSES) { current = flattenPass(current) }
+    return current
+}
+
+private fun flattenPass(image: PixelImage): PixelImage {
+    val pixels = IntArray(image.pixels.size)
+    val lab = FloatArray(3)
+    val neighbor = FloatArray(3)
+    for (y in 0 until image.height) {
+        for (x in 0 until image.width) pixels[y * image.width + x] = flattenPixel(image, x, y, lab, neighbor)
+    }
+    return PixelImage(image.width, image.height, pixels)
+}
+
+private fun flattenPixel(image: PixelImage, x: Int, y: Int, lab: FloatArray, neighbor: FloatArray): Int {
+    OkLab.writeLab(image.pixels[y * image.width + x], lab, 0)
+    var l = 0f
+    var a = 0f
+    var b = 0f
+    var weight = 0f
+    for (dy in -1..1) {
+        val py = (y + dy).coerceIn(0, image.height - 1)
+        for (dx in -1..1) {
+            val px = (x + dx).coerceIn(0, image.width - 1)
+            OkLab.writeLab(image.pixels[py * image.width + px], neighbor, 0)
+            val range = neighbor[0] - lab[0]
+            val influence = if (range * range > FLATTEN_RANGE * FLATTEN_RANGE) 0.2f else 1f
+            l += neighbor[0] * influence
+            a += neighbor[1] * influence
+            b += neighbor[2] * influence
+            weight += influence
+        }
+    }
+    val safe = weight.coerceAtLeast(1e-3f)
+    return OkLab.toArgb(l / safe, a / safe, b / safe) or OPAQUE
+}
+
 private const val OPAQUE = 0xFF shl 24
+private const val FLATTEN_PASSES = 4
+private const val FLATTEN_RANGE = 0.08f
 private const val FIELD_EDGE = 64
 private const val TONE_STEPS = 7
+private const val BLOCKING_SCALE = 0.055f
+private const val BLOCK_DETAIL = 0.08f
+private const val DETAIL_KEEP = 0.85f

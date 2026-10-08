@@ -47,7 +47,7 @@ class CollageRenderer {
                 if (sprite.placement.mask != null) {
                     paintShapeRow(
                         row, y, width, height, sprite.source, sprite.descriptor, sprite.placement,
-                        config, target, coverage, owners, index, sprite.tone, field
+                        config, target, coverage, owners, index, sprite.tone, field, sprite.outline
                     )
                     continue
                 }
@@ -89,6 +89,19 @@ class CollageRenderer {
         }
     }
 
+    private fun sourceFor(
+        placement: com.intrusivethots.mosaic.engine.match.CutoutPlacement,
+        tile: Int,
+        thumbnails: List<PixelImage>,
+        paper: HashMap<Int, PixelImage>,
+        flat: HashMap<Int, PixelImage>
+    ): PixelImage {
+        if (placement.mask == null || tile !in thumbnails.indices) return thumbnails[tile]
+        val sharp = paper.getOrPut(tile) { solidPaper(thumbnails[tile]) }
+        if (placement.scale < BLOCK_FLATTEN) return sharp
+        return flat.getOrPut(tile) { flattenPaper(sharp) }
+    }
+
     internal fun sprites(
         plan: MosaicPlan,
         descriptors: List<TileDescriptor>,
@@ -99,14 +112,11 @@ class CollageRenderer {
     ): List<Sprite> {
         val sprites = ArrayList<Sprite>(plan.placements.size)
         val paper = HashMap<Int, PixelImage>()
+        val flat = HashMap<Int, PixelImage>()
         for (placement in plan.placements) {
             val tile = placement.tileIndex
             if (tile !in descriptors.indices || tile !in thumbnails.indices) continue
-            val source = if (placement.mask != null) {
-                paper.getOrPut(tile) { solidPaper(thumbnails[tile]) }
-            } else {
-                thumbnails[tile]
-            }
+            val source = sourceFor(placement, tile, thumbnails, paper, flat)
             val descriptor = descriptors[tile]
             val draw = if (placement.mask != null) {
                 maskSpan(placement.mask, width, height)
@@ -114,7 +124,8 @@ class CollageRenderer {
                 pieceDraw(placement, descriptor, source.width, source.height, width, height)
             }
             val tone = if (placement.mask != null) regionTone(source, descriptor, placement, target) else null
-            sprites.add(Sprite(descriptor, source, draw, placement, tone))
+            val outline = if (placement.mask != null) traceOutline(placement.mask) else null
+            sprites.add(Sprite(descriptor, source, draw, placement, tone, outline))
         }
         return sprites
     }
@@ -281,7 +292,8 @@ class CollageRenderer {
         val source: PixelImage,
         val draw: PieceDraw,
         val placement: com.intrusivethots.mosaic.engine.match.CutoutPlacement,
-        val tone: RegionTone? = null
+        val tone: RegionTone? = null,
+        val outline: PieceOutline? = null
     )
 
     companion object {
@@ -290,5 +302,6 @@ class CollageRenderer {
         private const val SHADOW_SHIFT = 2
         private const val SHADOW_ALPHA = 70
         private const val OUTLINE = 0x1C140E
+        private const val BLOCK_FLATTEN = 0.055f
     }
 }
