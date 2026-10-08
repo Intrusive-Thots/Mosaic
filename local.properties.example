@@ -1,0 +1,4 @@
+# Copy to local.properties. That file is not committed.
+# Android OAuth client ID from Google Cloud Console (not a client secret).
+# Leave this empty to use only the system Files and folders picker.
+GOOGLE_DRIVE_CLIENT_ID=

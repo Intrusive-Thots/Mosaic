@@ -15,6 +15,7 @@ import com.intrusivethots.mosaic.core.tightenSubject
 import com.intrusivethots.mosaic.core.toBitmap
 import com.intrusivethots.mosaic.core.toPixelImage
 import com.intrusivethots.mosaic.data.ProjectRepository
+import com.intrusivethots.mosaic.drive.deleteOwnedDriveFile
 import com.intrusivethots.mosaic.data.decodeTileRotations
 import com.intrusivethots.mosaic.data.encodeTileRotations
 import com.intrusivethots.mosaic.engine.EmptyLibraryException
@@ -195,6 +196,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun removeTileImage(uri: Uri) {
+        deleteOwnedDriveFile(getApplication<Application>().filesDir, uri)
         _state.update { state ->
             val index = state.tileUris.indexOf(uri)
             val thumbs = state.tileThumbs.toMutableList()
@@ -226,6 +228,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearTiles() {
+        val filesDir = getApplication<Application>().filesDir
+        _state.value.tileUris.forEach { uri -> deleteOwnedDriveFile(filesDir, uri) }
         _state.value.tileThumbs.forEach { thumb -> if (thumb != null && !thumb.isRecycled) thumb.recycle() }
         _state.update { it.copy(tileUris = emptyList(), tileQuarterTurns = emptyList(), tileThumbs = emptyList(), customStamps = emptyList()) }
         bitmapCache.clear()

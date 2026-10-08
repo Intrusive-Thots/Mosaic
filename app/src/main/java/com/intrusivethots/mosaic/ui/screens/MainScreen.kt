@@ -49,6 +49,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import com.intrusivethots.mosaic.ui.components.LibraryHost
+import com.intrusivethots.mosaic.ui.components.LibrarySources
 import com.intrusivethots.mosaic.ui.components.ProjectLibraryScreen
 import com.intrusivethots.mosaic.ui.components.SettingsDialog
 import com.intrusivethots.mosaic.ui.components.ShapeEditor
@@ -110,9 +112,14 @@ private fun navColors(selected: Color) = NavigationBarItemDefaults.colors(
     indicatorColor = SurfaceVariantDark
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
+    LibraryHost(viewModel) { sources -> HomeScreen(viewModel, sources) }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HomeScreen(viewModel: MainViewModel, sources: LibrarySources) {
     val context = LocalContext.current
     val state by viewModel.state.collectAsState()
     var tab by remember { mutableIntStateOf(0) }
@@ -133,13 +140,6 @@ fun MainScreen(viewModel: MainViewModel) {
     val targetPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) viewModel.setTargetImage(uri)
     }
-    val tilePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(maxItems = 100)) { uris ->
-        if (uris.isNotEmpty()) viewModel.addTileImages(uris)
-    }
-    val stampPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(maxItems = 40)) { uris ->
-        if (uris.isNotEmpty()) viewModel.extractStampBatch(uris)
-    }
-
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         containerColor = DeepBackground,
@@ -179,7 +179,7 @@ fun MainScreen(viewModel: MainViewModel) {
                         cameraUri = uri
                         camera.launch(uri)
                     },
-                    onPickTiles = { tilePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    onPickTiles = sources.pickTiles,
                     onPreset = viewModel::applyQualityPreset,
                     onAspect = viewModel::updateAspectRatio,
                     onStyle = viewModel::updateMosaicStyle,
@@ -207,7 +207,7 @@ fun MainScreen(viewModel: MainViewModel) {
                     stamps = state.customStamps,
                     extracting = state.libraryMessage.isNotEmpty(),
                     progress = state.libraryMessage,
-                    onPick = { stampPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    onPick = sources.pickStamps,
                     onRemove = viewModel::removeCustomStamp,
                     onClear = viewModel::clearStamps,
                     onTighten = viewModel::tightenStamp,
