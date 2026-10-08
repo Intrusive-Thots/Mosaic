@@ -167,6 +167,21 @@ private fun nearbyGradient(tone: FloatArray, width: Int, height: Int, x: Int, y:
     return best
 }
 
+/**
+ * How the collage reads from across the room. Both images are area-averaged to 64 pixels
+ * wide, then scored. High-frequency faces and scenery drop out, so a low ΔE and a high
+ * SSIM mean the big color masses survived.
+ */
+class DistanceRead(val deltaE: Double, val ssim: Double)
+
+fun distanceReadability(rendered: PixelImage, reference: PixelImage, width: Int = 64): DistanceRead {
+    val safe = width.coerceIn(16, 256)
+    val height = (rendered.height.toFloat() * safe / rendered.width.toFloat()).toInt().coerceAtLeast(8)
+    val left = rendered.resizeAreaAverage(safe, height)
+    val right = reference.resizeAreaAverage(safe, height)
+    return DistanceRead(meanCellDeltaE(left, right, safe, height), luminanceSsim(left, right))
+}
+
 fun luminanceSsim(rendered: PixelImage, reference: PixelImage): Double {
     val aligned = if (reference.width == rendered.width && reference.height == rendered.height) {
         reference

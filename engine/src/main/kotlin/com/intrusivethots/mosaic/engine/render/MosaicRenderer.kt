@@ -233,7 +233,8 @@ class MosaicRenderer(
         onProgress: (Float) -> Unit
     ) {
         val collageOnTop = stack == HybridStack.GRID_UNDER
-        val sprites = collageRenderer.sprites(plan, descriptors, thumbnails, layout.width, layout.height)
+        val sprites = collageRenderer.sprites(plan, descriptors, thumbnails, layout.width, layout.height, target)
+        val field = lowFrequencyField(target)
         val mean = if (target == null) 0xFF18181C.toInt() else meanOf(target)
         val useTarget = config.collage.background == CollageBackground.TARGET && target != null
         val row = IntArray(layout.width)
@@ -244,10 +245,10 @@ class MosaicRenderer(
             if (y % 8 == 0) coroutineContext.ensureActive()
             if (collageOnTop) {
                 fillUniformRow(plan, descriptors, thumbnails, layout, config, y, row)
-                paintCutouts(row, y, sprites, config, layout, target, coverage, owners)
+                paintCutouts(row, y, sprites, config, layout, target, coverage, owners, field)
             } else {
                 collageRenderer.paintBackground(row, y, layout.width, layout.height, target, useTarget, mean)
-                paintCutouts(row, y, sprites, config, layout, target, coverage, owners)
+                paintCutouts(row, y, sprites, config, layout, target, coverage, owners, field)
                 fillUniformRow(plan, descriptors, thumbnails, layout, config, y, gridRow)
                 overlayGrid(row, gridRow, y, layout, grout, coverage)
             }
@@ -268,7 +269,8 @@ class MosaicRenderer(
         layout: OutputLayout,
         target: PixelImage?,
         coverage: BooleanArray?,
-        owners: IntArray?
+        owners: IntArray?,
+        field: PixelImage?
     ) {
         val width = layout.width
         for (index in sprites.indices) {
@@ -276,7 +278,7 @@ class MosaicRenderer(
             if (sprite.placement.mask != null) {
                 paintShapeRow(
                     row, y, width, layout.height, sprite.source, sprite.descriptor, sprite.placement,
-                    config, target, coverage, owners, index
+                    config, target, coverage, owners, index, sprite.tone, field
                 )
                 continue
             }

@@ -28,7 +28,7 @@ class PieceMask(
     }
 
     companion object {
-        const val MAX_EDGE = 96
+        const val MAX_EDGE = 128
         const val OPAQUE_CUT = 128
     }
 }

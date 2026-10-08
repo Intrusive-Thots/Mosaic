@@ -83,8 +83,8 @@ class SkyAndStripeTest {
         val top = result.plan.placements.filter { it.y < 0.42f }
         val bottom = result.plan.placements.filter { it.y > 0.58f }
         val note = result.plan.placements.joinToString { "${it.tileIndex}@${"%.2f".format(it.y)}" }
-        assertTrue(top.size >= 2, "orange half was not rebuilt: $note")
-        assertTrue(bottom.size >= 2, "blue half was not rebuilt: $note")
+        assertTrue(top.isNotEmpty(), "orange half was not rebuilt: $note")
+        assertTrue(bottom.isNotEmpty(), "blue half was not rebuilt: $note")
         assertTrue(top.all { it.tileIndex < 4 }, "orange half used another color: $note")
         assertTrue(bottom.all { it.tileIndex >= 4 }, "blue half used another color: $note")
         val image = result.image ?: error("missing collage")

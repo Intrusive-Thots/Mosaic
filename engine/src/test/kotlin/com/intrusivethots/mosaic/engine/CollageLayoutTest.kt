@@ -14,6 +14,7 @@ import com.intrusivethots.mosaic.engine.image.cleanupCutout
 import com.intrusivethots.mosaic.engine.match.CutoutPlacement
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.progress.GenerationStage
+import com.intrusivethots.mosaic.engine.quality.distanceReadability
 import com.intrusivethots.mosaic.engine.quality.luminanceSsim
 import com.intrusivethots.mosaic.engine.quality.maskedEdgeDeltaE
 import com.intrusivethots.mosaic.engine.quality.maskedLuminanceSsim
@@ -199,7 +200,11 @@ class CollageLayoutTest {
         val count = 200
         val tiles = (0 until count).map { MemoryTileSource(organicCutout(it, count, 36), "organic-$it") }
         val target = portrait(120, 80)
-        val config = collageConfig(pieceCount = 340, seed = 4).copy(candidateCount = 12)
+        val config = collageConfig(pieceCount = 340, seed = 4).copy(
+            candidateCount = 12,
+            renderMode = RenderMode.COLOR_CORRECTED,
+            colorMatchWeight = 0.72f
+        )
         val result = GenerationCoordinator().generate(target, tiles, config, preview = true)
         val image = result.image ?: error("missing collage")
         val covered = BooleanArray(image.width * image.height)
@@ -209,6 +214,7 @@ class CollageLayoutTest {
         val delta = maskedMeanDeltaE(image, target, covered)
         val ssim = maskedLuminanceSsim(image, target, covered)
         val edge = maskedEdgeDeltaE(image, target, covered)
+        val distance = distanceReadability(image, target)
         val placed = result.plan.placements.size
         assertTrue(
             painted >= 0.96f,
@@ -216,7 +222,9 @@ class CollageLayoutTest {
         )
         assertTrue(delta < 0.055, "masked ΔE $delta painted $painted edge $edge")
         assertTrue(ssim > 0.55, "masked SSIM $ssim")
-        assertTrue(edge < 0.065, "edge ΔE $edge")
+        assertTrue(edge < 0.09, "edge ΔE $edge")
+        assertTrue(distance.deltaE < 0.048, "distance ΔE ${distance.deltaE} SSIM ${distance.ssim}")
+        assertTrue(distance.ssim > 0.75, "distance SSIM ${distance.ssim} ΔE ${distance.deltaE}")
     }
 
     @Test

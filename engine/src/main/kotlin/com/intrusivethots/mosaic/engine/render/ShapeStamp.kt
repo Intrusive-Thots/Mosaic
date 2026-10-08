@@ -4,6 +4,7 @@ import com.intrusivethots.mosaic.engine.color.OkLab
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.RenderMode
 import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
 import com.intrusivethots.mosaic.engine.image.sampleBilinear
 import com.intrusivethots.mosaic.engine.match.CutoutPlacement
 import com.intrusivethots.mosaic.engine.match.PieceMask
@@ -11,6 +12,7 @@ import com.intrusivethots.mosaic.engine.tile.TileDescriptor
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 internal fun maskSpan(mask: PieceMask, outputWidth: Int, outputHeight: Int): PieceDraw {
     val left = (mask.left * outputWidth).toInt().coerceIn(0, outputWidth - 1)
@@ -18,6 +20,37 @@ internal fun maskSpan(mask: PieceMask, outputWidth: Int, outputHeight: Int): Pie
     val top = (mask.top * outputHeight).toInt().coerceIn(0, outputHeight - 1)
     val bottom = ((mask.bottom * outputHeight).toInt() - 1).coerceIn(top, outputHeight - 1)
     return PieceDraw(0f, 0f, 1f, 1f, 1f, 0f, left, top, right, bottom)
+}
+
+internal class RegionTone(
+    val srcL: Float,
+    val srcA: Float,
+    val srcB: Float,
+    val srcSpread: Float,
+    val tgtL: Float,
+    val tgtA: Float,
+    val tgtB: Float,
+    val tgtSpread: Float
+)
+
+internal fun lowFrequencyField(target: PixelImage?): PixelImage? {
+    if (target == null) return null
+    val height = (target.height * FIELD_EDGE / target.width.toFloat()).toInt().coerceAtLeast(8)
+    return target.resizeAreaAverage(FIELD_EDGE, height)
+}
+
+internal fun regionTone(
+    source: PixelImage,
+    descriptor: TileDescriptor,
+    placement: CutoutPlacement,
+    target: PixelImage?
+): RegionTone? {
+    val mask = placement.mask ?: return null
+    if (target == null) return null
+    val radians = Math.toRadians(placement.angleDegrees.toDouble())
+    val turnCos = cos(radians).toFloat()
+    val turnSin = sin(radians).toFloat()
+    return toneFromSamples(source, descriptor, placement, mask, target, turnCos, turnSin)
 }
 
 internal fun paintShapeRow(
@@ -32,11 +65,13 @@ internal fun paintShapeRow(
     target: PixelImage?,
     coverage: BooleanArray?,
     owners: IntArray?,
-    owner: Int
+    owner: Int,
+    tone: RegionTone? = null,
+    field: PixelImage? = null
 ) {
     val mask = placement.mask ?: return
     val ny = (y + 0.5f) / outputHeight
-    if (ny < mask.top || ny > mask.bottom) return
+    if (ny < mask.top - 0.002f || ny > mask.bottom + 0.002f) return
     val left = (mask.left * outputWidth).toInt().coerceIn(0, outputWidth - 1)
     val right = ((mask.right * outputWidth).toInt() - 1).coerceIn(left, outputWidth - 1)
     val radians = Math.toRadians(placement.angleDegrees.toDouble())
@@ -45,13 +80,15 @@ internal fun paintShapeRow(
     val lab = FloatArray(3)
     for (x in left..right) {
         val color = cutPixel(
-            source, descriptor, placement, mask, config, target, x, y, outputWidth, outputHeight, turnCos, turnSin, lab
+            source, descriptor, placement, mask, config, target, field, tone,
+            x, y, outputWidth, outputHeight, turnCos, turnSin, lab
         )
         if (color == 0) continue
-        row[x] = color
         val index = y * outputWidth + x
-        if (coverage != null) coverage[index] = true
-        if (owners != null) owners[index] = owner
+        val alpha = color ushr 24
+        row[x] = srcOver(row[x], color)
+        if (alpha > 40 && coverage != null) coverage[index] = true
+        if (alpha > 140 && owners != null) owners[index] = owner
     }
 }
 
@@ -62,6 +99,8 @@ private fun cutPixel(
     mask: PieceMask,
     config: MosaicConfig,
     target: PixelImage?,
+    field: PixelImage?,
+    tone: RegionTone?,
     x: Int,
     y: Int,
     outputWidth: Int,
@@ -72,21 +111,33 @@ private fun cutPixel(
 ): Int {
     val nx = (x + 0.5f) / outputWidth
     val ny = (y + 0.5f) / outputHeight
-    if (!insideCut(mask, nx, ny)) return 0
+    val cover = maskCoverage(mask, nx, ny)
+    if (cover < 12) return 0
     val sampled = sourceColor(source, descriptor, placement, mask, nx, ny, turnCos, turnSin)
     if ((sampled ushr 24) < 128) return 0
-    val painted = harmonize(sampled, target, config, x, y, outputWidth, outputHeight, lab)
-    return painted or OPAQUE
+    val painted = harmonize(sampled, target, field, tone, config, x, y, outputWidth, outputHeight, lab)
+    return (painted and 0x00FFFFFF) or (cover shl 24)
 }
 
-private fun insideCut(mask: PieceMask, nx: Float, ny: Float): Boolean {
-    if (nx < mask.left || ny < mask.top || nx > mask.right || ny > mask.bottom) return false
-    val u = (nx - mask.left) / (mask.right - mask.left).coerceAtLeast(1e-5f)
-    val v = (ny - mask.top) / (mask.bottom - mask.top).coerceAtLeast(1e-5f)
-    val px = (u * (mask.width - 1)).roundToInt().coerceIn(0, mask.width - 1)
-    val py = (v * (mask.height - 1)).roundToInt().coerceIn(0, mask.height - 1)
-    return (mask.alpha[py * mask.width + px].toInt() and 255) > PieceMask.OPAQUE_CUT
+private fun maskCoverage(mask: PieceMask, nx: Float, ny: Float): Int {
+    if (nx < mask.left || ny < mask.top || nx > mask.right || ny > mask.bottom) return 0
+    val u = ((nx - mask.left) / (mask.right - mask.left).coerceAtLeast(1e-5f)).coerceIn(0f, 1f)
+    val v = ((ny - mask.top) / (mask.bottom - mask.top).coerceAtLeast(1e-5f)).coerceIn(0f, 1f)
+    val x = u * (mask.width - 1)
+    val y = v * (mask.height - 1)
+    val x0 = x.toInt().coerceIn(0, mask.width - 1)
+    val y0 = y.toInt().coerceIn(0, mask.height - 1)
+    val x1 = (x0 + 1).coerceAtMost(mask.width - 1)
+    val y1 = (y0 + 1).coerceAtMost(mask.height - 1)
+    val tx = x - x0
+    val ty = y - y0
+    val top = alphaAt(mask, x0, y0) + (alphaAt(mask, x1, y0) - alphaAt(mask, x0, y0)) * tx
+    val bottom = alphaAt(mask, x0, y1) + (alphaAt(mask, x1, y1) - alphaAt(mask, x0, y1)) * tx
+    return (top + (bottom - top) * ty).roundToInt().coerceIn(0, 255)
 }
+
+private fun alphaAt(mask: PieceMask, x: Int, y: Int): Float =
+    (mask.alpha[y * mask.width + x].toInt() and 255).toFloat()
 
 private fun sourceColor(
     source: PixelImage,
@@ -179,6 +230,8 @@ private fun nearer(candidate: Int, index: Int, current: Int, width: Int): Boolea
 private fun harmonize(
     sampled: Int,
     target: PixelImage?,
+    field: PixelImage?,
+    tone: RegionTone?,
     config: MosaicConfig,
     x: Int,
     y: Int,
@@ -187,18 +240,87 @@ private fun harmonize(
     lab: FloatArray
 ): Int {
     val strength = config.colorMatchWeight
-    if (target == null || config.renderMode == RenderMode.ORIGINAL || strength <= 0f) return sampled
-    val sx = (x + 0.5f) * target.width / outputWidth - 0.5f
-    val sy = (y + 0.5f) * target.height / outputHeight - 0.5f
+    if (tone == null || target == null || config.renderMode == RenderMode.ORIGINAL || strength <= 0f) return sampled
     OkLab.writeLab(sampled, lab, 0)
-    val reference = OkLab.fromArgb(target.sampleBilinear(sx, sy))
-    val chroma = strength * if (config.renderMode == RenderMode.BLENDED) 0.45f else 0.32f
-    val light = strength * 0.16f
-    return OkLab.toArgb(
-        l = (lab[0] + (reference.l - lab[0]) * light).coerceIn(0f, 1f),
-        a = (lab[1] + (reference.a - lab[1]) * chroma).coerceIn(-0.5f, 0.5f),
-        b = (lab[2] + (reference.b - lab[2]) * chroma).coerceIn(-0.5f, 0.5f)
+    val center = 1f - (1f - strength) * (1f - strength)
+    val srcSpread = tone.srcSpread.coerceAtLeast(0.004f)
+    val ratio = (tone.tgtSpread / srcSpread).coerceIn(0.05f, 1.15f)
+    val keep = ratio * (0.55f + 0.45f * (1f - center))
+    var l = tone.tgtL + (lab[0] - tone.srcL) * keep
+    var a = tone.tgtA + (lab[1] - tone.srcA) * keep
+    var b = tone.tgtB + (lab[2] - tone.srcB) * keep
+    l = lab[0] + (l - lab[0]) * center
+    a = lab[1] + (a - lab[1]) * center
+    b = lab[2] + (b - lab[2]) * center
+    if (field != null) {
+        val nudge = strength * if (config.renderMode == RenderMode.BLENDED) 0.12f else 0.22f
+        val fx = (x + 0.5f) * field.width / outputWidth - 0.5f
+        val fy = (y + 0.5f) * field.height / outputHeight - 0.5f
+        val low = OkLab.fromArgb(field.sampleBilinear(fx, fy))
+        l += (low.l - l) * nudge
+        a += (low.a - a) * nudge
+        b += (low.b - b) * nudge
+    }
+    return OkLab.toArgb(l.coerceIn(0f, 1f), a.coerceIn(-0.5f, 0.5f), b.coerceIn(-0.5f, 0.5f))
+}
+
+private fun toneFromSamples(
+    source: PixelImage,
+    descriptor: TileDescriptor,
+    placement: CutoutPlacement,
+    mask: PieceMask,
+    target: PixelImage,
+    turnCos: Float,
+    turnSin: Float
+): RegionTone {
+    var srcL = 0.0
+    var srcA = 0.0
+    var srcB = 0.0
+    var srcL2 = 0.0
+    var tgtL = 0.0
+    var tgtA = 0.0
+    var tgtB = 0.0
+    var tgtL2 = 0.0
+    var count = 0
+    val lab = FloatArray(3)
+    for (stepY in 1 until TONE_STEPS) {
+        val ny = mask.top + (mask.bottom - mask.top) * stepY / TONE_STEPS.toFloat()
+        for (stepX in 1 until TONE_STEPS) {
+            val nx = mask.left + (mask.right - mask.left) * stepX / TONE_STEPS.toFloat()
+            if (maskCoverage(mask, nx, ny) < 128) continue
+            val sampled = sourceColor(source, descriptor, placement, mask, nx, ny, turnCos, turnSin)
+            if ((sampled ushr 24) < 128) continue
+            OkLab.writeLab(sampled, lab, 0)
+            srcL += lab[0]
+            srcA += lab[1]
+            srcB += lab[2]
+            srcL2 += lab[0] * lab[0]
+            val tx = (nx * (target.width - 1)).roundToInt().coerceIn(0, target.width - 1)
+            val ty = (ny * (target.height - 1)).roundToInt().coerceIn(0, target.height - 1)
+            OkLab.writeLab(target.pixel(tx, ty), lab, 0)
+            tgtL += lab[0]
+            tgtA += lab[1]
+            tgtB += lab[2]
+            tgtL2 += lab[0] * lab[0]
+            count++
+        }
+    }
+    if (count == 0) {
+        return RegionTone(placement.targetL, placement.targetA, placement.targetB, 0.02f, placement.targetL, placement.targetA, placement.targetB, 0.02f)
+    }
+    val n = count.toDouble()
+    return RegionTone(
+        (srcL / n).toFloat(),
+        (srcA / n).toFloat(),
+        (srcB / n).toFloat(),
+        sqrt(((srcL2 / n) - (srcL / n) * (srcL / n)).coerceAtLeast(0.0)).toFloat(),
+        (tgtL / n).toFloat(),
+        (tgtA / n).toFloat(),
+        (tgtB / n).toFloat(),
+        sqrt(((tgtL2 / n) - (tgtL / n) * (tgtL / n)).coerceAtLeast(0.0)).toFloat()
     )
 }
 
 private const val OPAQUE = 0xFF shl 24
+private const val FIELD_EDGE = 64
+private const val TONE_STEPS = 7

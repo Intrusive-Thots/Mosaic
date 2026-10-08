@@ -23,7 +23,9 @@ internal class ShapeCut(
     val sampleV: FloatArray,
     val sampleL: FloatArray,
     val sampleA: FloatArray,
-    val sampleB: FloatArray
+    val sampleB: FloatArray,
+    val spread: Float,
+    val blocking: Boolean
 )
 
 internal fun cutTargetShapes(target: PixelImage, settings: CollageSettings): List<ShapeCut> {
@@ -31,28 +33,34 @@ internal fun cutTargetShapes(target: PixelImage, settings: CollageSettings): Lis
     val plane = labPlane(work)
     val budgets = layerBudgets(settings.pieceCount)
     val short = min(plane.width, plane.height).toFloat()
-    val coarseStep = (settings.maxScale * short).toInt().coerceIn(5, (short / 2f).toInt().coerceAtLeast(5))
-    val fineStep = (settings.minScale * short * 1.7f).toInt().coerceIn(4, coarseStep)
-    val grow = (settings.overlap * coarseStep * 0.22f).toInt().coerceIn(0, 4)
-    val coarseLabels = mergeSmall(slic(plane, coarseStep, COARSE_COMPACT), plane.width, plane.height, budgets.coarse)
+    val requested = settings.maxScale.coerceAtLeast(0.18f)
+    val coarseStep = (requested * short).toInt().coerceIn(14, (short / 2.5f).toInt().coerceAtLeast(14))
+    val fineStep = (settings.minScale * short * 1.7f).toInt().coerceIn(5, (coarseStep / 2).coerceAtLeast(5))
+    val grow = (settings.overlap * coarseStep * 0.12f).toInt().coerceIn(1, 3)
+    val coarseLabels = mergeSmall(
+        mergeByColor(slic(plane, coarseStep, COARSE_COMPACT), plane),
+        plane.width,
+        plane.height,
+        budgets.coarse
+    )
     val coarse = cutsFromLabels(coarseLabels, plane, grow)
     val fine = if (fineStep < coarseStep) {
         val labels = slic(plane, fineStep, FINE_COMPACT)
-        val ranked = cutsFromLabels(labels, plane, grow.coerceAtLeast(1))
+        val ranked = cutsFromLabels(labels, plane, grow.coerceAtLeast(1)).filter { it.scale <= 0.07f }
         strongest(ranked, plane, budgets.fine)
     } else {
         emptyList()
     }
-    val edges = edgeCuts(plane, budgets.edge, grow.coerceAtLeast(1))
+    val edges = edgeCuts(plane, budgets.edge, grow.coerceAtLeast(2))
     return coarse + fine + edges
 }
 
 private class Budgets(val coarse: Int, val fine: Int, val edge: Int)
 
 private fun layerBudgets(pieceCount: Int): Budgets {
-    val edge = (pieceCount * 0.22f).toInt().coerceIn(0, pieceCount)
-    val fine = (pieceCount * 0.28f).toInt().coerceIn(0, (pieceCount - edge).coerceAtLeast(0))
-    val coarse = (pieceCount - edge - fine).coerceAtLeast(1)
+    val edge = (pieceCount * 0.1f).toInt().coerceIn(0, 72)
+    val fine = (pieceCount * 0.06f).toInt().coerceIn(0, 48)
+    val coarse = (pieceCount * 0.34f).toInt().coerceIn(6, 42)
     return Budgets(coarse, fine, edge)
 }
 
@@ -220,6 +228,119 @@ private fun moveSeeds(plane: LabPlane, seeds: MutableList<Seed>, labels: IntArra
         seed.a = sumA[id] / count[id]
         seed.b = sumB[id] / count[id]
     }
+}
+
+private class RegionMean(var count: Int, var l: Float, var a: Float, var b: Float)
+
+private fun mergeByColor(labels: IntArray, plane: LabPlane): IntArray {
+    val means = regionMeans(labels, plane)
+    val gradient = gradientMap(plane.l, plane.width, plane.height)
+    repeat(56) {
+        val seam = weakestSeam(labels, plane, means, gradient) ?: return labels
+        if (seam.delta > COLOR_MERGE) return labels
+        relabel(labels, seam.from, seam.into)
+        foldMean(means, seam.from, seam.into)
+    }
+    return labels
+}
+
+private fun regionMeans(labels: IntArray, plane: LabPlane): Array<RegionMean?> {
+    val maxId = labels.maxOrNull() ?: return emptyArray()
+    val means = arrayOfNulls<RegionMean>(maxId + 1)
+    for (index in labels.indices) {
+        val id = labels[index]
+        if (id !in means.indices) continue
+        val current = means[id]
+        if (current == null) {
+            means[id] = RegionMean(1, plane.l[index], plane.a[index], plane.b[index])
+        } else {
+            current.count++
+            current.l += plane.l[index]
+            current.a += plane.a[index]
+            current.b += plane.b[index]
+        }
+    }
+    return means
+}
+
+private class SeamChoice(val from: Int, val into: Int, val delta: Float)
+
+private fun weakestSeam(
+    labels: IntArray,
+    plane: LabPlane,
+    means: Array<RegionMean?>,
+    gradient: FloatArray
+): SeamChoice? {
+    val pixels = HashMap<Long, Int>()
+    val energy = HashMap<Long, Float>()
+    noteSeams(labels, plane.width, plane.height, gradient, pixels, energy)
+    var bestKey = -1L
+    var bestDelta = Float.POSITIVE_INFINITY
+    for ((key, count) in pixels) {
+        if (count <= 0) continue
+        val edge = (energy[key] ?: 0f) / count.toFloat()
+        if (edge > EDGE_BLOCK) continue
+        val delta = seamDelta(means, key)
+        if (delta < bestDelta) {
+            bestDelta = delta
+            bestKey = key
+        }
+    }
+    if (bestKey < 0L) return null
+    val from = (bestKey ushr 32).toInt()
+    val into = bestKey.toInt()
+    return SeamChoice(from, into, bestDelta)
+}
+
+private fun noteSeams(
+    labels: IntArray,
+    width: Int,
+    height: Int,
+    gradient: FloatArray,
+    pixels: HashMap<Long, Int>,
+    energy: HashMap<Long, Float>
+) {
+    for (y in 0 until height) {
+        val row = y * width
+        for (x in 0 until width) {
+            val id = labels[row + x]
+            if (x + 1 < width) noteSeam(labels[row + x + 1], id, gradient[row + x], pixels, energy)
+            if (y + 1 < height) noteSeam(labels[row + width + x], id, gradient[row + x], pixels, energy)
+        }
+    }
+}
+
+private fun noteSeam(neighbor: Int, id: Int, gradient: Float, pixels: HashMap<Long, Int>, energy: HashMap<Long, Float>) {
+    if (neighbor == id || neighbor < 0 || id < 0) return
+    val key = seamKey(id, neighbor)
+    pixels[key] = (pixels[key] ?: 0) + 1
+    energy[key] = (energy[key] ?: 0f) + gradient
+}
+
+private fun seamKey(first: Int, second: Int): Long {
+    val low = min(first, second)
+    val high = maxOf(first, second)
+    return (low.toLong() shl 32) or high.toLong()
+}
+
+private fun seamDelta(means: Array<RegionMean?>, key: Long): Float {
+    val left = means.getOrNull((key ushr 32).toInt())
+    val right = means.getOrNull(key.toInt())
+    if (left == null || right == null || left.count == 0 || right.count == 0) return Float.POSITIVE_INFINITY
+    val dl = left.l / left.count - right.l / right.count
+    val da = left.a / left.count - right.a / right.count
+    val db = left.b / left.count - right.b / right.count
+    return dl * dl + da * da + db * db
+}
+
+private fun foldMean(means: Array<RegionMean?>, from: Int, into: Int) {
+    val source = means.getOrNull(from) ?: return
+    val target = means.getOrNull(into) ?: return
+    target.count += source.count
+    target.l += source.l
+    target.a += source.a
+    target.b += source.b
+    source.count = 0
 }
 
 private fun fillUnlabeled(labels: IntArray, width: Int, height: Int) {
@@ -418,7 +539,7 @@ private fun shapeCut(
     val scale = sqrt(count.toFloat() / (plane.width * plane.height).toFloat()).coerceAtLeast(0.02f)
     return ShapeCut(
         mask, stats.centerX, stats.centerY, scale, stats.meanL, stats.meanA, stats.meanB,
-        stats.u, stats.v, stats.l, stats.a, stats.b
+        stats.u, stats.v, stats.l, stats.a, stats.b, stats.spread, scale >= BLOCKING_SCALE
     )
 }
 
@@ -432,7 +553,8 @@ private class SampleStats(
     val v: FloatArray,
     val l: FloatArray,
     val a: FloatArray,
-    val b: FloatArray
+    val b: FloatArray,
+    val spread: Float
 )
 
 private fun sampleStats(hits: BooleanArray, box: Box, plane: LabPlane): SampleStats {
@@ -441,6 +563,7 @@ private fun sampleStats(hits: BooleanArray, box: Box, plane: LabPlane): SampleSt
     var sumL = 0.0
     var sumA = 0.0
     var sumB = 0.0
+    var sumL2 = 0.0
     var count = 0
     val pickedU = FloatArray(SAMPLE_LIMIT)
     val pickedV = FloatArray(SAMPLE_LIMIT)
@@ -456,7 +579,9 @@ private fun sampleStats(hits: BooleanArray, box: Box, plane: LabPlane): SampleSt
         val pixel = y * plane.width + x
         sumX += x
         sumY += y
-        sumL += plane.l[pixel]
+        val tone = plane.l[pixel]
+        sumL += tone
+        sumL2 += tone * tone
         sumA += plane.a[pixel]
         sumB += plane.b[pixel]
         count++
@@ -470,6 +595,9 @@ private fun sampleStats(hits: BooleanArray, box: Box, plane: LabPlane): SampleSt
         }
     }
     val safe = count.coerceAtLeast(1)
+    val meanL = sumL / safe
+    val variance = (sumL2 / safe - meanL * meanL).coerceAtLeast(0.0)
+    val spread = sqrt(variance).toFloat()
     if (picked == 0) {
         pickedU[0] = 0.5f
         pickedV[0] = 0.5f
@@ -481,34 +609,76 @@ private fun sampleStats(hits: BooleanArray, box: Box, plane: LabPlane): SampleSt
     return SampleStats(
         (sumX / safe / plane.width).toFloat(),
         (sumY / safe / plane.height).toFloat(),
-        (sumL / safe).toFloat(),
+        meanL.toFloat(),
         (sumA / safe).toFloat(),
         (sumB / safe).toFloat(),
         pickedU.copyOf(picked),
         pickedV.copyOf(picked),
         pickedL.copyOf(picked),
         pickedA.copyOf(picked),
-        pickedB.copyOf(picked)
+        pickedB.copyOf(picked),
+        spread
     )
 }
 
 private fun packMask(hits: BooleanArray, width: Int, height: Int): Triple<Int, Int, ByteArray> {
+    val soft = soften(hits, width, height)
     if (width <= PieceMask.MAX_EDGE && height <= PieceMask.MAX_EDGE) {
-        val alpha = ByteArray(hits.size) { index -> if (hits[index]) OPAQUE else 0 }
-        return Triple(width, height, alpha)
+        return Triple(width, height, soft)
     }
     val scale = PieceMask.MAX_EDGE.toFloat() / maxOf(width, height).toFloat()
     val packedW = (width * scale).toInt().coerceIn(1, PieceMask.MAX_EDGE)
     val packedH = (height * scale).toInt().coerceIn(1, PieceMask.MAX_EDGE)
     val alpha = ByteArray(packedW * packedH)
     for (y in 0 until packedH) {
-        val srcY = y * height / packedH
+        val y0 = y * height / packedH
+        val y1 = ((y + 1) * height / packedH).coerceAtLeast(y0 + 1).coerceAtMost(height)
         for (x in 0 until packedW) {
-            val srcX = x * width / packedW
-            if (hits[srcY * width + srcX]) alpha[y * packedW + x] = OPAQUE
+            val x0 = x * width / packedW
+            val x1 = ((x + 1) * width / packedW).coerceAtLeast(x0 + 1).coerceAtMost(width)
+            alpha[y * packedW + x] = averageAlpha(soft, width, x0, x1, y0, y1)
         }
     }
     return Triple(packedW, packedH, alpha)
+}
+
+private fun soften(hits: BooleanArray, width: Int, height: Int): ByteArray {
+    val alpha = ByteArray(hits.size)
+    for (y in 0 until height) {
+        for (x in 0 until width) {
+            alpha[y * width + x] = neighborCoverage(hits, width, height, x, y)
+        }
+    }
+    return alpha
+}
+
+private fun neighborCoverage(hits: BooleanArray, width: Int, height: Int, x: Int, y: Int): Byte {
+    var sum = 0
+    var seen = 0
+    for (dy in -1..1) {
+        val py = y + dy
+        if (py !in 0 until height) continue
+        for (dx in -1..1) {
+            val px = x + dx
+            if (px !in 0 until width) continue
+            seen++
+            if (hits[py * width + px]) sum++
+        }
+    }
+    return ((sum * 255) / seen.coerceAtLeast(1)).toByte()
+}
+
+private fun averageAlpha(alpha: ByteArray, stride: Int, x0: Int, x1: Int, y0: Int, y1: Int): Byte {
+    var sum = 0
+    var seen = 0
+    for (y in y0 until y1) {
+        val row = y * stride
+        for (x in x0 until x1) {
+            sum += alpha[row + x].toInt() and 255
+            seen++
+        }
+    }
+    return (sum / seen.coerceAtLeast(1)).toByte()
 }
 
 private fun strongest(cuts: List<ShapeCut>, plane: LabPlane, budget: Int): List<ShapeCut> {
@@ -532,11 +702,11 @@ private fun edgeCuts(plane: LabPlane, budget: Int, grow: Int): List<ShapeCut> {
     if (limit <= 0f) return emptyList()
     val used = BooleanArray(gradient.size)
     val cuts = ArrayList<ShapeCut>()
-    val maxRun = (plane.width / 2).coerceIn(24, 140)
+    val maxRun = plane.width.coerceIn(32, 220)
     for (index in gradient.indices) {
         if (cuts.size >= budget) break
         if (used[index] || gradient[index] < limit) continue
-        val chain = traceEdge(gradient, used, plane.width, index, limit, maxRun)
+        val chain = traceEdge(gradient, plane, used, index, limit, maxRun)
         val cut = chainCut(chain, plane, grow) ?: continue
         cuts.add(cut)
     }
@@ -549,14 +719,14 @@ private fun edgeThreshold(gradient: FloatArray): Float {
     if (peak < 0.04f) return 0f
     val copy = gradient.copyOf()
     copy.sort()
-    val rank = copy[(copy.size * 0.82f).toInt().coerceIn(0, copy.lastIndex)]
-    return maxOf(rank, 0.035f)
+    val rank = copy[(copy.size * 0.91f).toInt().coerceIn(0, copy.lastIndex)]
+    return maxOf(rank, 0.055f)
 }
 
 private fun traceEdge(
     gradient: FloatArray,
+    plane: LabPlane,
     used: BooleanArray,
-    width: Int,
     start: Int,
     limit: Float,
     maxRun: Int
@@ -566,11 +736,23 @@ private fun traceEdge(
     var cursor = start
     while (count < maxRun && cursor >= 0) {
         used[cursor] = true
-        chain[count] = cursor
+        chain[count] = darkerIndex(plane, cursor)
         count++
-        cursor = nextEdge(gradient, used, width, cursor, limit)
+        cursor = nextEdge(gradient, used, plane.width, cursor, limit)
     }
     return chain.copyOf(count)
+}
+
+private fun darkerIndex(plane: LabPlane, index: Int): Int {
+    var best = index
+    var tone = plane.l[index]
+    val x = index % plane.width
+    if (x + 1 < plane.width && plane.l[index + 1] < tone) {
+        best = index + 1
+        tone = plane.l[best]
+    }
+    if (index + plane.width < plane.l.size && plane.l[index + plane.width] < tone) best = index + plane.width
+    return best
 }
 
 private fun nextEdge(
@@ -620,9 +802,11 @@ private fun gradientAt(l: FloatArray, width: Int, height: Int, x: Int, y: Int): 
     return right + down
 }
 
-private const val WORK_EDGE = 220
+private const val WORK_EDGE = 360
 private const val SLIC_PASSES = 4
-private const val COARSE_COMPACT = 0.006f
-private const val FINE_COMPACT = 0.008f
+private const val COARSE_COMPACT = 0.0012f
+private const val FINE_COMPACT = 0.004f
 private const val SAMPLE_LIMIT = 5
-private const val OPAQUE = 255.toByte()
+private const val COLOR_MERGE = 0.0032f
+private const val EDGE_BLOCK = 0.07f
+private const val BLOCKING_SCALE = 0.055f

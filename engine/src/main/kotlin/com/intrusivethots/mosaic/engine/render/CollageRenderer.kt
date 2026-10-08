@@ -30,7 +30,8 @@ class CollageRenderer {
     ) {
         val width = layout.width
         val height = layout.height
-        val sprites = sprites(plan, descriptors, thumbnails, width, height)
+        val sprites = sprites(plan, descriptors, thumbnails, width, height, target)
+        val field = lowFrequencyField(target)
         val mean = if (target == null) argb(24, 24, 28) else meanColor(target)
         val useTarget = config.collage.background == CollageBackground.TARGET && target != null
         val row = IntArray(width)
@@ -46,7 +47,7 @@ class CollageRenderer {
                 if (sprite.placement.mask != null) {
                     paintShapeRow(
                         row, y, width, height, sprite.source, sprite.descriptor, sprite.placement,
-                        config, target, coverage, owners, index
+                        config, target, coverage, owners, index, sprite.tone, field
                     )
                     continue
                 }
@@ -93,7 +94,8 @@ class CollageRenderer {
         descriptors: List<TileDescriptor>,
         thumbnails: List<PixelImage>,
         width: Int,
-        height: Int
+        height: Int,
+        target: PixelImage? = null
     ): List<Sprite> {
         val sprites = ArrayList<Sprite>(plan.placements.size)
         val paper = HashMap<Int, PixelImage>()
@@ -111,7 +113,8 @@ class CollageRenderer {
             } else {
                 pieceDraw(placement, descriptor, source.width, source.height, width, height)
             }
-            sprites.add(Sprite(descriptor, source, draw, placement))
+            val tone = if (placement.mask != null) regionTone(source, descriptor, placement, target) else null
+            sprites.add(Sprite(descriptor, source, draw, placement, tone))
         }
         return sprites
     }
@@ -277,7 +280,8 @@ class CollageRenderer {
         val descriptor: TileDescriptor,
         val source: PixelImage,
         val draw: PieceDraw,
-        val placement: com.intrusivethots.mosaic.engine.match.CutoutPlacement
+        val placement: com.intrusivethots.mosaic.engine.match.CutoutPlacement,
+        val tone: RegionTone? = null
     )
 
     companion object {

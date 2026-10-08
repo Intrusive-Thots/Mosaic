@@ -14,7 +14,8 @@ internal class TileSwatch(
     val grid: Int,
     val l: FloatArray,
     val a: FloatArray,
-    val b: FloatArray
+    val b: FloatArray,
+    val spread: FloatArray
 )
 
 internal fun buildSwatches(thumbnails: List<PixelImage>, descriptors: List<TileDescriptor>): List<TileSwatch> {
@@ -87,6 +88,7 @@ internal class ShapeFit(
 private class Scored(val score: Float, val angle: Float, val u: Float, val v: Float)
 
 private fun scoreTile(swatch: TileSwatch, cut: ShapeCut, angles: FloatArray, span: Float, penalty: Float): Scored {
+    if (cut.blocking) return scoreFlat(swatch, cut, penalty)
     var best = Scored(Float.POSITIVE_INFINITY, 0f, 0.5f, 0.5f)
     for (angle in angles) {
         val radians = Math.toRadians(angle.toDouble())
@@ -131,8 +133,52 @@ private fun sampleError(
     val meanDl = mean[0] - cut.meanL
     val meanDa = mean[1] - cut.meanA
     val meanDb = mean[2] - cut.meanB
-    sum += 2f * (meanDl * meanDl + meanDa * meanDa + meanDb * meanDb)
-    return if (count == 0) Float.POSITIVE_INFINITY else sum / (count + 2f)
+    sum += 4f * (meanDl * meanDl + meanDa * meanDa + meanDb * meanDb)
+    return if (count == 0) Float.POSITIVE_INFINITY else sum / (count + 4f)
+}
+
+private class WindowColor(val l: Float, val a: Float, val b: Float, val spread: Float)
+
+private fun scoreFlat(swatch: TileSwatch, cut: ShapeCut, penalty: Float): Scored {
+    var best = Scored(Float.POSITIVE_INFINITY, 0f, 0.5f, 0.5f)
+    for (anchorV in FLAT_ANCHORS) {
+        for (anchorU in FLAT_ANCHORS) {
+            val window = windowColor(swatch, anchorU, anchorV)
+            val dl = window.l - cut.meanL
+            val da = window.a - cut.meanA
+            val db = window.b - cut.meanB
+            val score = (dl * dl + da * da + db * db) * 6f + window.spread * 9f + penalty
+            if (score < best.score) best = Scored(score, 0f, anchorU, anchorV)
+        }
+    }
+    return best
+}
+
+private fun windowColor(swatch: TileSwatch, anchorU: Float, anchorV: Float): WindowColor {
+    var l = 0f
+    var a = 0f
+    var b = 0f
+    var spread = 0f
+    var count = 0
+    for (offsetV in FLAT_WINDOW) {
+        for (offsetU in FLAT_WINDOW) {
+            val color = swatchAt(swatch, anchorU + offsetU, anchorV + offsetV)
+            val cell = swatchCell(swatch, anchorU + offsetU, anchorV + offsetV)
+            l += color[0]
+            a += color[1]
+            b += color[2]
+            spread += swatch.spread[cell]
+            count++
+        }
+    }
+    val n = count.coerceAtLeast(1).toFloat()
+    return WindowColor(l / n, a / n, b / n, spread / n)
+}
+
+private fun swatchCell(swatch: TileSwatch, u: Float, v: Float): Int {
+    val x = (u * (swatch.grid - 1)).toInt().coerceIn(0, swatch.grid - 1)
+    val y = (v * (swatch.grid - 1)).toInt().coerceIn(0, swatch.grid - 1)
+    return y * swatch.grid + x
 }
 
 private fun swatchAt(swatch: TileSwatch, u: Float, v: Float): FloatArray {
@@ -163,6 +209,7 @@ private fun swatchOf(image: PixelImage, descriptor: TileDescriptor): TileSwatch 
     val l = FloatArray(grid * grid)
     val a = FloatArray(grid * grid)
     val b = FloatArray(grid * grid)
+    val l2 = FloatArray(grid * grid)
     val weight = IntArray(grid * grid)
     val lab = FloatArray(3)
     val left = descriptor.contentLeft
@@ -181,19 +228,23 @@ private fun swatchOf(image: PixelImage, descriptor: TileDescriptor): TileSwatch 
             val cell = cellY * grid + cellX
             OkLab.writeLab(pixel, lab, 0)
             l[cell] += lab[0]
+            l2[cell] += lab[0] * lab[0]
             a[cell] += lab[1]
             b[cell] += lab[2]
             weight[cell]++
         }
     }
-    fillSwatch(l, a, b, weight, grid, descriptor)
-    return TileSwatch(grid, l, a, b)
+    val spread = FloatArray(grid * grid)
+    fillSwatch(l, a, b, l2, spread, weight, grid, descriptor)
+    return TileSwatch(grid, l, a, b, spread)
 }
 
 private fun fillSwatch(
     l: FloatArray,
     a: FloatArray,
     b: FloatArray,
+    l2: FloatArray,
+    spread: FloatArray,
     weight: IntArray,
     grid: Int,
     descriptor: TileDescriptor
@@ -204,6 +255,8 @@ private fun fillSwatch(
         l[index] /= count
         a[index] /= count
         b[index] /= count
+        val variance = l2[index] / count - l[index] * l[index]
+        spread[index] = if (variance > 0f) variance else 0f
     }
     repeat(3) { spreadEmpty(l, a, b, weight, grid) }
     for (index in weight.indices) {
@@ -242,10 +295,11 @@ private fun sourceAngles(range: Float): FloatArray {
 }
 
 private fun cropSpan(cut: ShapeCut): Float {
+    if (cut.blocking) return FLAT_SPAN
     val mask = cut.mask
     val wide = mask.right - mask.left
     val tall = mask.bottom - mask.top
-    return maxOf(wide, tall).coerceIn(0.28f, 0.82f)
+    return maxOf(wide, tall).coerceIn(0.16f, 0.4f)
 }
 
 private fun jitter(seed: Int, ordinal: Int, tile: Int): Float {
@@ -256,4 +310,7 @@ private fun jitter(seed: Int, ordinal: Int, tile: Int): Float {
 
 private const val SWATCH = 12
 private const val GRID = 12
+private const val FLAT_SPAN = 0.2f
 private val ANCHORS = floatArrayOf(0.34f, 0.5f, 0.66f)
+private val FLAT_ANCHORS = floatArrayOf(0.24f, 0.4f, 0.56f, 0.72f)
+private val FLAT_WINDOW = floatArrayOf(-0.06f, 0f, 0.06f)
