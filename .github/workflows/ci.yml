@@ -89,3 +89,29 @@ jobs:
           arch: x86_64
           disable-animations: true
           script: ./gradlew :app:connectedDebugAndroidTest --no-daemon
+
+  publish-debug-apk:
+    name: Publish debug APK
+    needs: [engine, android]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/cursor/collage-tuning-loop-fcee'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-packages
+          path: packages
+      - name: Attach the debug APK to the prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.1.0-dev
+          name: Mosaic 2.1.0-dev
+          prerelease: true
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+          body: |
+            Debug build of the collage-tuning branch. Same-source copies may be flipped, rotated, and resized, and they must not touch. Target outlines are kept with edge subdivision and a light ink pass.
+          files: packages/app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

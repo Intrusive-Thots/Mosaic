@@ -9,8 +9,10 @@ import com.intrusivethots.mosaic.engine.config.RotationMode
 import com.intrusivethots.mosaic.engine.config.cellRect
 import com.intrusivethots.mosaic.engine.config.gridCellAspect
 import com.intrusivethots.mosaic.engine.config.matchFingerprint
+import com.intrusivethots.mosaic.engine.config.packEdges
 import com.intrusivethots.mosaic.engine.config.packMixed
 import com.intrusivethots.mosaic.engine.config.planGrid
+import com.intrusivethots.mosaic.engine.config.resolvedGrid
 import com.intrusivethots.mosaic.engine.config.spanRect
 import com.intrusivethots.mosaic.engine.config.validated
 import com.intrusivethots.mosaic.engine.index.ProbeCounter
@@ -36,12 +38,13 @@ class TileMatcher(
         onProgress: (Float) -> Unit = {}
     ): Pair<MosaicPlan, MatchStats> {
         val validated = config.validated()
-        val layout = planGrid(target.width, target.height, validated)
+        val layout = resolvedGrid(target.width, target.height, validated)
         val scratch = MatchScratch(validated, layout, descriptors.size, target, tileTokens)
-        return if (validated.layoutMode == LayoutMode.MIXED) {
-            matchMixed(scratch, descriptors, index, onProgress)
-        } else {
-            matchUniform(scratch, descriptors, index, onProgress)
+        val baseColumns = planGrid(target.width, target.height, validated).columns
+        return when {
+            validated.layoutMode == LayoutMode.MIXED -> matchMixed(scratch, descriptors, index, onProgress)
+            layout.columns > baseColumns -> matchEdges(scratch, descriptors, index, onProgress)
+            else -> matchUniform(scratch, descriptors, index, onProgress)
         }
     }
 
@@ -96,12 +99,36 @@ class TileMatcher(
         index: TileIndex,
         onProgress: (Float) -> Unit
     ): Pair<MosaicPlan, MatchStats> {
+        val columns = scratch.layout.columns
+        val rows = scratch.layout.rows
+        val placements = packMixed(columns, rows, scratch.config.randomSeed)
+        return matchPlaced(scratch, descriptors, index, placements, onProgress)
+    }
+
+    private suspend fun matchEdges(
+        scratch: MatchScratch,
+        descriptors: List<TileDescriptor>,
+        index: TileIndex,
+        onProgress: (Float) -> Unit
+    ): Pair<MosaicPlan, MatchStats> {
+        val columns = scratch.layout.columns
+        val rows = scratch.layout.rows
+        val edges = coarseEdgeMap(scratch.target, columns, rows)
+        return matchPlaced(scratch, descriptors, index, packEdges(columns, rows, edges), onProgress)
+    }
+
+    private suspend fun matchPlaced(
+        scratch: MatchScratch,
+        descriptors: List<TileDescriptor>,
+        index: TileIndex,
+        placements: List<Placement>,
+        onProgress: (Float) -> Unit
+    ): Pair<MosaicPlan, MatchStats> {
         val validated = scratch.config
         val columns = scratch.layout.columns
         val rows = scratch.layout.rows
         val target = scratch.target
         val cellCount = columns * rows
-        val placements = packMixed(columns, rows, validated.randomSeed)
         val assignments = IntArray(cellCount) { MosaicPlan.SOLID }
         val cellRgb = IntArray(cellCount)
         val cellLab = FloatArray(cellCount * 3)
@@ -123,14 +150,10 @@ class TileMatcher(
                 placement.column, placement.row, placement.spanX, placement.spanY
             )
             analyzer.sample(target, rect.x, rect.y, rect.width, rect.height, false, scratch.features)
-            fill(index, scratch, placement.column, placement.row)
+            fill(index, scratch, placement.column, placement.row, placement.spanX, placement.spanY)
             val cellAspect = (unitWidth * placement.spanX) / (unitHeight * placement.spanY).coerceAtLeast(1e-4f)
             val chosen = pickTile(scratch, descriptors, placement.column, placement.row, cellAspect, validated.rotationMode)
-            if (chosen.tile == MosaicPlan.SOLID) {
-                scratch.stats.solidCells += placement.area
-            } else {
-                scratch.tracker.record(chosen.tile, placement.column, placement.row)
-            }
+            recordChoice(scratch, chosen, placement.column, placement.row, placement.spanX, placement.spanY)
             paintPlacement(
                 placement, columns, chosen, scratch.features,
                 assignments, cellRgb, cellLab, orientations, anchors, spanX, spanY
@@ -154,15 +177,22 @@ class TileMatcher(
         ) to scratch.stats
     }
 
-    private fun fill(index: TileIndex, scratch: MatchScratch, column: Int, row: Int) {
+    private fun fill(
+        index: TileIndex,
+        scratch: MatchScratch,
+        column: Int,
+        row: Int,
+        spanX: Int = 1,
+        spanY: Int = 1
+    ) {
         val features = scratch.features
         index.fillCandidates(
             l = features.l,
             a = features.a,
             b = features.b,
             maxCandidates = scratch.config.candidateCount,
-            radiusHint = scratch.config.maxRepetitionDistance,
-            blocked = { tile -> scratch.tracker.blocked(tile, column, row) },
+            radiusHint = scratch.tracker.touchRadius,
+            blocked = { tile -> scratch.tracker.blockedSpan(tile, column, row, spanX, spanY) },
             into = scratch.top,
             probes = scratch.probes
         )
@@ -255,11 +285,18 @@ class TileMatcher(
         return Chosen(bestTile, bestCode)
     }
 
-    private fun recordChoice(scratch: MatchScratch, chosen: Chosen, column: Int, row: Int) {
+    private fun recordChoice(
+        scratch: MatchScratch,
+        chosen: Chosen,
+        column: Int,
+        row: Int,
+        spanX: Int = 1,
+        spanY: Int = 1
+    ) {
         if (chosen.tile == MosaicPlan.SOLID) {
-            scratch.stats.solidCells++
+            scratch.stats.solidCells += spanX * spanY
         } else {
-            scratch.tracker.record(chosen.tile, column, row)
+            scratch.tracker.recordSpan(chosen.tile, column, row, spanX, spanY)
         }
     }
 
@@ -299,11 +336,17 @@ class TileMatcher(
     }
 
     private fun rememberKept(plan: MosaicPlan, cells: BooleanArray, scratch: MatchScratch) {
+        val seen = HashSet<Int>()
+        val columns = plan.columns
         for (index in cells.indices) {
             if (cells[index]) continue
             val tile = plan.assignments[index]
             if (tile == MosaicPlan.SOLID) continue
-            scratch.tracker.record(tile, index % plan.columns, index / plan.columns)
+            val anchor = if (plan.anchors.size == plan.cellCount) plan.anchors[index] else index
+            if (!seen.add(anchor)) continue
+            val spanX = spanAt(plan.spanX, anchor)
+            val spanY = spanAt(plan.spanY, anchor)
+            scratch.tracker.recordSpan(tile, anchor % columns, anchor / columns, spanX, spanY)
         }
     }
 
@@ -367,9 +410,9 @@ class TileMatcher(
             analyzer.sample(scratch.target, rect.x, rect.y, rect.width, rect.height, false, scratch.features)
             writeCell(cellRgb, cellLab, anchor, scratch.features)
             val aspect = (rect.width.toFloat() / rect.height.toFloat()).coerceAtLeast(1e-4f)
-            fill(index, scratch, column, row)
+            fill(index, scratch, column, row, spanX, spanY)
             val chosen = pickAvoiding(scratch, descriptors, column, row, aspect, scratch.config.rotationMode, excluded)
-            recordChoice(scratch, chosen, column, row)
+            recordChoice(scratch, chosen, column, row, spanX, spanY)
             assignments[anchor] = chosen.tile
             if (orientations.isNotEmpty()) orientations[anchor] = chosen.orientation.toByte()
         }
@@ -449,6 +492,9 @@ class TileMatcher(
 }
 
 private fun isExcluded(tile: Int, excluded: BooleanArray): Boolean = tile in excluded.indices && excluded[tile]
+
+private fun spanAt(spans: ByteArray, anchor: Int): Int =
+    if (anchor in spans.indices) spans[anchor].toInt().coerceAtLeast(1) else 1
 
 private fun copiedPlan(
     plan: MosaicPlan,

@@ -43,6 +43,8 @@ internal class ShapeFit(
 ) {
     private val handful = HandfulPenalty()
     private val reserved = ArrayList<FaceBox>()
+    private val contact = SourceContact()
+    private val outside = ArrayList<CutoutPlacement>()
     var comparisons: Long = 0
 
     fun choose(
@@ -66,7 +68,7 @@ internal class ShapeFit(
             cut.meanA,
             cut.meanB,
             config.candidateCount,
-            config.maxRepetitionDistance,
+            tracker.touchRadius,
             { tile ->
                 tile !in swatches.indices || refused(tile) ||
                     (requireFaces && faces.getOrNull(tile).isNullOrEmpty())
@@ -81,10 +83,13 @@ internal class ShapeFit(
         var bestSpan = MIN_SPAN
         var bestFace = FaceBox(-1f, -1f, -1f, -1f)
         var bestScore = Float.POSITIVE_INFINITY
+        var bestAny = Float.POSITIVE_INFINITY
         for (slot in 0 until topK.size) {
             val tile = topK.ids[slot]
             if (tile == avoid || tile in taken || tile !in swatches.indices) continue
             val offer = offer(cut, tile, ordinal, solve, stackFaces) ?: continue
+            if (offer.score < bestAny) bestAny = offer.score
+            if (contact.clashes(tile, cut.mask)) continue
             if (offer.score < bestScore) {
                 bestScore = offer.score
                 bestTile = tile
@@ -94,7 +99,7 @@ internal class ShapeFit(
                 bestFace = offer.face
             }
         }
-        if (bestTile < 0) return null
+        if (bestTile < 0 || bestScore > bestAny + CONTACT_FALLBACK) return null
         return CutoutPlacement(
             tileIndex = bestTile,
             x = cut.centerX,
@@ -219,11 +224,53 @@ internal class ShapeFit(
         val row = (placement.y * GRID).toInt().coerceIn(0, GRID - 1)
         tracker.record(placement.tileIndex, column, row)
         handful.note(placement.tileIndex, placement.x, placement.y, placement.cropU, placement.cropV)
+        contact.add(placement)
         hold(placement)
     }
 
     fun release(placement: CutoutPlacement) {
+        contact.remove(placement)
         forgetFace(placement)
+    }
+
+    /** Puts a piece back after a swap that was not an improvement. */
+    fun restore(placement: CutoutPlacement) {
+        contact.add(placement)
+        hold(placement)
+    }
+
+    /** Pieces kept outside a regenerated hole. They occupy the contact grid for the whole pass. */
+    fun seedReserved(placements: List<CutoutPlacement>) {
+        outside.clear()
+        outside.addAll(placements)
+        contact.rebuild(outside)
+    }
+
+    fun syncContact(placements: List<CutoutPlacement>) {
+        contact.rebuild(outside + placements)
+    }
+
+    fun clashes(tile: Int, mask: PieceMask?): Boolean = contact.clashes(tile, mask)
+
+    /** Marks a piece that is already on the plan. Does not count another use. */
+    fun occupy(placement: CutoutPlacement) {
+        contact.add(placement)
+    }
+
+    /**
+     * Keeps a grown mask only when it still does not touch another copy of the same source.
+     * Seam mending would otherwise pull two copies together.
+     */
+    fun acceptMask(previous: CutoutPlacement, updated: CutoutPlacement): CutoutPlacement {
+        if (updated === previous) return previous
+        contact.remove(previous)
+        val mask = updated.mask
+        if (mask != null && contact.clashes(updated.tileIndex, mask)) {
+            contact.add(previous)
+            return previous
+        }
+        contact.add(updated)
+        return updated
     }
 
     fun hold(placement: CutoutPlacement) {
@@ -700,6 +747,9 @@ private const val FOCUS_MISS = 0.02f
 private const val SHAPE_SCALE = 0.08f
 private const val DRIFT = 0.35f
 private const val FACE_OVERLAP = 0.34f
+
+/** A blocked photo may fall through to the next candidate, but not to a different color. */
+private const val CONTACT_FALLBACK = 0.12f
 private val UPRIGHT = floatArrayOf(0f)
 private val ANCHORS = floatArrayOf(0.34f, 0.5f, 0.66f)
 private val CROP_SHIFTS = floatArrayOf(-0.10f, -0.05f, 0f, 0.05f, 0.10f)

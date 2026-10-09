@@ -37,6 +37,7 @@ class CollageRenderer {
         val row = IntArray(width)
         val locked = BooleanArray(width * height)
         val gate = CloserGate(width, height)
+        val outlines = outlineField(target, config, width, height)
         gate.bind(target, width, height)
         var lastReported = -1
         for (y in 0 until height) {
@@ -56,6 +57,7 @@ class CollageRenderer {
                 if (y < sprite.draw.top || y > sprite.draw.bottom) continue
                 paintSprite(row, y, sprite, config, coverage, width, gate, owners, index)
             }
+            darkenOutline(row, y, outlines)
             sink.writeRow(y, row)
             val percent = ((y + 1) * 100) / height
             if (percent != lastReported) {

@@ -18,7 +18,7 @@ class GoldenImageTest {
     }
 
     companion object {
-        const val GOLDEN_SHA256 = "0745027b47ef5ffb4aad0ea56cad0d5fa123d41795e750931914bd37af2194ba"
+        const val GOLDEN_SHA256 = "d1a220dd54d8b766667c236a44c91e01e3d53afd6c4a9393adb7e23d6fade175"
 
         suspend fun renderGolden(): PixelImage {
             val tiles = (0 until 8).map { index ->

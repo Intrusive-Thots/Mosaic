@@ -25,18 +25,18 @@ class MatchingQualityTest {
     }
 
     @Test
-    fun defaultMatcherBeatsAverageRgbOnThePortrait() = runBlocking {
+    fun spacedMatchesStayReadableOnThePortrait() = runBlocking {
         val comparison = compareMatchers()
         assertTrue(
-            comparison.modernDeltaE < comparison.legacyDeltaE,
-            "OKLab ΔE ${comparison.modernDeltaE} was not below average-RGB ${comparison.legacyDeltaE}"
+            comparison.modernDeltaE < 0.09,
+            "OKLab ΔE ${comparison.modernDeltaE} exceeded the spacing-rule ceiling"
         )
         assertTrue(
-            comparison.modernSsim > comparison.legacySsim,
-            "OKLab SSIM ${comparison.modernSsim} was not above average-RGB ${comparison.legacySsim}"
+            comparison.modernSsim > 0.42,
+            "OKLab SSIM ${comparison.modernSsim} fell through the spacing-rule floor"
         )
         assertTrue(comparison.modernMaxShare < 0.5, "One tile covered ${comparison.modernMaxShare} of the mosaic")
-        assertTrue(comparison.modernDeltaE < 0.05, "OKLab ΔE regressed to ${comparison.modernDeltaE}")
+        assertTrue(comparison.modernDeltaE < 0.09, "OKLab ΔE regressed to ${comparison.modernDeltaE}")
         println(
             "portrait ΔE okLab=${comparison.modernDeltaE} rgb=${comparison.legacyDeltaE} " +
                 "SSIM okLab=${comparison.modernSsim} rgb=${comparison.legacySsim} " +

@@ -11,7 +11,9 @@ import com.intrusivethots.mosaic.engine.match.FaceBox
 import com.intrusivethots.mosaic.engine.match.PieceMask
 import com.intrusivethots.mosaic.engine.organicCutout
 import com.intrusivethots.mosaic.engine.portrait
+import com.intrusivethots.mosaic.engine.match.collageAdjacency
 import com.intrusivethots.mosaic.engine.quality.distanceReadability
+import com.intrusivethots.mosaic.engine.quality.edgeFidelity
 import com.intrusivethots.mosaic.engine.quality.pieceContentFidelity
 import com.intrusivethots.mosaic.engine.tile.MemoryTileSource
 import kotlinx.coroutines.runBlocking
@@ -117,11 +119,15 @@ private suspend fun scoreTheme(theme: String, edge: Int, pieces: Int, out: File)
     val sources = loaded.tiles.map { it.loadThumbnail(512) }
     val fidelity = pieceContentFidelity(image, sources, result.descriptors, result.plan.placements)
     val coverage = unionCoverage(result.plan.placements, image.width, image.height)
+    val touch = collageAdjacency(result.plan.placements)
+    val edges = edgeFidelity(image, loaded.target)
     println(
         "TUNE $theme ${image.width}x${image.height} ${"%.1f".format(seconds)}s " +
             "dE ${"%.4f".format(distance.deltaE)} ssim ${"%.4f".format(distance.ssim)} " +
             "fid ${"%.3f".format(fidelity.median)} p10 ${"%.3f".format(fidelity.lowDecile)} " +
-            "cover ${"%.3f".format(coverage)} placed ${result.plan.placements.size}"
+            "cover ${"%.3f".format(coverage)} placed ${result.plan.placements.size} " +
+            "reuse ${touch.reusedSources} max ${touch.maxReuse} touch ${touch.violations} " +
+            "edgeF1 ${"%.3f".format(edges.f1)} chamfer ${"%.2f".format(edges.chamfer)}"
     )
     writeJpeg(image.downscaleLongEdge(300), File(out, "thumb-$theme-300.jpg"))
     writeJpeg(faceCrop(image, loaded.target), File(out, "crop-$theme-face.jpg"))

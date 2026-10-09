@@ -26,7 +26,8 @@ internal suspend fun assembleCollage(
     config: MosaicConfig,
     onSnapshot: suspend (List<CutoutPlacement>, String) -> Unit,
     onProgress: (Float, String) -> Unit,
-    knownFaces: List<List<FaceBox>>? = null
+    knownFaces: List<List<FaceBox>>? = null,
+    reserved: List<CutoutPlacement> = emptyList()
 ): Assembled {
     val plane = labPlane(workingCopy(target))
     val swatches = buildSwatches(thumbnails, descriptors)
@@ -40,6 +41,7 @@ internal suspend fun assembleCollage(
         probes, TopK(config.candidateCount.coerceAtLeast(1)),
         edges, target.width, target.height, library, requireFaces
     )
+    fit.seedReserved(reserved)
     val correct = config.renderMode != RenderMode.ORIGINAL && config.colorMatchWeight > 0f
     val canvas = WorkCanvas(plane, luminanceGradient(plane))
     val pieces = ArrayList<PlacedPiece>()
@@ -56,11 +58,13 @@ internal suspend fun assembleCollage(
     cullHiddenFaces(pieces, target.width, target.height)
     if (pieces.size < beforeCull) {
         fit.syncReserved(pieces.map { it.placement })
+        fit.syncContact(pieces.map { it.placement })
         coroutineContext.ensureActive()
         refine(plane, config, fit, canvas, pieces, correct)
         sealToFloor(plane, target.width, target.height, config, fit, pieces, correct)
         cullHiddenFaces(pieces, target.width, target.height)
     }
+    untouchCopies(fit, pieces)
     onSnapshot(pieces.map { it.placement }, "Cutting edge shapes")
     onProgress(1f, "Cutting edge shapes")
     return Assembled(pieces.map { it.placement }, statsOf(fit, probes, descriptors.size, pieces))
@@ -181,7 +185,7 @@ private fun sealToFloor(
     val radius = (floor.shortOfShort * min(measureWidth, measureHeight)).toInt().coerceAtLeast(2)
     liftBuried(plane, measureWidth, measureHeight, config, fit, pieces, correct, floor, radius)
     coverOpen(plane, measureWidth, measureHeight, config, fit, pieces, correct, floor)
-    mendSeams(plane, pieces, floor, measureWidth, measureHeight)
+    mendSeams(plane, pieces, floor, measureWidth, measureHeight, fit)
     liftBuried(plane, measureWidth, measureHeight, config, fit, pieces, correct, floor, radius)
 }
 
@@ -203,16 +207,20 @@ private fun liftBuried(
         if (buried == null) return
         var index = pieces.lastIndex
         while (index >= 0) {
-            if (buried.drop[index]) pieces.removeAt(index)
+            if (buried.drop[index]) {
+                fit.release(pieces[index].placement)
+                pieces.removeAt(index)
+            }
             index--
         }
         val masks = pieces.map { it.placement.mask }
         val assign = nearestPiece(masks, buried.holes, measureWidth, measureHeight, radius)
         for (pieceIndex in pieces.indices) {
             val piece = pieces[pieceIndex]
-            piece.placement = withAbsorbed(
+            val grown = withAbsorbed(
                 piece.placement, assign, pieceIndex, buried.holes, measureWidth, measureHeight, radius
             )
+            piece.placement = fit.acceptMask(piece.placement, grown)
         }
         val leftover = BooleanArray(buried.holes.size) { hole -> buried.holes[hole] && assign[hole] < 0 }
         coverHoles(plane, leftover, measureWidth, measureHeight, config, fit, pieces, correct, floor)
@@ -224,7 +232,8 @@ private fun mendSeams(
     pieces: MutableList<PlacedPiece>,
     floor: PieceFloor,
     measureWidth: Int,
-    measureHeight: Int
+    measureHeight: Int,
+    fit: ShapeFit
 ) {
     if (pieces.isEmpty() || plane.width < 1 || plane.height < 1) return
     val reach = (floor.shortOfShort * min(plane.width, plane.height)).toInt().coerceIn(2, 6)
@@ -248,7 +257,8 @@ private fun mendSeams(
     val measureReach = (reach * maxOf(measureWidth, measureHeight) / maxOf(plane.width, plane.height)).coerceAtLeast(reach)
     for (pieceIndex in pieces.indices) {
         val piece = pieces[pieceIndex]
-        piece.placement = withAbsorbed(piece.placement, wide, pieceIndex, open, measureWidth, measureHeight, measureReach)
+        val grown = withAbsorbed(piece.placement, wide, pieceIndex, open, measureWidth, measureHeight, measureReach)
+        piece.placement = fit.acceptMask(piece.placement, grown)
     }
 }
 
@@ -475,7 +485,7 @@ private fun swapIfBetter(
     fit.release(piece.placement)
     val alternate = fit.choose(piece.cut, index, piece.placement.tileIndex, commit = false)
     if (alternate == null) {
-        fit.hold(piece.placement)
+        fit.restore(piece.placement)
         return
     }
     val tone = paintTone(piece.cut, alternate, fit, correct, pull)
@@ -483,7 +493,7 @@ private fun swapIfBetter(
     val swapped = canvas.predictedError(piece.cut, tone[0], tone[1], tone[2])
     canvas.paint(piece.cut, piece.l, piece.a, piece.b)
     if (swapped + ACCEPT * maskArea(piece.cut) >= canvas.maskedError(piece.cut)) {
-        fit.hold(piece.placement)
+        fit.restore(piece.placement)
         return
     }
     fit.keep(alternate)
@@ -557,6 +567,62 @@ private fun faceStep(plane: LabPlane): Int {
     val longEdge = maxOf(plane.width, plane.height)
     return (longEdge * FACE_PX / REFERENCE_EDGE).toInt().coerceIn(4, 20)
 }
+
+/**
+ * Dropping a piece can uncover two copies of one source that now share an edge.
+ * Walk the finished stack and reseat or drop any copy that touches another.
+ */
+private fun untouchCopies(fit: ShapeFit, pieces: MutableList<PlacedPiece>) {
+    fit.syncContact(emptyList())
+    val kept = ArrayList<PlacedPiece>(pieces.size)
+    for (piece in pieces) {
+        if (separateCopy(fit, piece, kept.size)) kept.add(piece)
+    }
+    pieces.clear()
+    pieces.addAll(kept)
+}
+
+private fun separateCopy(fit: ShapeFit, piece: PlacedPiece, ordinal: Int): Boolean {
+    val mask = piece.placement.mask
+    val tile = piece.placement.tileIndex
+    if (mask == null || !fit.clashes(tile, mask)) {
+        fit.occupy(piece.placement)
+        return true
+    }
+    return reseatCopy(fit, piece, ordinal, tile)
+}
+
+private fun reseatCopy(fit: ShapeFit, piece: PlacedPiece, ordinal: Int, tile: Int): Boolean {
+    val cutMask = piece.cut.mask
+    if (!fit.clashes(tile, cutMask)) {
+        piece.placement = withMask(piece.placement, cutMask)
+        fit.occupy(piece.placement)
+        return true
+    }
+    val alternate = fit.choose(piece.cut, ordinal, tile, commit = true) ?: return false
+    piece.placement = alternate
+    return true
+}
+
+private fun withMask(placement: CutoutPlacement, mask: PieceMask) = CutoutPlacement(
+    placement.tileIndex,
+    placement.x,
+    placement.y,
+    placement.angleDegrees,
+    placement.scale,
+    placement.targetL,
+    placement.targetA,
+    placement.targetB,
+    placement.pinned,
+    mask,
+    placement.cropU,
+    placement.cropV,
+    placement.cropSpan,
+    placement.faceLeft,
+    placement.faceTop,
+    placement.faceRight,
+    placement.faceBottom
+)
 
 private fun cullHiddenFaces(pieces: MutableList<PlacedPiece>, width: Int, height: Int) {
     if (width <= 0 || height <= 0) return
