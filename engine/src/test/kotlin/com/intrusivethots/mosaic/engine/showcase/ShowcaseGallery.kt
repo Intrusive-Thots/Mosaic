@@ -237,7 +237,7 @@ private fun denseCollage(edge: Int) = currentCollage(edge, HybridStack.CUTOUTS, 
     )
 }
 
-private fun currentCollage(edge: Int, stack: HybridStack, pieces: Int) = MosaicConfig(
+internal fun currentCollage(edge: Int, stack: HybridStack, pieces: Int) = MosaicConfig(
     gridColumns = 48,
     linkAspectToGrid = true,
     renderMode = RenderMode.COLOR_CORRECTED,

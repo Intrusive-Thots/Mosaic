@@ -49,6 +49,19 @@ tasks.register<JavaExec>("showcase") {
     dependsOn(tasks.named("testClasses"))
 }
 
+tasks.register<JavaExec>("tune") {
+    group = "verification"
+    description = "Score cutout collage readability. Args via -PtuneEdge -PtunePieces -PtuneTheme."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.intrusivethots.mosaic.engine.showcase.TuneMainKt")
+    workingDir = rootProject.projectDir
+    val edge = (project.findProperty("tuneEdge") as String?) ?: "560"
+    val pieces = (project.findProperty("tunePieces") as String?) ?: "640"
+    val theme = (project.findProperty("tuneTheme") as String?) ?: "all"
+    args(edge, pieces, theme)
+    dependsOn(tasks.named("testClasses"))
+}
+
 tasks.register<JavaExec>("benchmark") {
     group = "verification"
     description = "Run photomosaic engine benchmarks and write engine/build/reports/benchmarks/results.md"

@@ -110,9 +110,10 @@ internal fun paintShapeRow(
     for (x in left..right) {
         val index = y * outputWidth + x
         if (locked != null && locked[index]) continue
+        val gradeScale = if (placement.scale >= BLOCKING_SCALE) BLOCK_GRADE else 1f
         val color = cutPixel(
             source, base, descriptor, frame, mask, config, field, tone,
-            x, y, outputWidth, outputHeight, turnCos, turnSin, lab, low, crossings
+            x, y, outputWidth, outputHeight, turnCos, turnSin, lab, low, crossings, gradeScale
         )
         if (color != 0) {
             stampCut(row, y, x, outputWidth, color, coverage, owners, owner)
@@ -222,7 +223,8 @@ private fun cutPixel(
     turnSin: Float,
     lab: FloatArray,
     low: FloatArray,
-    crossings: FloatArray?
+    crossings: FloatArray?,
+    gradeScale: Float
 ): Int {
     val nx = (x + 0.5f) / outputWidth
     val ny = (y + 0.5f) / outputHeight
@@ -234,7 +236,9 @@ private fun cutPixel(
     val sampled = sourceColor(source, descriptor, frame, mask, nx, ny, outputWidth, outputHeight, turnCos, turnSin)
     if ((sampled ushr 24) < 128) return 0
     val basePx = sourceColor(base, descriptor, frame, mask, nx, ny, outputWidth, outputHeight, turnCos, turnSin)
-    val painted = harmonize(sampled, basePx, field, tone, config, x, y, outputWidth, outputHeight, lab, low)
+    val painted = harmonize(
+        sampled, basePx, field, tone, config, x, y, outputWidth, outputHeight, lab, low, gradeScale
+    )
     return (painted and 0x00FFFFFF) or (cover shl 24)
 }
 
@@ -361,9 +365,10 @@ private fun harmonize(
     outputWidth: Int,
     outputHeight: Int,
     lab: FloatArray,
-    low: FloatArray
+    low: FloatArray,
+    gradeScale: Float
 ): Int {
-    val strength = config.colorMatchWeight
+    val strength = (config.colorMatchWeight * gradeScale).coerceIn(0f, 1f)
     if (tone == null || config.renderMode == RenderMode.ORIGINAL || strength <= 0f) return sampled
     OkLab.writeLab(sampled, lab, 0)
     val sharpL = lab[0]
@@ -511,6 +516,7 @@ private const val OPAQUE = 0xFF shl 24
 private const val FIELD_EDGE = 64
 private const val TONE_STEPS = 7
 private const val BLOCKING_SCALE = 0.055f
+private const val BLOCK_GRADE = 1.25f
 private const val BLOCK_DETAIL = 1f
 private const val DETAIL_KEEP = 1f
 private const val RIM_PAD = 10
