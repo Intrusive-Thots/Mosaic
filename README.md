@@ -162,9 +162,11 @@ The pictures below are separate showcases. `scripts/regenerate-showcase.py all` 
 
 Every franchise is both a target and a library. Team 7 is rebuilt from Rick and Morty stills. The Smiths are rebuilt from TMNT. The turtles are rebuilt from Naruto. Hank, Dale, Bill, and Boomhauer are rebuilt from Pokemon. Ash and Pikachu are rebuilt from King of the Hill. The URL lists are [docs/showcase/sources.tsv](docs/showcase/sources.tsv), [docs/showcase/rick-sources.tsv](docs/showcase/rick-sources.tsv), [docs/showcase/tmnt-sources.tsv](docs/showcase/tmnt-sources.tsv), [docs/showcase/koth-sources.tsv](docs/showcase/koth-sources.tsv), and [docs/showcase/pokemon-sources.tsv](docs/showcase/pokemon-sources.tsv). A flat border is flooded away. A character that already fills a clear frame stays. A transparent target, such as the TMNT group render, is composited on white before matching. Every placed piece is at least 4.5% of the short side and keeps a detected face from its source. The collage seed is 4 and the grid seed is 7. Color correction is 0.72 on the collage and 0.58 on the grid. Separate pieces is off.
 
-On the Pokemon library, 100 cutouts remain and 96 have a face, so 4 are excluded. The King of the Hill collage places 373 pieces, all of them on a face. Distance ΔE is 0.0958, SSIM 0.403, texture 0.948. Piece fidelity median is 0.848 and the 10th percentile is 0.744. The smallest visible short side is 4.56% of the short side, against a 4.5% floor. The dense pass places 361 pieces, ΔE 0.0953, SSIM 0.401, texture 0.951, fidelity 0.842 and 0.730. The picture is 1468×1633 because the alley still is portrait and the in-memory bitmap stays under 2.4 million pixels.
+These full-size numbers are the 2.1.0 engine. On the Pokemon library, 100 cutouts remain and 96 have a face, so 4 are excluded. The King of the Hill collage places 374 pieces, all of them on a face. Distance ΔE is 0.0954, SSIM 0.366, texture 0.936. Piece fidelity median is 0.835 and the 10th percentile is 0.735. The smallest visible short side is 4.56% of the short side, against a 4.5% floor. The dense pass places 384 pieces, ΔE 0.0974, SSIM 0.364, texture 0.936, fidelity 0.832 and 0.739. The picture is 1468×1633 because the alley still is portrait and the in-memory bitmap stays under 2.4 million pixels.
 
-On the King of the Hill library, 97 cutouts remain and 94 have a face, so 3 are excluded. The Ash and Pikachu collage places 567 pieces, all of them on a face. Distance ΔE is 0.1023, SSIM 0.605, texture 0.929. Piece fidelity median is 0.789 and the 10th percentile is 0.631. The smallest visible short side is 4.55%. The dense pass places 556 pieces, ΔE 0.1020, SSIM 0.600, texture 0.932, fidelity 0.795 and 0.658. The picture is 1680×945.
+On the King of the Hill library, 97 cutouts remain and 94 have a face, so 3 are excluded. The Ash and Pikachu collage places 525 pieces, all of them on a face. Distance ΔE is 0.0954, SSIM 0.602, texture 0.906. Piece fidelity median is 0.789 and the 10th percentile is 0.661. The smallest visible short side is 4.55%. The dense pass places 527 pieces, ΔE 0.0975, SSIM 0.588, texture 0.904, fidelity 0.794 and 0.641. The picture is 1680×945.
+
+On the Naruto library, 99 cutouts remain and 94 have a face, so 5 are excluded. The turtles, composited on white, place 386 pieces. Distance ΔE is 0.133, SSIM 0.461, texture 0.901. Piece fidelity median is 0.893 and the 10th percentile is 0.736. The smallest visible short side on the normal pass is 4.56%. The dense pass places 405 pieces, ΔE 0.138, SSIM 0.455, fidelity 0.899 and 0.730.
 
 ![King of the Hill, average-RGB selection, and OKLab selection](docs/images/koth-matching-comparison.png)
 
@@ -182,6 +184,14 @@ On the King of the Hill library, 97 cutouts remain and 94 have a face, so 3 are 
 
 ![Dense Pokemon collage](docs/images/pokemon-cutout-collage-dense.png)
 
+![Turtles, average-RGB selection, and OKLab selection](docs/images/tmnt-matching-comparison.png)
+
+![Target, coarser collage, current collage, and opaque photo collage](docs/images/tmnt-cutout-collage.png)
+
+![Target beside the TMNT collage](docs/images/tmnt-target-collage.png)
+
+![Dense TMNT collage](docs/images/tmnt-cutout-collage-dense.png)
+
 The current theme is Rick and Morty. The target is the Rick and Morty Wiki file *Smith family adult swim*: Rick and Morty standing together on a light background, Rick in the white coat with blue hair and Morty in the yellow shirt. The piece library is the TMNT stills. The Rick and Morty URL list, which supplies the target, is in [docs/showcase/rick-sources.tsv](docs/showcase/rick-sources.tsv). They are well-lit character pictures, including the Smith family and other bright figures, chosen for yellow, blue, white, and skin tones. A dark frame is not used. A flat border is flooded away to leave the subject. A bright picture that already fills the frame stays as a light-edged stamp. The collage seed is 4. The grid seed is 7. The grid color-corrects each tile toward its cell at strength 0.58. The collage color-corrects each shape toward its region at strength 0.72. These files sit beside the Naruto pictures; they do not replace them.
 
 ![Rick and Morty, average-RGB selection, and OKLab selection](docs/images/rick-matching-comparison.png)
@@ -198,7 +208,7 @@ Shape row: the target, then 160 large shapes at 8–20% scale, then the current 
 
 ![Dense collage](docs/images/rick-cutout-collage-dense.png)
 
-The dense collage is a full-size result on the same 4.5% floor, so it places 374 pieces rather than a field of slivers. The picture is 1680×945.
+The dense collage is a full-size result on the same 4.5% floor. This 2.1.0 render places 491 pieces. The picture is 1680×945.
 
 ![Full-size grid mosaic](docs/images/rick-showcase-grid.png)
 
