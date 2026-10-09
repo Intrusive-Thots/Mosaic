@@ -1,6 +1,19 @@
 package com.intrusivethots.mosaic.ui.components
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -9,6 +22,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import com.intrusivethots.mosaic.engine.config.AspectRatioPreset
 import com.intrusivethots.mosaic.engine.config.MosaicStyle
@@ -49,7 +64,7 @@ fun StudioScreen(
     var title by rememberSaveable { mutableStateOf("") }
     var showCrop by rememberSaveable { mutableStateOf(false) }
     var showExport by rememberSaveable { mutableStateOf(false) }
-    var advanced by rememberSaveable { mutableStateOf(false) }
+    var showEnlarge by rememberSaveable { mutableStateOf(false) }
     val cropSource = rememberRotatedBitmap(state.rawTargetBitmap ?: state.targetBitmap, state.config.targetQuarterTurns)
     PhoneStudioBody(
         state = state,
@@ -66,40 +81,31 @@ fun StudioScreen(
         onExport = { showExport = true },
         onCrop = { showCrop = true },
         onResetCrop = onResetCrop,
+        onEnlarge = { showEnlarge = true },
         advanced = {
-            TextButton(onClick = { advanced = !advanced }, modifier = Modifier.height(48.dp)) {
-                Text(if (advanced) "Hide advanced controls" else "Advanced controls")
-            }
-            if (advanced) {
-                MosaicControlsCard(
-                    config = state.config,
-                    onPreset = onPreset,
-                    onAspect = onAspect,
-                    onStyle = onStyle,
-                    onColumns = onColumns,
-                    onRows = onRows,
-                    onLink = onLink,
-                    onRepetition = onRepetition,
-                    onBlend = onBlend,
-                    onRenderMode = onRenderMode,
-                    onOutputMode = onOutputMode,
-                    onFit = onFit,
-                    onAi = onAi,
-                    onSegmentation = onSegmentation,
-                    targetWidth = state.targetBitmap?.width ?: 0,
-                    targetHeight = state.targetBitmap?.height ?: 0,
-                    onCellAspect = shapeEditor.onCellAspect,
-                    onLayout = shapeEditor.onLayout,
-                    onRotation = shapeEditor.onRotation,
-                    onScale = shapeEditor.onScale,
-                    onOutput = shapeEditor.onOutput,
-                    onKind = shapeEditor.onKind,
-                    onCollage = shapeEditor.onCollage
-                )
-            }
-            state.outputBitmap?.let {
-                TextButton(onClick = shapeEditor.onInspect, modifier = Modifier.height(48.dp)) { Text("Inspect") }
-            }
+            MosaicControlsCard(
+                config = state.config,
+                onAspect = onAspect,
+                onStyle = onStyle,
+                onColumns = onColumns,
+                onRows = onRows,
+                onLink = onLink,
+                onRepetition = onRepetition,
+                onBlend = onBlend,
+                onRenderMode = onRenderMode,
+                onOutputMode = onOutputMode,
+                onFit = onFit,
+                onAi = onAi,
+                onSegmentation = onSegmentation,
+                targetWidth = state.targetBitmap?.width ?: 0,
+                targetHeight = state.targetBitmap?.height ?: 0,
+                onCellAspect = shapeEditor.onCellAspect,
+                onLayout = shapeEditor.onLayout,
+                onRotation = shapeEditor.onRotation,
+                onScale = shapeEditor.onScale,
+                onOutput = shapeEditor.onOutput,
+                onCollage = shapeEditor.onCollage
+            )
         }
     )
     if (showCrop) {
@@ -117,4 +123,33 @@ fun StudioScreen(
             showExport = false
         }
     }
+    val enlarged = state.outputBitmap
+    if (showEnlarge && enlarged != null) {
+        EnlargeDialog(enlarged, onDismiss = { showEnlarge = false }, onExport = { showExport = true })
+    }
+}
+
+@Composable
+private fun EnlargeDialog(bitmap: Bitmap, onDismiss: () -> Unit, onExport: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            Button(onClick = onExport) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Save")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        text = {
+            Box(modifier = Modifier.fillMaxWidth().height(420.dp)) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Enlarged mosaic",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+    )
 }

@@ -2,85 +2,59 @@ package com.intrusivethots.mosaic.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
-import com.intrusivethots.mosaic.engine.config.OutputMode
 import com.intrusivethots.mosaic.engine.config.RenderMode
-import com.intrusivethots.mosaic.engine.config.TileFit
-import com.intrusivethots.mosaic.ui.theme.AccentPink
-import com.intrusivethots.mosaic.ui.theme.SurfaceVariantDark
-import com.intrusivethots.mosaic.ui.theme.TextSecondary
+import com.intrusivethots.mosaic.ui.design.ChoiceGroup
+import com.intrusivethots.mosaic.ui.design.SettingSlider
+import com.intrusivethots.mosaic.ui.design.SettingSwitch
 
-@OptIn(ExperimentalLayoutApi::class)
+/** Color treatment and tile repetition. These apply to both grid and collage output. */
 @Composable
 fun ColorControls(
     config: MosaicConfig,
     onBlend: (Float) -> Unit,
     onRenderMode: (RenderMode) -> Unit,
-    onOutputMode: (OutputMode) -> Unit,
-    onFit: (TileFit) -> Unit
+    onRepetition: (Boolean, Int) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Color strength: ${(config.colorMatchWeight * 100).toInt()}%", fontSize = 13.sp, color = TextSecondary)
-        Slider(
-            value = config.colorMatchWeight,
-            onValueChange = onBlend,
-            valueRange = 0f..1f,
-            colors = SliderDefaults.colors(thumbColor = AccentPink, activeTrackColor = AccentPink)
+    Column(Modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        ChoiceGroup(
+            title = "Tile coloring",
+            options = RenderMode.entries,
+            selected = config.renderMode,
+            label = { it.label },
+            onSelect = onRenderMode,
+            description = when (config.renderMode) {
+                RenderMode.ORIGINAL -> "Photos are placed untouched."
+                RenderMode.COLOR_CORRECTED -> "Shifts each photo toward the target color underneath it."
+                RenderMode.BLENDED -> "A lighter shift that keeps more of the photo's own color."
+            }
         )
-        Text("Render mode", fontSize = 13.sp, color = TextSecondary)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            RenderMode.entries.forEach { mode ->
-                FilterChip(
-                    selected = config.renderMode == mode,
-                    onClick = { onRenderMode(mode) },
-                    label = { Text(mode.label, fontSize = 12.sp) },
-                    colors = chipColors()
-                )
-            }
-        }
-        Text("Output resolution", fontSize = 13.sp, color = TextSecondary)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutputMode.entries.forEach { mode ->
-                FilterChip(
-                    selected = config.outputMode == mode,
-                    onClick = { onOutputMode(mode) },
-                    label = { Text(mode.label, fontSize = 12.sp) },
-                    colors = chipColors()
-                )
-            }
-        }
-        Text("Tile fit", fontSize = 13.sp, color = TextSecondary)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TileFit.entries.forEach { fit ->
-                FilterChip(
-                    selected = config.tileFit == fit,
-                    onClick = { onFit(fit) },
-                    label = { Text(fit.label, fontSize = 12.sp) },
-                    colors = chipColors()
-                )
-            }
-        }
+        SettingSlider(
+            label = "Correction strength",
+            valueText = "${(config.colorMatchWeight * 100).toInt()}%",
+            value = config.colorMatchWeight,
+            range = 0f..1f,
+            onChange = onBlend,
+            enabled = config.renderMode != RenderMode.ORIGINAL,
+            description = if (config.renderMode == RenderMode.ORIGINAL) "Not used when tiles are left original." else null
+        )
+        SettingSwitch(
+            title = "Allow repeated photos",
+            checked = config.allowTileRepetition,
+            onChange = { onRepetition(it, config.maxRepetitionDistance) },
+            description = "Turn off to use each photo at most once. Needs a large library."
+        )
+        SettingSlider(
+            label = "Repeat spacing",
+            valueText = if (config.maxRepetitionDistance == 0) "Off" else "${config.maxRepetitionDistance} cells",
+            value = config.maxRepetitionDistance.toFloat(),
+            range = 0f..8f,
+            steps = 7,
+            onChange = { onRepetition(config.allowTileRepetition, it.toInt()) },
+            description = "Keeps the same photo apart. High values can leave cells in the target color on flat areas."
+        )
     }
 }
-
-@Composable
-private fun chipColors() = FilterChipDefaults.filterChipColors(
-    selectedContainerColor = AccentPink,
-    selectedLabelColor = Color.White,
-    containerColor = SurfaceVariantDark,
-    labelColor = TextSecondary
-)
