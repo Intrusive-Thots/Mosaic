@@ -112,6 +112,6 @@ jobs:
           generate_release_notes: false
           body: |
             Debug build of the collage-tuning branch. Same-source copies may be flipped, rotated, and resized, and they must not touch. Target outlines are kept with edge subdivision and a light ink pass.
-          files: packages/app/build/outputs/apk/debug/app-debug.apk
+          files: packages/apk/debug/app-debug.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
