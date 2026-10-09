@@ -21,14 +21,15 @@ import kotlin.math.min
 
 /**
  * Scores the current cutout collage on the showcase themes and the synthetic portrait.
- * Args: edge pieces theme. Theme is portrait, naruto, rick, koth, pokemon, or all.
+ * Args: edge pieces theme. Theme is portrait, naruto, rick, tmnt, koth, pokemon, or all.
+ * Franchise themes are crossovers: each target is rebuilt from the next library.
  */
 fun main(args: Array<String>) = runBlocking {
     val edge = args.getOrNull(0)?.toIntOrNull() ?: 560
     val pieces = args.getOrNull(1)?.toIntOrNull() ?: 640
     val only = args.getOrNull(2)
     val themes = if (only.isNullOrBlank() || only == "all") {
-        listOf("portrait", "naruto", "rick", "koth", "pokemon")
+        listOf("portrait", "naruto", "rick", "tmnt", "koth", "pokemon")
     } else {
         listOf(only)
     }
@@ -134,17 +135,7 @@ private class LoadedTheme(
 
 private fun loadTheme(theme: String, edge: Int): LoadedTheme {
     if (theme == "portrait") return syntheticPortrait()
-    val library = when (theme) {
-        "naruto" -> loadShowcase(File("showcase-sources"), tileEdge = 256).fitted(edge)
-        "rick" -> loadShowcase(File("showcase-sources/rick"), tileEdge = 256).fitted(edge)
-        "koth" -> loadCrossover(
-            File("showcase-sources/koth"), File("showcase-sources/pokemon"), tileEdge = 256
-        ).fitted(edge)
-        "pokemon" -> loadCrossover(
-            File("showcase-sources/pokemon"), File("showcase-sources/koth"), tileEdge = 256
-        ).fitted(edge)
-        else -> error("Unknown theme $theme")
-    }
+    val library = loadThemedLibrary(theme, tileEdge = 256).fitted(edge)
     val tiles = library.cutouts.mapIndexed { index, image -> MemoryTileSource(image, "$theme-$index") }
     return LoadedTheme(library.target, tiles, null)
 }

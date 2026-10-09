@@ -108,6 +108,9 @@ class FacePlacementTest {
         val rick = libraryDir("showcase-sources/rick") ?: return
         assertCoverage("naruto", naruto)
         assertCoverage("rick", rick)
+        libraryDir("showcase-sources/tmnt")?.let { assertCoverage("tmnt", it) }
+        libraryDir("showcase-sources/koth")?.let { assertCoverage("koth", it) }
+        libraryDir("showcase-sources/pokemon")?.let { assertCoverage("pokemon", it) }
     }
 
     private fun assertCoverage(name: String, directory: File) {

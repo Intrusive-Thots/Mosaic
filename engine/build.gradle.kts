@@ -39,7 +39,7 @@ tasks.test {
 
 tasks.register<JavaExec>("showcase") {
     group = "verification"
-    description = "Rebuild showcase docs images. Pass -PshowcaseTheme=naruto, rick, koth, or pokemon."
+    description = "Rebuild showcase docs images. Pass -PshowcaseTheme=naruto, rick, tmnt, koth, or pokemon."
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("com.intrusivethots.mosaic.engine.showcase.ShowcaseMainKt")
     workingDir = rootProject.projectDir

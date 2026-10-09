@@ -11,29 +11,10 @@ fun main(args: Array<String>) = runBlocking {
         probeFaces(File(args.getOrNull(1) ?: error("probe needs a directory")))
         return@runBlocking
     }
-    val (library, prefix, message) = when (theme) {
-        "naruto" -> Triple(
-            loadShowcase(File("showcase-sources"), tileEdge = 320),
-            "",
-            "Wrote the Team 7 showcase into docs/images"
-        )
-        "rick" -> Triple(
-            loadShowcase(File("showcase-sources/rick"), tileEdge = 320),
-            "rick-",
-            "Wrote the Rick and Morty showcase into docs/images"
-        )
-        "koth" -> Triple(
-            loadCrossover(File("showcase-sources/koth"), File("showcase-sources/pokemon"), tileEdge = 320),
-            "koth-",
-            "Wrote the King of the Hill showcase from Pokemon pieces"
-        )
-        "pokemon" -> Triple(
-            loadCrossover(File("showcase-sources/pokemon"), File("showcase-sources/koth"), tileEdge = 320),
-            "pokemon-",
-            "Wrote the Pokemon showcase from King of the Hill pieces"
-        )
-        else -> error("Unknown showcase theme $theme")
-    }
+    val request = showcaseTheme(theme)
+    val library = loadThemedLibrary(theme, tileEdge = 320)
+    val prefix = request.prefix
+    val message = request.message
     println(
         "Showcase library: target ${library.target.width}×${library.target.height}, " +
             "${library.cutouts.size} cutouts, ${library.photos.size} photos"

@@ -59,3 +59,27 @@ Versus step 2, piece fidelity rose on portrait, Rick, King of the Hill, and Poke
 Also measured and reverted: sparing faces from the extra grade, grading medium pieces harder, easing the grade on small pieces, and raising the Balanced preset from 480 to 640 pieces. Medium and full small-piece changes traded fidelity for ΔE. 640 pieces at the Balanced grade of 0.65 helped Naruto and hurt King of the Hill and Pokemon.
 
 Tried and reverted in this session, before this keep: lighter paper rims (no 64 px change at this size), a coarser grade field, outline-only silhouettes, bilinear mask edges, honest grade matching, a wider candidate pool, a quieter torn contour, and smaller flat pieces. Each one moved Naruto’s ΔE or SSIM the wrong way.
+
+## 4. Crossover libraries, transparent targets on white
+
+Each demo target is rebuilt from another franchise: Team 7 from Rick and Morty, the Smiths from TMNT, the turtles from Naruto, Hank and the guys from Pokemon, and Ash and Pikachu from King of the Hill. King of the Hill and Pokemon were already crossed, so their numbers match step 3. Naruto and Rick moved because the piece library changed.
+
+The TMNT group render is a transparent PNG. Read as-is, the empty pixels are black, and the collage was matching a black field.
+
+| TMNT target | ΔE | SSIM | fidelity | p10 | coverage |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Transparent, read as black | 0.2287 | 0.3488 | 0.867 | 0.606 | 0.990 |
+| Composited on white | 0.1309 | 0.4616 | 0.765 | 0.601 | 0.985 |
+
+ΔE fell by 0.098 and SSIM rose by 0.113. The turtles read on white. Opaque targets are unchanged, because a picture with almost no clear pixels is returned as itself. Kept.
+
+Crossover baseline after that composite, same grade and rims as step 3:
+
+| Theme | Library | ΔE | SSIM | fidelity | p10 | coverage |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| portrait | synthetic | 0.0514 | 0.4891 | 0.929 | 0.659 | 0.990 |
+| naruto | Rick and Morty | 0.0929 | 0.6968 | 0.724 | 0.537 | 0.989 |
+| rick | TMNT | 0.0936 | 0.6047 | 0.707 | 0.512 | 0.991 |
+| tmnt | Naruto | 0.1309 | 0.4616 | 0.765 | 0.601 | 0.985 |
+| koth | Pokemon | 0.0928 | 0.4201 | 0.753 | 0.637 | 0.992 |
+| pokemon | King of the Hill | 0.0882 | 0.6166 | 0.715 | 0.487 | 0.990 |
