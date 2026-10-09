@@ -260,7 +260,7 @@ internal fun currentCollage(edge: Int, stack: HybridStack, pieces: Int) = Mosaic
         background = CollageBackground.MEAN_COLOR,
         shapeWeight = 0.45f,
         refineSteps = 8,
-        separatePieces = true,
+        separatePieces = false,
         style = CollageStyle.DENSE,
         stack = stack
     )

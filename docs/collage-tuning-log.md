@@ -42,4 +42,20 @@ Every theme’s 64 px read improved. Piece fidelity stayed within 0.004. Kept.
 
 ΔE improved on every theme versus step 1. SSIM improved on four themes and moved 0.0006 on Pokemon. Fidelity stayed within 0.003. Kept.
 
+## 3. Lighter edges
+
+Paper rims, used when Separate pieces is on, drop from alpha 150–200 and up to 3 px to alpha 84–108 and at most 2 px. The shadow is half as strong. The showcase collage also stops forcing Separate pieces, which matches the Dense style and the app default. Renders got faster because the rim is skipped in that mode.
+
+| Theme | ΔE | SSIM | fidelity | p10 | coverage |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| portrait | 0.0514 | 0.4891 | 0.929 | 0.659 | 0.990 |
+| naruto | 0.0825 | 0.7253 | 0.749 | 0.571 | 0.994 |
+| rick | 0.0704 | 0.6656 | 0.644 | 0.398 | 0.988 |
+| koth | 0.0928 | 0.4201 | 0.753 | 0.637 | 0.992 |
+| pokemon | 0.0882 | 0.6166 | 0.715 | 0.487 | 0.990 |
+
+Versus step 2, piece fidelity rose on portrait, Rick, King of the Hill, and Pokemon. The 64 px read stayed within 0.002. Kept.
+
+Also measured and reverted: sparing faces from the extra grade, grading medium pieces harder, easing the grade on small pieces, and raising the Balanced preset from 480 to 640 pieces. Medium and full small-piece changes traded fidelity for ΔE. 640 pieces at the Balanced grade of 0.65 helped Naruto and hurt King of the Hill and Pokemon.
+
 Tried and reverted in this session, before this keep: lighter paper rims (no 64 px change at this size), a coarser grade field, outline-only silhouettes, bilinear mask edges, honest grade matching, a wider candidate pool, a quieter torn contour, and smaller flat pieces. Each one moved Naruto’s ΔE or SSIM the wrong way.

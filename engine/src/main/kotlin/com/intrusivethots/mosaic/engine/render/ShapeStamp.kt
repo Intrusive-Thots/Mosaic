@@ -155,7 +155,7 @@ private fun paperEdge(outline: PieceOutline, mask: PieceMask, ny: Float, outputW
         outlineCrossings(outline, ny + (slot - depth) / outputHeight.toFloat())
     }
     val shadow = outlineCrossings(outline, ny - depth / outputHeight.toFloat())
-    val alpha = if (depth <= 1) 150 else 200
+    val alpha = if (depth <= 1) 84 else 108
     return PaperEdge(near, shadow, alpha, depth)
 }
 
@@ -170,8 +170,8 @@ private fun fiberColor(edge: PaperEdge, outputWidth: Int, x: Int, y: Int): Int {
 
 /** Rim width follows the piece. A small piece stays near one pixel so the thumbnail is not a white mesh. */
 private fun rimDepth(outputWidth: Int, piecePx: Float): Int {
-    val cap = (outputWidth * 2.4f / RIM_REFERENCE).roundToInt().coerceIn(1, 3)
-    return (piecePx / 40f).roundToInt().coerceIn(1, cap)
+    val cap = (outputWidth * 1.1f / RIM_REFERENCE).roundToInt().coerceIn(1, 2)
+    return (piecePx / 80f).roundToInt().coerceIn(1, cap)
 }
 
 private fun inFace(placement: CutoutPlacement, nx: Float, ny: Float): Boolean {
@@ -519,8 +519,8 @@ private const val BLOCKING_SCALE = 0.055f
 private const val BLOCK_GRADE = 1.4f
 private const val BLOCK_DETAIL = 1f
 private const val DETAIL_KEEP = 1f
-private const val RIM_PAD = 10
+private const val RIM_PAD = 4
 private const val RIM_REFERENCE = 1680f
 private const val GRADE_EDGE = 40
 private const val SOLID = 200
-private const val SHADOW = 72 shl 24
+private const val SHADOW = 36 shl 24
