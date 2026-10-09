@@ -92,12 +92,20 @@ jobs:
 
   publish-debug-apk:
     name: Publish debug APK
-    needs: [engine, android]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/cursor/collage-tuning-loop-fcee'
+    needs: [engine, android, instrumented]
+    if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/cursor/collage-tuning-loop-fcee' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - name: Prerelease tag for this version
+        run: |
+          version=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)
+          echo "version=$version" >> "$GITHUB_ENV"
+          echo "tag=v${version}-dev" >> "$GITHUB_ENV"
+      - name: Point the prerelease tag at this commit
+        run: git push --force origin "$GITHUB_SHA:refs/tags/${tag}"
       - uses: actions/download-artifact@v4
         with:
           name: android-packages
@@ -105,13 +113,14 @@ jobs:
       - name: Attach the debug APK to the prerelease
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.1.0-dev
-          name: Mosaic 2.1.0-dev
+          tag_name: ${{ env.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Mosaic ${{ env.version }}-dev
           prerelease: true
           fail_on_unmatched_files: true
           generate_release_notes: false
           body: |
-            Debug build of the collage-tuning branch. Same-source copies may be flipped, rotated, and resized, and they must not touch. Target outlines are kept with edge subdivision and a light ink pass.
+            Debug build of ${{ github.sha }}. Same-source copies may be flipped, rotated, and resized, and they must not touch. Target outlines are kept with edge subdivision and a light ink pass.
           files: packages/apk/debug/app-debug.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -355,7 +355,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs engine tests, detekt, benchmark
 
 If `KEYSTORE_BASE64` is empty, the workflow logs that and still builds unsigned artifacts. Upload the AAB to Play Console from a machine that has the real upload key. This repository does not contain one.
 
-A green push of `cursor/collage-tuning-loop-fcee` publishes the debug APK as a prerelease. The tag is `v2.1.0-dev`. The file is `app-debug.apk`.
+A push of `cursor/collage-tuning-loop-fcee` publishes the debug APK only after the engine, Android, and instrumented jobs all succeed. The tag is `v` plus `versionName` plus `-dev`, so a version bump gets a new tag. The workflow force-updates that tag to the commit that was built. For 2.1.0 the file is `app-debug.apk` at `v2.1.0-dev`.
 
 https://github.com/Intrusive-Thots/Mosaic/releases/download/v2.1.0-dev/app-debug.apk
 
