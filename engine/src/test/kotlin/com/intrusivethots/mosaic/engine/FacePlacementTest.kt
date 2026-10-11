@@ -8,6 +8,7 @@ import com.intrusivethots.mosaic.engine.match.FaceBox
 import com.intrusivethots.mosaic.engine.match.ownedFaceFraction
 import com.intrusivethots.mosaic.engine.render.MemoryRowSink
 import com.intrusivethots.mosaic.engine.render.MosaicRenderer
+import com.intrusivethots.mosaic.engine.render.solidPaper
 import com.intrusivethots.mosaic.engine.tile.MemoryTileSource
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -72,7 +73,7 @@ class FacePlacementTest {
     @Test
     fun everyPlacedPieceShowsAFace() = runBlocking {
         val tiles = (0 until 8).map { index ->
-            MemoryTileSource(shapedCutout(index, 8, 28), "face-$index")
+            MemoryTileSource(solidPaper(shapedCutout(index, 8, 28)), "face-$index")
         }
         val config = collageConfig(pieceCount = 12, seed = 4)
         val target = scene(72, 48)

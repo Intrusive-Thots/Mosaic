@@ -2,7 +2,6 @@ package com.intrusivethots.mosaic.ui.screens
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -110,9 +109,6 @@ private fun HomeScreen(viewModel: MainViewModel, sources: LibrarySources) {
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         if (success) cameraUri?.let(viewModel::setTargetImage)
     }
-    val targetPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) viewModel.setTargetImage(uri)
-    }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         containerColor = DeepBackground,
@@ -135,9 +131,7 @@ private fun HomeScreen(viewModel: MainViewModel, sources: LibrarySources) {
             when (tab) {
                 0 -> StudioScreen(
                     state = state,
-                    onGallery = {
-                        targetPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                    },
+                    onGallery = sources.pickTarget,
                     onCamera = {
                         val dir = File(context.cacheDir, "camera").apply { mkdirs() }
                         val file = File(dir, "target_${System.currentTimeMillis()}.jpg")

@@ -10,7 +10,9 @@ import com.intrusivethots.mosaic.core.GenerationLoader
 import com.intrusivethots.mosaic.core.PixelHistory
 import com.intrusivethots.mosaic.core.SubjectSegmenterHelper
 import com.intrusivethots.mosaic.core.generationFailureMessage
+import com.intrusivethots.mosaic.core.readyMadeSticker
 import com.intrusivethots.mosaic.core.skippedImageMessage
+import com.intrusivethots.mosaic.engine.image.stickerUsage
 import com.intrusivethots.mosaic.core.tightenSubject
 import com.intrusivethots.mosaic.core.toBitmap
 import com.intrusivethots.mosaic.core.toPixelImage
@@ -519,10 +521,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     suspend fun extractStampsFromUri(uri: Uri): List<Bitmap> {
         val bitmap = repository.loadBitmapFromUri(uri, maxDimension = 1024) ?: return emptyList()
+        val sticker = readyMadeSticker(bitmap, 512)
+        if (sticker != null) {
+            if (sticker !== bitmap && !bitmap.isRecycled) bitmap.recycle()
+            return listOf(sticker)
+        }
         return try {
             SubjectSegmenterHelper.extractSubjects(bitmap)
         } finally {
-            bitmap.recycle()
+            if (!bitmap.isRecycled) bitmap.recycle()
         }
     }
 
@@ -583,6 +590,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 if (!acceptFinishedPlan(run, epoch, result)) return@launch
+                val stickerNote = stickerUsage(
+                    result.descriptors.map { it.alphaCoverage },
+                    usedTileIndexes(result.plan)
+                )
+                if (stickerNote != null) _events.tryEmit(UiEvent.Message(stickerNote.message()))
                 if (preview) {
                     val bitmap = result.image?.toBitmap()
                     _state.update {
@@ -747,6 +759,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun publishHistory() {
         _state.update { it.copy(canUndoEdit = history.canUndo, canRedoEdit = history.canRedo) }
+    }
+
+    private fun usedTileIndexes(plan: MosaicPlan): Set<Int> {
+        val fromPieces = plan.placements.map { it.tileIndex }.filter { it >= 0 }
+        if (fromPieces.isNotEmpty()) return fromPieces.toSet()
+        return plan.assignments.filter { it >= 0 }.toSet()
     }
 
     private fun dropPlan() {

@@ -2,7 +2,7 @@
 
 Measurements use the showcase cutout settings (`currentCollage`: color grade 0.72, dense style, separate pieces off) at a 560 px long edge and 640 requested pieces. Distance ΔE and SSIM are the 64 px read. Fidelity is piece-content SSIM, median and 10th percentile. Coverage is the union of piece masks on a 160 px grid. Touch is the number of same-source pairs whose visible regions share an edge or a corner. Edge F1 compares 64 px Sobel maps and allows a one-pixel miss.
 
-Grid golden `d1a220dd54d8b766667c236a44c91e01e3d53afd6c4a9393adb7e23d6fade175`. Collage golden `65776d15ebfb1f1de2bd1a1565f9b493e1c0794b12312749d279863429e12946`. Shaped-grid golden `4e9a75d488fd2c1b26231d1b3fed192cd7c380b5ea491423816771807d1e969b`. Those three moved in step 5, with the spacing rule, edge subdivision, and outline ink.
+Grid golden `d1a220dd54d8b766667c236a44c91e01e3d53afd6c4a9393adb7e23d6fade175`. Collage golden `ddd4ba2e95e4936ffc970b5c4d0828408918cc01ff6c36be35fe788412fa8254`. Shaped-grid golden `4e9a75d488fd2c1b26231d1b3fed192cd7c380b5ea491423816771807d1e969b`. The collage golden moved again when a transparent PNG with no detected face is placed as the whole sticker. The grid and shaped-grid goldens are unchanged.
 
 ## Baseline
 

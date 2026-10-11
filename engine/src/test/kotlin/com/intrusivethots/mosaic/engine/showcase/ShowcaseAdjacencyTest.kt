@@ -27,9 +27,7 @@ class ShowcaseAdjacencyTest {
     fun everyShowcaseThemeHasZeroAdjacencies() = runBlocking {
         var ran = 0
         for (theme in SHOWCASE_THEMES) {
-            val targetDir = showcaseDir(theme.targetDir) ?: continue
-            val tileDir = showcaseDir(theme.tileDir) ?: continue
-            val library = loadCrossover(targetDir, tileDir, tileEdge = 96)
+            val library = themedLibrary(theme) ?: continue
             val target = library.target.downscaleLongEdge(160)
             val tiles = library.cutouts.mapIndexed { index, image -> MemoryTileSource(image, "${theme.name}-$index") }
             val collage = GenerationCoordinator().generate(target, tiles, collageOf(theme.name), preview = true)
@@ -49,6 +47,16 @@ class ShowcaseAdjacencyTest {
         if (ran == 0) println("ADJ showcase sources absent; skipped")
         if (ran > 0) assertEquals(SHOWCASE_THEMES.size, ran, "ran $ran of ${SHOWCASE_THEMES.size}")
     }
+}
+
+private fun themedLibrary(theme: ShowcaseTheme): ShowcaseLibrary? {
+    if (theme.stickers) {
+        val dir = showcaseDir(theme.tileDir) ?: return null
+        return loadStickerLibrary(dir, 96)
+    }
+    val targetDir = showcaseDir(theme.targetDir) ?: return null
+    val tileDir = showcaseDir(theme.tileDir) ?: return null
+    return loadCrossover(targetDir, tileDir, tileEdge = 96)
 }
 
 private fun showcaseDir(relative: String): File? {

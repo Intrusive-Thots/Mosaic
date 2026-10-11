@@ -39,7 +39,8 @@ internal class ShapeFit(
     private val outputWidth: Int,
     private val outputHeight: Int,
     private val faces: List<List<FaceBox>> = emptyList(),
-    private val requireFaces: Boolean = true
+    private val requireFaces: Boolean = true,
+    private val stickers: BooleanArray = BooleanArray(0)
 ) {
     private val handful = HandfulPenalty()
     private val reserved = ArrayList<FaceBox>()
@@ -70,8 +71,7 @@ internal class ShapeFit(
             config.candidateCount,
             tracker.touchRadius,
             { tile ->
-                tile !in swatches.indices || refused(tile) ||
-                    (requireFaces && faces.getOrNull(tile).isNullOrEmpty())
+                tile !in swatches.indices || refused(tile) || facelessPhoto(tile)
             },
             topK,
             probes
@@ -123,29 +123,58 @@ internal class ShapeFit(
     /**
      * A library with no detected face still builds the collage from color.
      * Face lock stays on when at least one source has a face.
+     * An alpha cutout with no face is the whole sticker, not a dropped photo.
      */
     private fun offer(cut: ShapeCut, tile: Int, ordinal: Int, solve: Boolean, stackFaces: Boolean): Offer? {
         val library = faces.getOrNull(tile).orEmpty()
-        if (requireFaces && library.isEmpty()) return null
+        val whole = stickerWithoutFace(tile, library)
+        if (requireFaces && library.isEmpty() && !whole) return null
         val penalty = tracker.penalty(tile) + jitter(config.randomSeed, ordinal, tile)
-        val edge = sourceEdges.getOrElse(tile) { maxOf(outputWidth, outputHeight) }
-        val piecePx = piecePixels(cut, outputWidth, outputHeight)
-        var span = cropSpan(cut, edge, outputWidth, outputHeight)
-        if (requireFaces) {
-            val need = library.minOf { minimumSpan(it, piecePx, edge) }
-            if (need > span) span = need.coerceAtMost(1f)
-        }
+        val span = if (whole) 1f else spanFor(cut, tile, library)
         val scored = scoreTile(swatches[tile], cut, UPRIGHT, span, penalty, solve, config.collage.shapeWeight)
         comparisons++
-        if (!requireFaces) {
-            return Offer(
-                scored.score + handful.cost(tile, cut.centerX, cut.centerY, scored.u, scored.v),
-                scored.u,
-                scored.v,
-                span,
-                FaceBox(-1f, -1f, -1f, -1f)
-            )
-        }
+        if (!requireFaces || whole) return plainOffer(scored, tile, cut, span)
+        return faceOffer(cut, tile, scored, span, library, stackFaces)
+    }
+
+    /** Cartoon art often has no detector hit. The sticker is still a legal piece. */
+    private fun facelessPhoto(tile: Int): Boolean {
+        if (!requireFaces || stickerAt(tile)) return false
+        return faces.getOrNull(tile).isNullOrEmpty()
+    }
+
+    private fun stickerWithoutFace(tile: Int, library: List<FaceBox>): Boolean {
+        return stickerAt(tile) && library.isEmpty()
+    }
+
+    private fun stickerAt(tile: Int): Boolean = tile in stickers.indices && stickers[tile]
+
+    private fun spanFor(cut: ShapeCut, tile: Int, library: List<FaceBox>): Float {
+        val edge = sourceEdges.getOrElse(tile) { maxOf(outputWidth, outputHeight) }
+        var span = cropSpan(cut, edge, outputWidth, outputHeight)
+        if (!requireFaces || library.isEmpty()) return span
+        val piecePx = piecePixels(cut, outputWidth, outputHeight)
+        val need = library.minOf { minimumSpan(it, piecePx, edge) }
+        if (need > span) span = need.coerceAtMost(1f)
+        return span
+    }
+
+    private fun plainOffer(scored: Scored, tile: Int, cut: ShapeCut, span: Float) = Offer(
+        scored.score + handful.cost(tile, cut.centerX, cut.centerY, scored.u, scored.v),
+        scored.u,
+        scored.v,
+        span,
+        FaceBox(-1f, -1f, -1f, -1f)
+    )
+
+    private fun faceOffer(
+        cut: ShapeCut,
+        tile: Int,
+        scored: Scored,
+        span: Float,
+        library: List<FaceBox>,
+        stackFaces: Boolean
+    ): Offer? {
         val (spanU, spanV) = placedSpans(cut, tile, span)
         val seated = seatOnFace(cut, scored, spanU, spanV, library, stackFaces) ?: return null
         return Offer(

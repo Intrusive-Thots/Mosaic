@@ -79,6 +79,13 @@ internal class GenerationLoader(
                 skipped++
                 return@forEachIndexed
             }
+            val sticker = readyMadeSticker(large, edgeFor(snapshot))
+            if (sticker != null) {
+                owned += sticker
+                sources += BitmapTileSource(bitmapIdentity(sticker, "sticker-$index"), sticker)
+                if (!large.isRecycled) large.recycle()
+                return@forEachIndexed
+            }
             try {
                 val subjects = SubjectSegmenterHelper.extractForLibrary(large, originals, snapshot.config.segmentation)
                 subjects.forEachIndexed { subjectIndex, subject ->
@@ -98,13 +105,17 @@ internal class GenerationLoader(
         return skipped
     }
 
+    private fun edgeFor(snapshot: MosaicUiState): Int {
+        return snapshot.config.descriptorMaxEdge.coerceAtLeast(96).coerceAtMost(128)
+    }
+
     private suspend fun appendPhotos(
         snapshot: MosaicUiState,
         sources: MutableList<TileSource>,
         owned: MutableList<Bitmap>,
         onLoad: (String, Float) -> Unit
     ): Int {
-        val edge = snapshot.config.descriptorMaxEdge.coerceAtLeast(96).coerceAtMost(128)
+        val edge = edgeFor(snapshot)
         var skipped = 0
         snapshot.tileUris.forEachIndexed { index, uri ->
             coroutineContext.ensureActive()

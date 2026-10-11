@@ -24,7 +24,8 @@ internal data class ShowcaseTheme(
     val prefix: String,
     val targetDir: String,
     val tileDir: String,
-    val message: String
+    val message: String,
+    val stickers: Boolean = false
 )
 
 internal val SHOWCASE_THEMES = listOf(
@@ -62,6 +63,14 @@ internal val SHOWCASE_THEMES = listOf(
         "showcase-sources/pokemon",
         "showcase-sources/koth",
         "Wrote Ash and Pikachu rebuilt from King of the Hill pieces into docs/images"
+    ),
+    ShowcaseTheme(
+        "gen1",
+        "gen1-",
+        "showcase-sources/gen1",
+        "showcase-sources/gen1",
+        "Wrote Pikachu rebuilt from the other Gen 1 stickers into docs/images",
+        stickers = true
     )
 )
 
@@ -70,7 +79,21 @@ internal fun showcaseTheme(name: String): ShowcaseTheme =
 
 internal fun loadThemedLibrary(theme: String, tileEdge: Int): ShowcaseLibrary {
     val request = showcaseTheme(theme)
+    if (request.stickers) return loadStickerLibrary(File(request.tileDir), tileEdge)
     return loadCrossover(File(request.targetDir), File(request.tileDir), tileEdge)
+}
+
+/** Official-art stickers keep their alpha. The target is composited on white for matching. */
+internal fun loadStickerLibrary(directory: File, tileEdge: Int): ShowcaseLibrary {
+    val targetFile = directory.listFiles { file -> file.isFile && file.name.startsWith("000-") }?.firstOrNull()
+        ?: error("No target in ${directory.path}. Run scripts/regenerate-showcase.py.")
+    val tileFiles = directory.listFiles { file ->
+        file.isFile && file.name[0].isDigit() && !file.name.startsWith("000-")
+    }?.sortedBy { it.name }.orEmpty()
+    require(tileFiles.size >= 8) { "No sticker images in ${directory.path}. Run scripts/regenerate-showcase.py." }
+    val target = onWhite(readImage(targetFile).downscaleLongEdge(4096))
+    val stickers = tileFiles.map { file -> readImage(file).downscaleLongEdge(tileEdge) }
+    return ShowcaseLibrary(target, stickers, stickers.map { onWhite(it) })
 }
 
 internal fun loadShowcase(directory: File, tileEdge: Int): ShowcaseLibrary {

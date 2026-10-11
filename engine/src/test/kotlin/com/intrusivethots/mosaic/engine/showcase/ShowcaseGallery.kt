@@ -180,7 +180,7 @@ private fun reportFaces(prefix: String, images: List<PixelImage>) {
         if (CartoonFaceFinder.find(image).isNotEmpty()) detected++
     }
     val name = if (prefix.isEmpty()) "naruto" else prefix.removeSuffix("-")
-    println("SHOWCASE $name faces detected $detected excluded ${images.size - detected} of ${images.size}")
+    println("SHOWCASE $name faces detected $detected no-face ${images.size - detected} of ${images.size}")
 }
 
 private suspend fun renderLegacy(

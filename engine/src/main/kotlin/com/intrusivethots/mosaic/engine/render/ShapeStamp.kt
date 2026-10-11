@@ -235,6 +235,8 @@ private fun cutPixel(
     if (cover < 12) return 0
     val sampled = sourceColor(source, descriptor, frame, mask, nx, ny, outputWidth, outputHeight, turnCos, turnSin)
     if ((sampled ushr 24) < 128) return 0
+    cover = coverWithSource(cover, sampled)
+    if (cover < 12) return 0
     val basePx = sourceColor(base, descriptor, frame, mask, nx, ny, outputWidth, outputHeight, turnCos, turnSin)
     val painted = harmonize(
         sampled, basePx, field, tone, config, x, y, outputWidth, outputHeight, lab, low, gradeScale
@@ -290,7 +292,15 @@ private fun sourceColor(
         frame, descriptor, source.width, source.height, mask,
         outputWidth, outputHeight, nx * outputWidth, ny * outputHeight, turnCos, turnSin
     )
-    return source.sampleBilinear(sx, sy) or OPAQUE
+    val sampled = source.sampleBilinear(sx, sy)
+    return if ((sampled ushr 24) >= 250) sampled or OPAQUE else sampled
+}
+
+/** A sticker's own alpha is the mask. A filled photo stays at the cut's cover. */
+private fun coverWithSource(cover: Int, sampled: Int): Int {
+    val sourceAlpha = sampled ushr 24
+    if (sourceAlpha >= 250) return cover
+    return cover * sourceAlpha / 255
 }
 
 /**

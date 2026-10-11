@@ -3,6 +3,7 @@ package com.intrusivethots.mosaic.engine.match
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.RenderMode
 import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.image.alphaSticker
 import com.intrusivethots.mosaic.engine.index.ProbeCounter
 import com.intrusivethots.mosaic.engine.index.TileIndex
 import com.intrusivethots.mosaic.engine.index.TopK
@@ -35,11 +36,12 @@ internal suspend fun assembleCollage(
     val edges = IntArray(thumbnails.size) { index -> maxOf(thumbnails[index].width, thumbnails[index].height) }
     val library = faceLibrary(thumbnails, descriptors, knownFaces)
     val requireFaces = library.any { it.isNotEmpty() }
+    val stickers = BooleanArray(thumbnails.size) { index -> alphaSticker(thumbnails[index]) }
     val fit = ShapeFit(
         swatches, index, config,
         UsageTracker(descriptors.size, config.maxRepetitionDistance, config.allowTileRepetition, config.usageBalanceWeight),
         probes, TopK(config.candidateCount.coerceAtLeast(1)),
-        edges, target.width, target.height, library, requireFaces
+        edges, target.width, target.height, library, requireFaces, stickers
     )
     fit.seedReserved(reserved)
     val correct = config.renderMode != RenderMode.ORIGINAL && config.colorMatchWeight > 0f
@@ -547,20 +549,25 @@ private fun faceLibrary(
     knownFaces: List<List<FaceBox>>?
 ): List<List<FaceBox>> {
     return List(thumbnails.size) { index ->
-        val given = knownFaces?.getOrNull(index).orEmpty()
-        val boxes = if (given.isNotEmpty()) {
-            given
-        } else {
-            try {
-                CartoonFaceFinder.find(thumbnails[index])
-            } catch (failure: Exception) {
-                emptyList()
-            } catch (oom: OutOfMemoryError) {
-                emptyList()
-            }
-        }
-        boxes.mapNotNull { faceInContent(it, descriptors.getOrNull(index)) }
+        facesFor(thumbnails[index], descriptors.getOrNull(index), knownFaces?.getOrNull(index).orEmpty())
     }
+}
+
+/**
+ * A supplied face still seats the crop. An alpha sticker with no supplied face is the whole
+ * artwork: a cartoon detector hit must not zoom it or drop it.
+ */
+private fun facesFor(image: PixelImage, descriptor: TileDescriptor?, given: List<FaceBox>): List<FaceBox> {
+    if (given.isNotEmpty()) return given.mapNotNull { faceInContent(it, descriptor) }
+    if (alphaSticker(image)) return emptyList()
+    val boxes = try {
+        CartoonFaceFinder.find(image)
+    } catch (failure: Exception) {
+        emptyList()
+    } catch (oom: OutOfMemoryError) {
+        emptyList()
+    }
+    return boxes.mapNotNull { faceInContent(it, descriptor) }
 }
 
 private fun faceStep(plane: LabPlane): Int {
