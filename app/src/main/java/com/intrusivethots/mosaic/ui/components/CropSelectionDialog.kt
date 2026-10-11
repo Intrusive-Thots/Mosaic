@@ -60,6 +60,7 @@ fun CropSelectionDialog(bitmap: Bitmap, onDismiss: () -> Unit, onApplyCrop: (Flo
                     fontSize = 13.sp
                 )
                 AspectPresets(session.aspect, session::chooseAspect)
+                Text(cropAspectHelp(session.aspect), color = TextSecondary, fontSize = 13.sp)
                 CropFrame(bitmap, image, session, Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp))
                 CropActions(onReset = session::reset, onCancel = onDismiss, onApply = { session.applyTo(onApplyCrop) })
             }

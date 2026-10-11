@@ -367,9 +367,11 @@ GitHub Actions (`.github/workflows/ci.yml`) runs engine tests, detekt, benchmark
 
 If `KEYSTORE_BASE64` is empty, the workflow logs that and still builds unsigned artifacts. Upload the AAB to Play Console from a machine that has the real upload key. This repository does not contain one.
 
-A push of `cursor/collage-tuning-loop-fcee` publishes the debug APK only after the engine, Android, and instrumented jobs all succeed. The tag is `v` plus `versionName` plus `-dev`, so a version bump gets a new tag. The workflow force-updates that tag to the commit that was built. For 2.4.1 the file is `app-debug.apk` at `v2.4.1-dev`.
+A push of `cursor/collage-tuning-loop-fcee` publishes the debug APK only after the engine, Android, and instrumented jobs all succeed. The tag is `v` plus `versionName` plus `-dev`, so a version bump gets a new tag. The workflow force-updates that tag to the commit that was built. For 2.4.2 the file is `app-debug.apk` at `v2.4.2-dev`.
 
-https://github.com/Intrusive-Thots/Mosaic/releases/download/v2.4.1-dev/app-debug.apk
+https://github.com/Intrusive-Thots/Mosaic/releases/download/v2.4.2-dev/app-debug.apk
+
+Version 2.4.2 (versionCode 8). Every setting and slider has a line that says what moving it changes. Quality, collage style, layering, aspect, output size, pattern, cell shape, and layout describe the option that is selected. Output size says pixels per cell on a grid and the long-edge floor on a collage. Smallest piece, minimum piece, and largest piece say which sizes the collage uses. Rotation range and overlap say that cutouts stay upright and that the closer color wins where pieces cover, and that moving those two leaves the picture the same. Repeat spacing says it is a cell gap on the grid, and that collage copies stay apart at the corners at every value.
 
 Version 2.4.1 (versionCode 7). Cutout collage on a phone no longer dies with "Not enough memory" while the preview is a field of speckle. Search and the piece-floor check run on a small working image, color and outline fields stay small, and the full picture is painted in rows at a size that fits the phone's memory class. Library photos are decoded at the piece size and released after their colors are copied. If that is still too big, the build finishes at a smaller size and says so. The result preview is the collage itself, large enough that each piece reads as a photo.
 

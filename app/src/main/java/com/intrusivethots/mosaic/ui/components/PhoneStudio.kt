@@ -170,12 +170,15 @@ fun PhoneStudioBody(
 
 @Composable
 private fun ModeSwitch(state: MosaicUiState, shapeEditor: ShapeEditor) {
-    SegmentedToggle(
-        options = MosaicKind.entries,
-        selected = state.config.mosaicKind,
-        label = { if (it == MosaicKind.GRID) "Grid mosaic" else "Cutout collage" },
-        onSelect = shapeEditor.onKind
-    )
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        SegmentedToggle(
+            options = MosaicKind.entries,
+            selected = state.config.mosaicKind,
+            label = { if (it == MosaicKind.GRID) "Grid mosaic" else "Cutout collage" },
+            onSelect = shapeEditor.onKind
+        )
+        HintText(modeHelp(state.config.mosaicKind))
+    }
 }
 
 /** Step 3: how the result should look. Style and stack only apply when a collage is involved. */
@@ -183,13 +186,14 @@ private fun ModeSwitch(state: MosaicUiState, shapeEditor: ShapeEditor) {
 private fun LookCard(state: MosaicUiState, shapeEditor: ShapeEditor, onPreset: (QualityPreset) -> Unit) {
     val config = state.config
     MosaicCard {
-        CardHeader("Look and quality", "Presets set every detail control below.", step = 3)
+        CardHeader("Look and quality", "A preset replaces the grid size, piece count, coloring, and output size.", step = 3)
         ChoiceGroup(
             title = "Quality",
             options = QualityPreset.entries.filter { it != QualityPreset.CUSTOM },
             selected = config.qualityPreset,
             label = { it.label },
-            onSelect = onPreset
+            onSelect = onPreset,
+            description = qualityHelp(config.qualityPreset)
         )
         if (config.mosaicKind == MosaicKind.COLLAGE || config.collage.stack != HybridStack.GRID) {
             HorizontalDivider(color = OutlineSubtle)
@@ -198,14 +202,16 @@ private fun LookCard(state: MosaicUiState, shapeEditor: ShapeEditor, onPreset: (
                 options = CollageStyle.entries,
                 selected = config.collage.style,
                 label = { it.label },
-                onSelect = shapeEditor.onCollageStyle
+                onSelect = shapeEditor.onCollageStyle,
+                description = collageStyleHelp(config.collage.style)
             )
             ChoiceGroup(
                 title = "Layering",
                 options = HybridStack.entries,
                 selected = config.effectiveStack(),
                 label = { it.label },
-                onSelect = shapeEditor.onStack
+                onSelect = shapeEditor.onStack,
+                description = layeringHelp(config.effectiveStack())
             )
         }
     }

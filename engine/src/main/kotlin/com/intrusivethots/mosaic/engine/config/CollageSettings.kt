@@ -11,8 +11,10 @@ enum class CollageBackground(val label: String) {
 }
 
 /**
- * Freeform collage. Scales are the cutout's long side as a fraction of the target's short side.
- * Rotation is any angle inside ±[rotationRangeDegrees], chosen per placement.
+ * Freeform collage. [minScale] is the fill-in piece's long side as a fraction of the short side,
+ * and it cannot go below [minPiece]. [maxScale], [rotationRangeDegrees], and [overlap] are stored
+ * with the project. Placement leaves every piece upright, and the closer color wins where pieces
+ * cover the same spot. Those three fields do not change that.
  */
 data class CollageSettings(
     val pieceCount: Int = 480,

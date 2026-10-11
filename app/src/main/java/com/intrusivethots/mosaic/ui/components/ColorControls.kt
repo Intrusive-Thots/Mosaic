@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.RenderMode
+import com.intrusivethots.mosaic.engine.config.effectiveStack
 import com.intrusivethots.mosaic.ui.design.ChoiceGroup
 import com.intrusivethots.mosaic.ui.design.SettingSlider
 import com.intrusivethots.mosaic.ui.design.SettingSwitch
@@ -26,11 +27,7 @@ fun ColorControls(
             selected = config.renderMode,
             label = { it.label },
             onSelect = onRenderMode,
-            description = when (config.renderMode) {
-                RenderMode.ORIGINAL -> "Photos are placed untouched."
-                RenderMode.COLOR_CORRECTED -> "Shifts each photo toward the target color underneath it."
-                RenderMode.BLENDED -> "A lighter shift that keeps more of the photo's own color."
-            }
+            description = coloringHelp(config.renderMode)
         )
         SettingSlider(
             label = "Correction strength",
@@ -39,13 +36,13 @@ fun ColorControls(
             range = 0f..1f,
             onChange = onBlend,
             enabled = config.renderMode != RenderMode.ORIGINAL,
-            description = if (config.renderMode == RenderMode.ORIGINAL) "Not used when tiles are left original." else null
+            description = correctionHelp(config.renderMode)
         )
         SettingSwitch(
             title = "Allow repeated photos",
             checked = config.allowTileRepetition,
             onChange = { onRepetition(it, config.maxRepetitionDistance) },
-            description = "Turn off to use each photo at most once. Needs a large library. Flips, rotations, and resizes still count as that photo."
+            description = REPEATS_HELP
         )
         SettingSlider(
             label = "Repeat spacing",
@@ -54,7 +51,7 @@ fun ColorControls(
             range = 0f..8f,
             steps = 7,
             onChange = { onRepetition(config.allowTileRepetition, it.toInt()) },
-            description = "Copies of one photo may be flipped, rotated, and resized, and the photo may repeat. Copies must not touch, including corners."
+            description = repeatSpacingHelp(config.allowTileRepetition, config.effectiveStack())
         )
     }
 }
