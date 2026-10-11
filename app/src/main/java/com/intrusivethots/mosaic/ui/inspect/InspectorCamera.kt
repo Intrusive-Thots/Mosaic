@@ -41,6 +41,12 @@ class InspectorCamera {
         if (viewWidth > 1f) fit()
     }
 
+    /** Fits a picture that has never been positioned, so a drag is not collapsed into one pixel. */
+    fun ensureFitted() {
+        val untouched = scale == 1f && offsetX == 0f && offsetY == 0f
+        if (untouched && imageWidth > 1 && viewWidth > imageWidth) fit()
+    }
+
     fun fit() {
         val fitScale = fitScale()
         scale = fitScale

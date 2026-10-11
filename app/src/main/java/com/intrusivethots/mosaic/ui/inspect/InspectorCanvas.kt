@@ -85,7 +85,10 @@ internal fun InspectorCanvas(
                             val image = camera.screenToImage(point.x, point.y)
                             onLongPress(image.x / camera.imageWidth, image.y / camera.imageHeight)
                         },
-                        onSelectStart = { point -> draft = listOf(camera.screenToImage(point.x, point.y)) },
+                        onSelectStart = { point ->
+                            camera.ensureFitted()
+                            draft = listOf(camera.screenToImage(point.x, point.y))
+                        },
                         onSelectMove = { point ->
                             draft = extendDraft(tool, draft, camera.screenToImage(point.x, point.y))
                         },

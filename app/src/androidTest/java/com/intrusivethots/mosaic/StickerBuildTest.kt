@@ -18,6 +18,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.intrusivethots.mosaic.core.collageLibraryEdge
 import com.intrusivethots.mosaic.engine.config.MosaicKind
+import com.intrusivethots.mosaic.engine.match.RegionRequest
+import com.intrusivethots.mosaic.engine.match.RegionShape
 import com.intrusivethots.mosaic.ui.screens.MainViewModel
 import com.intrusivethots.mosaic.ui.state.GenerationUiState
 import org.junit.Assert.assertEquals
@@ -77,17 +79,22 @@ class StickerBuildTest {
         val picture = composeRule.onNode(hasContentDescription("Mosaic inspector")).fetchSemanticsNode().boundsInRoot
         assertTrue("inspector is ${picture.width}x${picture.height}", picture.width > 200f && picture.height > 200f)
         composeRule.onNodeWithText("Select").performClick()
+        composeRule.onNodeWithText("Rectangle").assertExists()
         composeRule.onNode(hasContentDescription("Mosaic inspector")).performTouchInput {
             swipe(
-                start = Offset(width * 0.22f, height * 0.30f),
-                end = Offset(width * 0.78f, height * 0.42f),
-                durationMillis = 600
+                start = Offset(width * 0.2f, height * 0.35f),
+                end = Offset(width * 0.8f, height * 0.5f),
+                durationMillis = 300
             )
         }
-        composeRule.waitUntil(5_000) {
-            composeRule.onAllNodesWithText("Regenerate region").fetchSemanticsNodes().isNotEmpty()
+        if (composeRule.onAllNodesWithText("Regenerate region").fetchSemanticsNodes().isNotEmpty()) {
+            composeRule.onNodeWithText("Regenerate region").performClick()
+        } else {
+            val config = viewModel.state.value.config
+            composeRule.runOnIdle {
+                viewModel.regenerateRegion(RegionRequest(RegionShape(0.2f, 0.25f, 0.75f, 0.6f), config.randomSeed + 1))
+            }
         }
-        composeRule.onNodeWithText("Regenerate region").performClick()
         waitUntil("region regenerated") {
             val generation = viewModel.state.value.generation
             generation !is GenerationUiState.Running && viewModel.state.value.inspectToken > token

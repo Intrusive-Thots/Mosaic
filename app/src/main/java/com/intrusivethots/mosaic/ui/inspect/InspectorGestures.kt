@@ -1,13 +1,13 @@
 package com.intrusivethots.mosaic.ui.inspect
 
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.util.VelocityTracker
@@ -28,11 +28,10 @@ internal suspend fun PointerInputScope.detectInspectorGestures(
     onSelectEnd: () -> Unit
 ) {
     awaitEachGesture {
-        val down = awaitPointerEvent(PointerEventPass.Initial)
-        val start = down.changes.firstOrNull()?.position ?: return@awaitEachGesture
+        val down = awaitFirstDown(requireUnconsumed = false)
         trackGesture(
-            start,
-            down.changes.first().uptimeMillis,
+            down.position,
+            down.uptimeMillis,
             selecting,
             onPanZoom,
             onFling,
