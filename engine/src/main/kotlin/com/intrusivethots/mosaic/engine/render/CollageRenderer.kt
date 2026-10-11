@@ -161,15 +161,25 @@ class CollageRenderer {
         useTarget: Boolean,
         mean: Int
     ) {
-        if (!useTarget || target == null) {
+        if (target == null) {
             row.fill(mean)
             return
         }
+        val hint = if (useTarget) 1f else GAP_HINT
         for (x in 0 until width) {
             val sx = (x + 0.5f) * target.width / width - 0.5f
             val sy = (y + 0.5f) * target.height / height - 0.5f
-            row[x] = target.sampleBilinear(sx, sy) or OPAQUE
+            val sample = target.sampleBilinear(sx, sy) or OPAQUE
+            row[x] = if (hint >= 1f) sample else mixOpaque(mean, sample, hint)
         }
+    }
+
+    private fun mixOpaque(base: Int, sample: Int, amount: Float): Int {
+        val keep = 1f - amount
+        val red = (((base ushr 16) and 255) * keep + ((sample ushr 16) and 255) * amount).toInt().coerceIn(0, 255)
+        val green = (((base ushr 8) and 255) * keep + ((sample ushr 8) and 255) * amount).toInt().coerceIn(0, 255)
+        val blue = ((base and 255) * keep + (sample and 255) * amount).toInt().coerceIn(0, 255)
+        return (0xFF shl 24) or (red shl 16) or (green shl 8) or blue
     }
 
     internal fun paintShadow(row: IntArray, y: Int, sprite: Sprite, width: Int) {
@@ -322,6 +332,7 @@ class CollageRenderer {
     companion object {
         private const val OPAQUE = 0xFF shl 24
         private const val OPAQUE_MASK = OPAQUE
+        private const val GAP_HINT = 0.34f
         private const val SHADOW_SHIFT = 2
         private const val SHADOW_ALPHA = 70
         private const val OUTLINE = 0x1C140E

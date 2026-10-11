@@ -2,7 +2,7 @@
 
 Measurements use the showcase cutout settings (`currentCollage`: color grade 0.72, dense style, separate pieces off) at a 560 px long edge and 640 requested pieces. Distance ΔE and SSIM are the 64 px read. Fidelity is piece-content SSIM, median and 10th percentile. Coverage is the union of piece masks on a 160 px grid. Touch is the number of same-source pairs whose visible regions share an edge or a corner. Edge F1 compares 64 px Sobel maps and allows a one-pixel miss.
 
-Grid golden `d1a220dd54d8b766667c236a44c91e01e3d53afd6c4a9393adb7e23d6fade175`. Collage golden `ddd4ba2e95e4936ffc970b5c4d0828408918cc01ff6c36be35fe788412fa8254`. Shaped-grid golden `4e9a75d488fd2c1b26231d1b3fed192cd7c380b5ea491423816771807d1e969b`. The collage golden moved again when a transparent PNG with no detected face is placed as the whole sticker. The grid and shaped-grid goldens are unchanged.
+Grid golden `d1a220dd54d8b766667c236a44c91e01e3d53afd6c4a9393adb7e23d6fade175`. Collage golden `85053792cc9f8fcb056e8649fddca20a83e0a7e6b4c80596eab907c0a517db0c`. Shaped-grid golden `4e9a75d488fd2c1b26231d1b3fed192cd7c380b5ea491423816771807d1e969b`. The collage golden moved when mean-color gaps take on a third of the local target color. The grid and shaped-grid goldens are unchanged.
 
 ## Baseline
 
@@ -104,3 +104,16 @@ Uniform grids double along the target's outlines. A coarse block splits when its
 Touch is 0 on every theme. Before the final repair the same renders had 8–15 touching pairs, because a dropped piece had been the only thing between two copies. Reuse is 36–59 sources. Versus section 4, ΔE rose by 0.002–0.006. SSIM rose on Rick (+0.024) and TMNT (+0.023) and fell on the portrait (−0.029), Naruto (−0.028), and King of the Hill (−0.026). Piece fidelity stayed within 0.02. Coverage stayed above 0.95. Edge F1 is 0.80–0.87.
 
 Kept. The spacing rule is required, and the outline scores are the new gate. The 300 px thumbs still read as the characters: the portrait face and flower, Team 7 from Rick and Morty stills, the Smiths from TMNT, the turtles on white, the alley group from Pokemon, and Ash with Pikachu from King of the Hill. Face crops keep the eye and hair lines. A light halo remains on some cuts. Random grid seeds place 64 cells from 6 sources with max reuse 16 and zero touches. Collage seeds place 19 copies with max reuse 6 and zero touches. A denser color-corrected portrait places 62 copies with max reuse 10 and zero touches.
+
+## 6. Local color in the gaps
+
+Mean-color gaps were a flat average, so a sticker's clear pixels and the seams between pieces sat on one color. Those pixels now mix 34% of the target color at that spot into the average. The Target photo background is unchanged. Pieces stay uniformly scaled. Same-source copies still cannot touch.
+
+| Theme | ΔE | SSIM | fidelity | p10 | coverage | touch | edge F1 | chamfer |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| portrait before | 0.0556 | 0.4598 | 0.930 | 0.682 | 0.973 | 0 | 0.853 | 1.67 |
+| portrait after | 0.0547 | 0.4658 | 0.931 | 0.681 | 0.973 | 0 | 0.861 | 1.68 |
+| gen1 before | 0.0878 | 0.5551 | 0.140 | 0.000 | 0.976 | 0 | 0.867 | 0.86 |
+| gen1 after | 0.0838 | 0.5745 | 0.118 | 0.000 | 0.976 | 0 | 0.876 | 0.84 |
+
+Portrait ΔE fell by 0.0009 and SSIM rose by 0.006. Piece fidelity stayed within 0.001. Gen 1 Pikachu, rebuilt from the other 150 stickers at 560 px, moved ΔE from 0.0878 to 0.0838 and SSIM from 0.5551 to 0.5745. Sticker piece fidelity fell from 0.140 to 0.118 because a semi-transparent edge is now composited on local color. Coverage and touch did not change. Kept. The collage golden moved. The grid goldens did not.
