@@ -167,21 +167,13 @@ internal class DriveViewModel(application: Application) : AndroidViewModel(appli
 
     fun toggle(id: String, single: Boolean = false) {
         _state.update { state ->
-            val selected = when {
-                single && id in state.selected -> emptySet()
-                single -> setOf(id)
-                id in state.selected -> state.selected - id
-                else -> state.selected + id
-            }
-            state.copy(selected = selected)
+            state.copy(selected = driveSelection(state.selected, imageIds(state), id, single))
         }
     }
 
     fun selectAll() {
-        val images = _state.value.entries.filter { it.image }.map { it.id }.toSet()
         _state.update { state ->
-            val selected = if (images.isNotEmpty() && state.selected.containsAll(images)) emptySet() else images
-            state.copy(selected = selected)
+            state.copy(selected = driveSelection(state.selected, imageIds(state), null, single = false))
         }
     }
 
@@ -244,6 +236,17 @@ internal class DriveViewModel(application: Application) : AndroidViewModel(appli
 
     private suspend fun showBrowser(export: Boolean) {
         _state.update { it.copy(browsing = true, exporting = export) }
+        val saved = lastDriveFolder()
+        if (saved != null) {
+            try {
+                load(saved.first, saved.second, listOf(DriveCrumb(DRIVE_ROOT, "My Drive")), append = false)
+                return
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: DriveFailure) {
+                forgetDriveFolder()
+            }
+        }
         load(DRIVE_ROOT, "My Drive", emptyList(), append = false)
     }
 
@@ -265,8 +268,35 @@ internal class DriveViewModel(application: Application) : AndroidViewModel(appli
                 selected = if (append) state.selected else emptySet()
             )
         }
+        if (!append) rememberDriveFolder(id, name)
         refreshThumbs()
     }
+
+    private fun lastDriveFolder(): Pair<String, String>? {
+        val prefs = getApplication<Application>().getSharedPreferences(FOLDER_PREFS, android.content.Context.MODE_PRIVATE)
+        val id = prefs.getString(DRIVE_FOLDER_ID, null) ?: return null
+        val name = prefs.getString(DRIVE_FOLDER_NAME, null) ?: return null
+        if (id == DRIVE_ROOT) return null
+        return id to name
+    }
+
+    private fun rememberDriveFolder(id: String, name: String) {
+        getApplication<Application>().getSharedPreferences(FOLDER_PREFS, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString(DRIVE_FOLDER_ID, id)
+            .putString(DRIVE_FOLDER_NAME, name)
+            .apply()
+    }
+
+    private fun forgetDriveFolder() {
+        getApplication<Application>().getSharedPreferences(FOLDER_PREFS, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .remove(DRIVE_FOLDER_ID)
+            .remove(DRIVE_FOLDER_NAME)
+            .apply()
+    }
+
+    private fun imageIds(state: DriveUiState): Set<String> = state.entries.filter { it.image }.map { it.id }.toSet()
 
     private suspend fun refreshThumbs() {
         val images = _state.value.entries.filter { it.image && it.thumbnailLink.isNotBlank() }.take(THUMB_CAP)
@@ -404,5 +434,8 @@ internal class DriveViewModel(application: Application) : AndroidViewModel(appli
 
     private companion object {
         const val THUMB_CAP = 200
+        const val FOLDER_PREFS = "mosaic_settings"
+        const val DRIVE_FOLDER_ID = "driveFolderId"
+        const val DRIVE_FOLDER_NAME = "driveFolderName"
     }
 }

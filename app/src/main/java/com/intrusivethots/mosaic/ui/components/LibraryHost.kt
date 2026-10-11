@@ -35,6 +35,8 @@ import com.intrusivethots.mosaic.drive.OpenPersistableTree
 import com.intrusivethots.mosaic.drive.FolderListing
 import com.intrusivethots.mosaic.drive.OpenPersistableDocument
 import com.intrusivethots.mosaic.drive.listTreeImages
+import com.intrusivethots.mosaic.drive.rememberFolder
+import com.intrusivethots.mosaic.drive.savedFolder
 import com.intrusivethots.mosaic.drive.copyFileToUri
 import com.intrusivethots.mosaic.drive.keepReadPermission
 import com.intrusivethots.mosaic.drive.keepWritePermission
@@ -51,6 +53,8 @@ private enum class LibraryTarget { TILES, STAMPS, PICTURE }
 @Composable
 fun LibraryHost(main: MainViewModel, content: @Composable (LibrarySources) -> Unit) {
     val drive: DriveViewModel = viewModel()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val driveState by drive.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     var sheet by remember { mutableStateOf(false) }
@@ -100,6 +104,7 @@ fun LibraryHost(main: MainViewModel, content: @Composable (LibrarySources) -> Un
             if (sheet) {
                 SourceSheet(
                     drive = driveState,
+                    hasLastFolder = savedFolder(context) != null,
                     onDismiss = { sheet = false },
                     onPhotos = {
                         sheet = false
@@ -115,7 +120,12 @@ fun LibraryHost(main: MainViewModel, content: @Composable (LibrarySources) -> Un
                         if (target == LibraryTarget.PICTURE) launchers.document.launch(arrayOf("image/*"))
                         else launchers.files.launch(arrayOf("image/*"))
                     },
-                    onFolder = { sheet = false; launchers.folder.launch(null) },
+                    onFolder = {
+                        sheet = false
+                        val saved = savedFolder(context)
+                        if (saved != null) readFolder(context, scope, snackbar, saved) { folder = it }
+                        else launchers.folder.launch(null)
+                    },
                     onDrive = { sheet = false; drive.openLibrary() }
                 )
             }
@@ -134,6 +144,10 @@ fun LibraryHost(main: MainViewModel, content: @Composable (LibrarySources) -> Un
                     images = listing.images,
                     single = target == LibraryTarget.PICTURE,
                     onDismiss = { folder = null },
+                    onChangeFolder = {
+                        folder = null
+                        launchers.folder.launch(savedFolder(context))
+                    },
                     onConfirm = { uris ->
                         folder = null
                         picked.value(uris)
@@ -252,6 +266,7 @@ private fun readFolder(
         listing.images.forEach { keepReadPermission(context, it.uri) }
         if (listing.images.isEmpty()) snackbar.showSnackbar("No photos were found in that folder.")
         else {
+            rememberFolder(context, uri)
             if (listing.truncated) {
                 snackbar.showSnackbar("That folder has more photos than this list. Open a smaller folder for the rest.")
             }

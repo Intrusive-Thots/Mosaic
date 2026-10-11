@@ -99,11 +99,16 @@ internal fun InspectorCanvas(
             drawFrame(camera, TileFrame(images.base, images.tiles))
             drawRegion(camera, shape, draft, tool)
         }
-        images.error?.let { message ->
+        val status = when {
+            images.error != null -> images.error
+            images.base == null -> "Opening the mosaic…"
+            else -> null
+        }
+        status?.let { message ->
             Text(
                 text = message,
                 color = TextPrimary,
-                modifier = Modifier.align(Alignment.Center).semantics { contentDescription = "Inspector error" }
+                modifier = Modifier.align(Alignment.Center).semantics { contentDescription = "Inspector status" }
             )
         }
     }
@@ -128,7 +133,11 @@ private fun InspectLoading(
             decoded?.let { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
             return@LaunchedEffect
         }
-        if (decoded == null) images.error = "The mosaic could not be shown." else images.base = decoded
+        if (decoded == null || decoder.width <= 0) {
+            images.error = "The mosaic could not be shown."
+        } else {
+            images.base = decoded
+        }
     }
     LaunchedEffect(camera.scale, camera.offsetX, camera.offsetY, camera.viewWidth, camera.viewHeight) {
         delay(TILE_DEBOUNCE_MS)

@@ -57,7 +57,8 @@ internal fun FolderGrid(
     images: List<FolderImage>,
     single: Boolean,
     onDismiss: () -> Unit,
-    onConfirm: (List<Uri>) -> Unit
+    onConfirm: (List<Uri>) -> Unit,
+    onChangeFolder: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var selected by remember(images) { mutableStateOf(emptySet<Uri>()) }
@@ -90,6 +91,11 @@ internal fun FolderGrid(
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = AccentPink)
                 ) { Text(if (single) "Use as picture" else "Add selected") }
+                if (onChangeFolder != null) {
+                    TextButton(onClick = onChangeFolder, modifier = Modifier.fillMaxWidth()) {
+                        Text("Change folder", color = AccentPurple)
+                    }
+                }
                 TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
                     Text("Cancel", color = AccentPurple)
                 }

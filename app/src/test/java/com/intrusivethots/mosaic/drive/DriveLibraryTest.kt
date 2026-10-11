@@ -51,6 +51,18 @@ class DriveLibraryTest {
     }
 
     @Test
+    fun driveSelectionTogglesOneImageAndAllImages() {
+        val images = setOf("a", "b")
+        val one = driveSelection(emptySet(), images, "a", single = false)
+        assertEquals(setOf("a"), one)
+        val both = driveSelection(one, images, null, single = false)
+        assertEquals(images, both)
+        assertEquals(emptySet<String>(), driveSelection(both, images, null, single = false))
+        assertEquals(setOf("b"), driveSelection(setOf("a"), images, "b", single = true))
+        assertEquals(emptySet<String>(), driveSelection(setOf("b"), images, "b", single = true))
+    }
+
+    @Test
     fun libraryImagesSkipSvgAndAcceptPhotos() {
         assertFalse(isLibraryImage("image/svg+xml", "icon.svg"))
         assertTrue(isLibraryImage("image/jpeg", "a"))

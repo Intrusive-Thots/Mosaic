@@ -1,6 +1,7 @@
 package com.intrusivethots.mosaic.ui.screens
 
 import android.graphics.Bitmap
+import com.intrusivethots.mosaic.core.BuildClock
 import com.intrusivethots.mosaic.core.GenerationLoader
 import com.intrusivethots.mosaic.core.PixelHistory
 import com.intrusivethots.mosaic.core.RegionEdit
@@ -53,6 +54,7 @@ internal class MosaicInspector(
     private val bindJob: (Job) -> Unit,
     private val isCurrent: (Int) -> Boolean
 ) {
+    private val clock = BuildClock()
     fun open() {
         val snapshot = state.value
         val full = snapshot.fullImagePath?.let { File(it) }?.takeIf { snapshot.hasFullRender && it.exists() }
@@ -93,6 +95,7 @@ internal class MosaicInspector(
         }
         val epoch = arm(previous)
         val run = beginRun()
+        clock.reset()
         val job = scope.launch {
             val outcome = edit(snapshot, previous, request, run, epoch)
             if (isCurrent(run) && outcome != null) commit(previous, epoch, outcome)
@@ -182,7 +185,8 @@ internal class MosaicInspector(
     }
 
     private fun showProgress(fraction: Float, label: String) {
-        state.update { it.copy(generation = GenerationUiState.Running(GenerationStage.RENDERING, fraction, label)) }
+        val eta = clock.eta(GenerationStage.RENDERING, fraction)
+        state.update { it.copy(generation = GenerationUiState.Running(GenerationStage.RENDERING, fraction, label, eta)) }
     }
 
     private fun stop(run: Int, epoch: Int, message: String?) {

@@ -6,7 +6,9 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.intrusivethots.mosaic.cache.BitmapLruCache
+import com.intrusivethots.mosaic.core.BuildClock
 import com.intrusivethots.mosaic.core.GenerationLoader
+import com.intrusivethots.mosaic.core.PreviewShelf
 import com.intrusivethots.mosaic.core.PixelHistory
 import com.intrusivethots.mosaic.core.SubjectSegmenterHelper
 import com.intrusivethots.mosaic.core.generationFailureMessage
@@ -100,6 +102,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var strictRestore = false
     private var planEdit: com.intrusivethots.mosaic.engine.coord.PlanEdit? = null
     private var tileCount: Int = 0
+    private val buildClock = BuildClock()
+    private val previews = PreviewShelf(viewModelScope)
     private val inspector = MosaicInspector(
         repository = repository,
         loader = libraryLoader,
@@ -479,6 +483,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancelGeneration() {
         generationJob?.cancel()
+        _events.tryEmit(UiEvent.Message("Build cancelled."))
     }
 
     fun exportToGallery(title: String) {
@@ -543,6 +548,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         generationJob?.cancel()
         val run = ++runSerial
+        buildClock.reset()
         generationJob = viewModelScope.launch {
             val strict = strictRestore
             strictRestore = false
@@ -596,7 +602,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 if (stickerNote != null) _events.tryEmit(UiEvent.Message(stickerNote.message()))
                 if (preview) {
-                    val bitmap = result.image?.toBitmap()
+                    val bitmap = previews.offer(result.image?.toBitmap(), System.currentTimeMillis(), force = true)
                     _state.update {
                         it.copy(
                             previewBitmap = bitmap,
@@ -680,9 +686,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             targetQuarterTurns = config.targetQuarterTurns,
             tileRotations = encodeTileRotations(snapshot.tileUris.map { it.toString() }, snapshot.tileQuarterTurns)
         )
+        previews.release()
         _state.update {
             it.copy(
                 displayBitmap = display,
+                previewBitmap = null,
                 hasFullRender = true,
                 fullImagePath = saved.fullImagePath,
                 generation = GenerationUiState.Complete,
@@ -698,10 +706,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun publish(stage: GenerationStage, fraction: Float, label: String, preview: Bitmap? = null) {
+        val shown = if (preview == null) null else previews.offer(preview, System.currentTimeMillis())
+        val eta = buildClock.eta(stage, fraction)
         _state.update { state ->
             state.copy(
-                generation = GenerationUiState.Running(stage, fraction, label),
-                previewBitmap = preview ?: state.previewBitmap,
+                generation = GenerationUiState.Running(stage, fraction, label, eta),
+                previewBitmap = shown ?: state.previewBitmap,
                 displayBitmap = if (preview != null) null else state.displayBitmap,
                 hasFullRender = if (preview != null) false else state.hasFullRender
             )

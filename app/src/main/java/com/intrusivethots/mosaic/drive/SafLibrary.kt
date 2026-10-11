@@ -31,6 +31,22 @@ internal class CreatePersistableDocument(mime: String) : ActivityResultContracts
     }
 }
 
+internal fun savedFolder(context: Context): Uri? {
+    val raw = context.getSharedPreferences(FOLDER_PREFS, Context.MODE_PRIVATE).getString(LAST_FOLDER, null) ?: return null
+    val uri = Uri.parse(raw)
+    val granted = context.contentResolver.persistedUriPermissions.any { permission ->
+        permission.isReadPermission && permission.uri == uri
+    }
+    return if (granted) uri else null
+}
+
+internal fun rememberFolder(context: Context, uri: Uri) {
+    context.getSharedPreferences(FOLDER_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putString(LAST_FOLDER, uri.toString())
+        .apply()
+}
+
 internal fun keepReadPermission(context: Context, uri: Uri) {
     try {
         context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -94,3 +110,6 @@ internal fun copyFileToUri(context: Context, file: File, dest: Uri): Boolean {
 private fun readFlags(): Int {
     return Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
 }
+
+private const val FOLDER_PREFS = "mosaic_settings"
+private const val LAST_FOLDER = "lastFolder"

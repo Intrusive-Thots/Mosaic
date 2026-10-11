@@ -5,6 +5,7 @@ import android.net.Uri
 import com.intrusivethots.mosaic.cache.BitmapLruCache
 import com.intrusivethots.mosaic.data.ProjectRepository
 import com.intrusivethots.mosaic.engine.config.MosaicKind
+import com.intrusivethots.mosaic.engine.config.effectiveStack
 import com.intrusivethots.mosaic.engine.tile.TileIdentity
 import com.intrusivethots.mosaic.engine.tile.TileSource
 import com.intrusivethots.mosaic.ui.state.MosaicUiState
@@ -115,7 +116,8 @@ internal class GenerationLoader(
         owned: MutableList<Bitmap>,
         onLoad: (String, Float) -> Unit
     ): Int {
-        val edge = edgeFor(snapshot)
+        val collage = snapshot.config.effectiveStack().usesCollage()
+        val edge = if (collage) collageLibraryEdge(snapshot.tileUris.size) else edgeFor(snapshot)
         var skipped = 0
         snapshot.tileUris.forEachIndexed { index, uri ->
             coroutineContext.ensureActive()

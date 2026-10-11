@@ -63,6 +63,7 @@ import com.intrusivethots.mosaic.ui.theme.TextSecondary
 @Composable
 internal fun SourceSheet(
     drive: DriveUiState,
+    hasLastFolder: Boolean = false,
     onDismiss: () -> Unit,
     onPhotos: () -> Unit,
     onImages: () -> Unit,
@@ -79,7 +80,16 @@ internal fun SourceSheet(
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (files) {
                     SourceButton("Images", "Pick one or more image files", onImages)
-                    SourceButton("A folder", "Browse thumbnails and choose any subset", onFolder)
+                    SourceButton(
+                        "A folder",
+                        if (hasLastFolder) "Opens the last folder you used" else "Browse thumbnails and choose any subset",
+                        onFolder
+                    )
+                    Text(
+                        "Transparent PNGs stay stickers. Pick any subset, or one image as the picture.",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
                 } else {
                     SourceButton("Photos on this phone", "Camera roll and photo apps", onPhotos)
                     SourceButton("Files and folders", "The system picker, including Google Drive", { files = true })
@@ -175,7 +185,14 @@ internal fun DriveBrowser(
                 if (state.error.isNotBlank()) {
                     Text(state.error, color = androidx.compose.material3.MaterialTheme.colorScheme.error, fontSize = 13.sp)
                 }
-                DriveEntryGrid(state, thumbs, drive, single, Modifier.weight(1f).fillMaxWidth())
+                DriveThumbGrid(
+                    entries = state.entries,
+                    selected = state.selected,
+                    thumbs = thumbs,
+                    onEntry = { entry -> if (entry.folder) drive.open(entry) else drive.toggle(entry.id, single) },
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    emptyMessage = if (state.busy) "" else "This folder has no files."
+                )
                 DriveBrowserActions(state, drive, stampCap, single, pinned, onAdded)
             }
         }
@@ -197,15 +214,20 @@ private fun DriveBrowserHeader(state: DriveUiState, drive: DriveViewModel) {
 }
 
 @Composable
-private fun DriveEntryGrid(
-    state: DriveUiState,
+internal fun DriveThumbGrid(
+    entries: List<DriveEntry>,
+    selected: Set<String>,
     thumbs: Map<String, Bitmap>,
-    drive: DriveViewModel,
-    single: Boolean,
-    modifier: Modifier
+    onEntry: (DriveEntry) -> Unit,
+    modifier: Modifier = Modifier,
+    emptyMessage: String = "This folder has no files."
 ) {
-    if (state.entries.isEmpty() && !state.busy) {
-        Text("This folder has no files.", color = TextSecondary, modifier = modifier.padding(top = 24.dp))
+    if (entries.isEmpty()) {
+        Box(modifier) {
+            if (emptyMessage.isNotBlank()) {
+                Text(emptyMessage, color = TextSecondary, modifier = Modifier.padding(top = 24.dp))
+            }
+        }
         return
     }
     LazyVerticalGrid(
@@ -214,10 +236,8 @@ private fun DriveEntryGrid(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(state.entries, key = { it.id }) { entry ->
-            DriveCell(entry, entry.id in state.selected, thumbs[entry.id]) {
-                if (entry.folder) drive.open(entry) else drive.toggle(entry.id, single)
-            }
+        items(entries, key = { it.id }) { entry ->
+            DriveCell(entry, entry.id in selected, thumbs[entry.id]) { onEntry(entry) }
         }
     }
 }
