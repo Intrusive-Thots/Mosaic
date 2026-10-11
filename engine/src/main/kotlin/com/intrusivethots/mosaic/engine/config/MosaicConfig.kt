@@ -34,7 +34,11 @@ data class MosaicConfig(
     val customOutputHeight: Int = 0,
     val lockOutputAspect: Boolean = true,
     val mosaicKind: MosaicKind = MosaicKind.GRID,
-    val collage: CollageSettings = CollageSettings()
+    val collage: CollageSettings = CollageSettings(),
+    /** Uniform grids split coarse cells that sit on a target outline. */
+    val subdivideEdges: Boolean = true,
+    /** Darken along the target's line art after compositing. Source texture stays. */
+    val preserveTargetEdges: Boolean = true
 )
 
 enum class AspectRatioPreset(val label: String, val widthRatio: Float, val heightRatio: Float) {
@@ -220,6 +224,8 @@ fun MosaicConfig.matchFingerprint(targetWidth: Int, targetHeight: Int, tileToken
         append("|tq").append(targetQuarterTurns and 3)
         append("|scale").append((targetScale.coerceIn(0.25f, 1f) * 1000f).toInt())
         append("|kind").append(mosaicKind.name)
+        append("|sub").append(subdivideEdges)
+        append("|ink").append(preserveTargetEdges)
         val pieces = collage.sanitized()
         append("|pieces").append(pieces.pieceCount)
         append("|smin").append((pieces.minScale * 1000f).toInt())

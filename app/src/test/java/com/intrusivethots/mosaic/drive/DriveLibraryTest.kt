@@ -43,7 +43,7 @@ class DriveLibraryTest {
     @Test
     fun listUrlEncodesTheFolderQueryAndPage() {
         val url = listUrl("abc'd", "next token")
-        assertTrue(url.contains("pageSize=40"))
+        assertTrue(url.contains("pageSize=$DRIVE_PAGE_SIZE"))
         assertTrue(url.contains("pageToken="))
         assertFalse(url.contains("next token"))
         assertFalse(url.contains("'abc'd'"))

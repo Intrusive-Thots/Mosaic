@@ -41,6 +41,33 @@ private fun chooseSpan(wide: Boolean, tall: Boolean, roll: Int): Pair<Int, Int> 
     else -> 1 to 1
 }
 
+/**
+ * Fine grid of even size. A coarse 2×2 block marked in [edge] becomes four cells.
+ * A flat block stays one span, so the small cells sit on outlines.
+ */
+fun packEdges(columns: Int, rows: Int, edge: BooleanArray): List<Placement> {
+    require(columns > 1 && rows > 1 && columns % 2 == 0 && rows % 2 == 0)
+    val coarseColumns = columns / 2
+    val coarseRows = rows / 2
+    require(edge.size == coarseColumns * coarseRows)
+    val placements = ArrayList<Placement>(coarseColumns * coarseRows)
+    for (cy in 0 until coarseRows) {
+        for (cx in 0 until coarseColumns) {
+            val column = cx * 2
+            val row = cy * 2
+            if (edge[cy * coarseColumns + cx]) {
+                placements.add(Placement(column, row, 1, 1))
+                placements.add(Placement(column + 1, row, 1, 1))
+                placements.add(Placement(column, row + 1, 1, 1))
+                placements.add(Placement(column + 1, row + 1, 1, 1))
+            } else {
+                placements.add(Placement(column, row, 2, 2))
+            }
+        }
+    }
+    return placements
+}
+
 private fun packRoll(seed: Int, column: Int, row: Int): Int {
     var hash = seed * -0x61C88647
     hash = hash xor (column * -0x7A143595)

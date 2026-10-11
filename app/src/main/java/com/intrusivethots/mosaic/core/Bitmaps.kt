@@ -11,6 +11,7 @@ import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import com.intrusivethots.mosaic.engine.color.argb
 import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.image.alphaSticker
 import com.intrusivethots.mosaic.engine.image.cleanupCutout
 import com.intrusivethots.mosaic.engine.image.downscaleLongEdge
 import com.intrusivethots.mosaic.engine.tile.TileIdentity
@@ -245,6 +246,18 @@ fun rotateBitmap(source: Bitmap, quarterTurns: Int): Bitmap {
     if (turns == 0 || source.isRecycled) return source
     val matrix = Matrix().apply { postRotate(turns * 90f) }
     return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+}
+
+/**
+ * A transparent PNG is already a cutout. Returns a copy the caller owns, or null when the
+ * bitmap is an ordinary photo that still needs segmentation.
+ */
+fun readyMadeSticker(bitmap: Bitmap, maxEdge: Int): Bitmap? {
+    if (bitmap.isRecycled || !alphaSticker(bitmap.toPixelImage())) return null
+    val fitted = scaleToLongEdge(bitmap, maxEdge)
+    if (fitted !== bitmap) return fitted
+    val config = bitmap.config ?: Bitmap.Config.ARGB_8888
+    return bitmap.copy(config, false)
 }
 
 fun scaleToLongEdge(bitmap: Bitmap, maxEdge: Int): Bitmap {

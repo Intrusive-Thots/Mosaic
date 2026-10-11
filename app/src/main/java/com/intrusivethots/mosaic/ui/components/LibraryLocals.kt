@@ -5,7 +5,8 @@ import androidx.compose.runtime.staticCompositionLocalOf
 
 class LibrarySources(
     val pickTiles: () -> Unit,
-    val pickStamps: () -> Unit
+    val pickStamps: () -> Unit,
+    val pickTarget: () -> Unit
 )
 
 class LibraryExport(

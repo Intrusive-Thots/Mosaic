@@ -7,6 +7,8 @@ import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.OutputLayout
 import com.intrusivethots.mosaic.engine.config.RenderMode
 import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.image.WHOLE_STICKER_SPAN
+import com.intrusivethots.mosaic.engine.image.alphaSticker
 import com.intrusivethots.mosaic.engine.image.sampleBilinear
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.match.ResidualField
@@ -37,6 +39,7 @@ class CollageRenderer {
         val row = IntArray(width)
         val locked = BooleanArray(width * height)
         val gate = CloserGate(width, height)
+        val outlines = outlineField(target, config, width, height)
         gate.bind(target, width, height)
         var lastReported = -1
         for (y in 0 until height) {
@@ -56,6 +59,7 @@ class CollageRenderer {
                 if (y < sprite.draw.top || y > sprite.draw.bottom) continue
                 paintSprite(row, y, sprite, config, coverage, width, gate, owners, index)
             }
+            darkenOutline(row, y, outlines)
             sink.writeRow(y, row)
             val percent = ((y + 1) * 100) / height
             if (percent != lastReported) {
@@ -94,10 +98,24 @@ class CollageRenderer {
         placement: com.intrusivethots.mosaic.engine.match.CutoutPlacement,
         tile: Int,
         thumbnails: List<PixelImage>,
-        paper: HashMap<Int, PixelImage>
+        paper: HashMap<Int, PixelImage>,
+        stickers: HashMap<Int, Boolean>
     ): PixelImage {
         if (placement.mask == null || tile !in thumbnails.indices) return thumbnails[tile]
-        return paper.getOrPut(tile) { solidPaper(thumbnails[tile]) }
+        val image = thumbnails[tile]
+        if (wholeSticker(placement, image, stickers, tile)) return image
+        return paper.getOrPut(tile) { solidPaper(image) }
+    }
+
+    private fun wholeSticker(
+        placement: com.intrusivethots.mosaic.engine.match.CutoutPlacement,
+        image: PixelImage,
+        stickers: HashMap<Int, Boolean>,
+        tile: Int
+    ): Boolean {
+        if (placement.cropSpan < WHOLE_STICKER_SPAN) return false
+        if (placement.faceRight > placement.faceLeft) return false
+        return stickers.getOrPut(tile) { alphaSticker(image) }
     }
 
     internal fun sprites(
@@ -110,11 +128,12 @@ class CollageRenderer {
     ): List<Sprite> {
         val sprites = ArrayList<Sprite>(plan.placements.size)
         val paper = HashMap<Int, PixelImage>()
+        val stickers = HashMap<Int, Boolean>()
         val bases = HashMap<Int, PixelImage>()
         for (placement in plan.placements) {
             val tile = placement.tileIndex
             if (tile !in descriptors.indices || tile !in thumbnails.indices) continue
-            val source = sourceFor(placement, tile, thumbnails, paper)
+            val source = sourceFor(placement, tile, thumbnails, paper, stickers)
             val base = if (placement.mask == null) source else bases.getOrPut(tile) { softBase(source) }
             val descriptor = descriptors[tile]
             val draw = if (placement.mask != null) {

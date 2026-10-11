@@ -165,28 +165,42 @@ internal class DriveViewModel(application: Application) : AndroidViewModel(appli
         work { load(state.folderId, state.folderName, state.crumbs, append = true) }
     }
 
-    fun toggle(id: String) {
+    fun toggle(id: String, single: Boolean = false) {
         _state.update { state ->
-            val selected = if (id in state.selected) state.selected - id else state.selected + id
+            val selected = when {
+                single && id in state.selected -> emptySet()
+                single -> setOf(id)
+                id in state.selected -> state.selected - id
+                else -> state.selected + id
+            }
             state.copy(selected = selected)
         }
     }
 
-    fun addSelected(pinned: Set<String>, onReady: (List<Uri>) -> Unit) {
+    fun selectAll() {
+        val images = _state.value.entries.filter { it.image }.map { it.id }.toSet()
+        _state.update { state ->
+            val selected = if (images.isNotEmpty() && state.selected.containsAll(images)) emptySet() else images
+            state.copy(selected = selected)
+        }
+    }
+
+    fun addSelected(pinned: Set<String>, onReady: (List<Uri>) -> Unit, single: Boolean = false) {
         val chosen = _state.value.entries.filter { it.image && it.id in _state.value.selected }
         if (chosen.isEmpty()) {
-            say("Select one or more photos.")
+            say(if (single) "Select an image." else "Select one or more photos.")
             return
         }
+        val batch = if (single) chosen.take(1) else chosen
         work {
             _state.update { it.copy(busy = true, error = "") }
             val files = withContext(Dispatchers.IO) {
-                library.download(chosen, pinned) { index, name ->
-                    val text = if (name.isEmpty()) "" else "Downloading ${index + 1} of ${chosen.size} · $name"
+                library.download(batch, pinned) { index, name ->
+                    val text = if (name.isEmpty()) "" else "Downloading ${index + 1} of ${batch.size} · $name"
                     _state.update { it.copy(progressLabel = text) }
                 }
             }
-            finishImport(files, onReady, truncated = false)
+            finishImport(files, onReady, truncated = false, picture = single)
         }
     }
 
@@ -199,7 +213,7 @@ internal class DriveViewModel(application: Application) : AndroidViewModel(appli
                     _state.update { it.copy(progressLabel = "Downloading ${index + 1} · $label") }
                 }
             }
-            finishImport(imported.files, onReady, imported.truncated)
+            finishImport(imported.files, onReady, imported.truncated, picture = false)
         }
     }
 
@@ -303,12 +317,16 @@ internal class DriveViewModel(application: Application) : AndroidViewModel(appli
         say(text)
     }
 
-    private fun finishImport(files: List<File>, onReady: (List<Uri>) -> Unit, truncated: Boolean) {
+    private fun finishImport(files: List<File>, onReady: (List<Uri>) -> Unit, truncated: Boolean, picture: Boolean) {
         val uris = files.map { share(it) }
         if (uris.isNotEmpty()) onReady(uris)
         _state.update { it.copy(busy = false, browsing = uris.isEmpty(), progressLabel = "", selected = emptySet()) }
         if (uris.isEmpty()) {
             say("No photos were found in that folder.")
+            return
+        }
+        if (picture) {
+            say("Using ${files.first().name} as the picture.")
             return
         }
         val tail = if (truncated) " This folder has more; open a smaller folder for the rest." else ""
@@ -385,6 +403,6 @@ internal class DriveViewModel(application: Application) : AndroidViewModel(appli
     }
 
     private companion object {
-        const val THUMB_CAP = 40
+        const val THUMB_CAP = 200
     }
 }

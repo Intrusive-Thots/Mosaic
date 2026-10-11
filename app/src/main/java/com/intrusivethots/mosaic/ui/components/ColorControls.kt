@@ -45,16 +45,16 @@ fun ColorControls(
             title = "Allow repeated photos",
             checked = config.allowTileRepetition,
             onChange = { onRepetition(it, config.maxRepetitionDistance) },
-            description = "Turn off to use each photo at most once. Needs a large library."
+            description = "Turn off to use each photo at most once. Needs a large library. Flips, rotations, and resizes still count as that photo."
         )
         SettingSlider(
             label = "Repeat spacing",
-            valueText = if (config.maxRepetitionDistance == 0) "Off" else "${config.maxRepetitionDistance} cells",
+            valueText = "${config.maxRepetitionDistance.coerceAtLeast(1)} cells",
             value = config.maxRepetitionDistance.toFloat(),
             range = 0f..8f,
             steps = 7,
             onChange = { onRepetition(config.allowTileRepetition, it.toInt()) },
-            description = "Keeps the same photo apart. High values can leave cells in the target color on flat areas."
+            description = "Copies of one photo may be flipped, rotated, and resized, and the photo may repeat. Copies must not touch, including corners."
         )
     }
 }

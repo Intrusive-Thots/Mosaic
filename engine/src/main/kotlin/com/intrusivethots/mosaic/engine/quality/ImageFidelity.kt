@@ -2,6 +2,8 @@ package com.intrusivethots.mosaic.engine.quality
 
 import com.intrusivethots.mosaic.engine.color.OkLab
 import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.image.WHOLE_STICKER_SPAN
+import com.intrusivethots.mosaic.engine.image.alphaSticker
 import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
 import com.intrusivethots.mosaic.engine.image.sampleBilinear
 import com.intrusivethots.mosaic.engine.match.CutoutPlacement
@@ -426,7 +428,9 @@ fun pieceContentFidelity(
         val placement = placements[index]
         val source = sources.getOrNull(placement.tileIndex) ?: continue
         val descriptor = descriptors.getOrNull(placement.tileIndex) ?: continue
-        val filled = paper.getOrPut(placement.tileIndex) { solidPaper(source) }
+        val faceless = placement.faceRight <= placement.faceLeft
+        val whole = faceless && placement.cropSpan >= WHOLE_STICKER_SPAN && alphaSticker(source)
+        val filled = if (whole) source else paper.getOrPut(placement.tileIndex) { solidPaper(source) }
         val score = pieceStructure(rendered, filled, descriptor, placement, owners, index) ?: continue
         scores.add(score)
     }

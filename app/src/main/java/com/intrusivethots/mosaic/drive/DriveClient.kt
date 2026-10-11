@@ -106,7 +106,7 @@ internal class RestDriveClient(private val transport: DriveTransport) : DriveCli
 internal fun listUrl(folderId: String, pageToken: String?): String {
     val safeId = folderId.replace("'", "")
     val query = "'$safeId' in parents and trashed = false"
-    val builder = StringBuilder("https://www.googleapis.com/drive/v3/files?pageSize=40")
+    val builder = StringBuilder("https://www.googleapis.com/drive/v3/files?pageSize=$DRIVE_PAGE_SIZE")
     builder.append("&orderBy=").append(encode("folder,name"))
     builder.append("&fields=").append(encode("nextPageToken,files(id,name,mimeType,thumbnailLink,modifiedTime,size)"))
     builder.append("&q=").append(encode(query))
@@ -130,5 +130,7 @@ private fun parseEntry(value: JsonValue): DriveEntry = DriveEntry(
 )
 
 private fun encode(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name())
+
+internal const val DRIVE_PAGE_SIZE = 200
 
 private const val ROOT = "https://www.googleapis.com/drive/v3"

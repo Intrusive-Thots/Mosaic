@@ -39,10 +39,13 @@ internal class ShapeFit(
     private val outputWidth: Int,
     private val outputHeight: Int,
     private val faces: List<List<FaceBox>> = emptyList(),
-    private val requireFaces: Boolean = true
+    private val requireFaces: Boolean = true,
+    private val stickers: BooleanArray = BooleanArray(0)
 ) {
     private val handful = HandfulPenalty()
     private val reserved = ArrayList<FaceBox>()
+    private val contact = SourceContact()
+    private val outside = ArrayList<CutoutPlacement>()
     var comparisons: Long = 0
 
     fun choose(
@@ -66,10 +69,9 @@ internal class ShapeFit(
             cut.meanA,
             cut.meanB,
             config.candidateCount,
-            config.maxRepetitionDistance,
+            tracker.touchRadius,
             { tile ->
-                tile !in swatches.indices || refused(tile) ||
-                    (requireFaces && faces.getOrNull(tile).isNullOrEmpty())
+                tile !in swatches.indices || refused(tile) || facelessPhoto(tile)
             },
             topK,
             probes
@@ -81,10 +83,13 @@ internal class ShapeFit(
         var bestSpan = MIN_SPAN
         var bestFace = FaceBox(-1f, -1f, -1f, -1f)
         var bestScore = Float.POSITIVE_INFINITY
+        var bestAny = Float.POSITIVE_INFINITY
         for (slot in 0 until topK.size) {
             val tile = topK.ids[slot]
             if (tile == avoid || tile in taken || tile !in swatches.indices) continue
             val offer = offer(cut, tile, ordinal, solve, stackFaces) ?: continue
+            if (offer.score < bestAny) bestAny = offer.score
+            if (contact.clashes(tile, cut.mask)) continue
             if (offer.score < bestScore) {
                 bestScore = offer.score
                 bestTile = tile
@@ -94,7 +99,7 @@ internal class ShapeFit(
                 bestFace = offer.face
             }
         }
-        if (bestTile < 0) return null
+        if (bestTile < 0 || bestScore > bestAny + CONTACT_FALLBACK) return null
         return CutoutPlacement(
             tileIndex = bestTile,
             x = cut.centerX,
@@ -118,29 +123,58 @@ internal class ShapeFit(
     /**
      * A library with no detected face still builds the collage from color.
      * Face lock stays on when at least one source has a face.
+     * An alpha cutout with no face is the whole sticker, not a dropped photo.
      */
     private fun offer(cut: ShapeCut, tile: Int, ordinal: Int, solve: Boolean, stackFaces: Boolean): Offer? {
         val library = faces.getOrNull(tile).orEmpty()
-        if (requireFaces && library.isEmpty()) return null
+        val whole = stickerWithoutFace(tile, library)
+        if (requireFaces && library.isEmpty() && !whole) return null
         val penalty = tracker.penalty(tile) + jitter(config.randomSeed, ordinal, tile)
-        val edge = sourceEdges.getOrElse(tile) { maxOf(outputWidth, outputHeight) }
-        val piecePx = piecePixels(cut, outputWidth, outputHeight)
-        var span = cropSpan(cut, edge, outputWidth, outputHeight)
-        if (requireFaces) {
-            val need = library.minOf { minimumSpan(it, piecePx, edge) }
-            if (need > span) span = need.coerceAtMost(1f)
-        }
+        val span = if (whole) 1f else spanFor(cut, tile, library)
         val scored = scoreTile(swatches[tile], cut, UPRIGHT, span, penalty, solve, config.collage.shapeWeight)
         comparisons++
-        if (!requireFaces) {
-            return Offer(
-                scored.score + handful.cost(tile, cut.centerX, cut.centerY, scored.u, scored.v),
-                scored.u,
-                scored.v,
-                span,
-                FaceBox(-1f, -1f, -1f, -1f)
-            )
-        }
+        if (!requireFaces || whole) return plainOffer(scored, tile, cut, span)
+        return faceOffer(cut, tile, scored, span, library, stackFaces)
+    }
+
+    /** Cartoon art often has no detector hit. The sticker is still a legal piece. */
+    private fun facelessPhoto(tile: Int): Boolean {
+        if (!requireFaces || stickerAt(tile)) return false
+        return faces.getOrNull(tile).isNullOrEmpty()
+    }
+
+    private fun stickerWithoutFace(tile: Int, library: List<FaceBox>): Boolean {
+        return stickerAt(tile) && library.isEmpty()
+    }
+
+    private fun stickerAt(tile: Int): Boolean = tile in stickers.indices && stickers[tile]
+
+    private fun spanFor(cut: ShapeCut, tile: Int, library: List<FaceBox>): Float {
+        val edge = sourceEdges.getOrElse(tile) { maxOf(outputWidth, outputHeight) }
+        var span = cropSpan(cut, edge, outputWidth, outputHeight)
+        if (!requireFaces || library.isEmpty()) return span
+        val piecePx = piecePixels(cut, outputWidth, outputHeight)
+        val need = library.minOf { minimumSpan(it, piecePx, edge) }
+        if (need > span) span = need.coerceAtMost(1f)
+        return span
+    }
+
+    private fun plainOffer(scored: Scored, tile: Int, cut: ShapeCut, span: Float) = Offer(
+        scored.score + handful.cost(tile, cut.centerX, cut.centerY, scored.u, scored.v),
+        scored.u,
+        scored.v,
+        span,
+        FaceBox(-1f, -1f, -1f, -1f)
+    )
+
+    private fun faceOffer(
+        cut: ShapeCut,
+        tile: Int,
+        scored: Scored,
+        span: Float,
+        library: List<FaceBox>,
+        stackFaces: Boolean
+    ): Offer? {
         val (spanU, spanV) = placedSpans(cut, tile, span)
         val seated = seatOnFace(cut, scored, spanU, spanV, library, stackFaces) ?: return null
         return Offer(
@@ -219,11 +253,53 @@ internal class ShapeFit(
         val row = (placement.y * GRID).toInt().coerceIn(0, GRID - 1)
         tracker.record(placement.tileIndex, column, row)
         handful.note(placement.tileIndex, placement.x, placement.y, placement.cropU, placement.cropV)
+        contact.add(placement)
         hold(placement)
     }
 
     fun release(placement: CutoutPlacement) {
+        contact.remove(placement)
         forgetFace(placement)
+    }
+
+    /** Puts a piece back after a swap that was not an improvement. */
+    fun restore(placement: CutoutPlacement) {
+        contact.add(placement)
+        hold(placement)
+    }
+
+    /** Pieces kept outside a regenerated hole. They occupy the contact grid for the whole pass. */
+    fun seedReserved(placements: List<CutoutPlacement>) {
+        outside.clear()
+        outside.addAll(placements)
+        contact.rebuild(outside)
+    }
+
+    fun syncContact(placements: List<CutoutPlacement>) {
+        contact.rebuild(outside + placements)
+    }
+
+    fun clashes(tile: Int, mask: PieceMask?): Boolean = contact.clashes(tile, mask)
+
+    /** Marks a piece that is already on the plan. Does not count another use. */
+    fun occupy(placement: CutoutPlacement) {
+        contact.add(placement)
+    }
+
+    /**
+     * Keeps a grown mask only when it still does not touch another copy of the same source.
+     * Seam mending would otherwise pull two copies together.
+     */
+    fun acceptMask(previous: CutoutPlacement, updated: CutoutPlacement): CutoutPlacement {
+        if (updated === previous) return previous
+        contact.remove(previous)
+        val mask = updated.mask
+        if (mask != null && contact.clashes(updated.tileIndex, mask)) {
+            contact.add(previous)
+            return previous
+        }
+        contact.add(updated)
+        return updated
     }
 
     fun hold(placement: CutoutPlacement) {
@@ -700,6 +776,9 @@ private const val FOCUS_MISS = 0.02f
 private const val SHAPE_SCALE = 0.08f
 private const val DRIFT = 0.35f
 private const val FACE_OVERLAP = 0.34f
+
+/** A blocked photo may fall through to the next candidate, but not to a different color. */
+private const val CONTACT_FALLBACK = 0.12f
 private val UPRIGHT = floatArrayOf(0f)
 private val ANCHORS = floatArrayOf(0.34f, 0.5f, 0.66f)
 private val CROP_SHIFTS = floatArrayOf(-0.10f, -0.05f, 0f, 0.05f, 0.10f)

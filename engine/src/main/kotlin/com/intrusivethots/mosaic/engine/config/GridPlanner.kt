@@ -38,6 +38,33 @@ fun planGrid(targetWidth: Int, targetHeight: Int, config: MosaicConfig): GridLay
     return GridLayout(columns = columns, rows = rows, staggered = staggered)
 }
 
+/**
+ * Matching grid. Uniform mosaics use a finer grid so outlines can sit in smaller cells.
+ * [planGrid] itself stays the caller's column count.
+ */
+fun resolvedGrid(targetWidth: Int, targetHeight: Int, config: MosaicConfig): GridLayout {
+    val base = planGrid(targetWidth, targetHeight, config)
+    if (!edgesSubdivide(config, base)) return base
+    val columns = evenFine(base.columns, targetWidth)
+    val rows = evenFine(base.rows, targetHeight)
+    if (columns <= base.columns || rows <= base.rows) return base
+    return GridLayout(columns, rows, staggered = false)
+}
+
+fun edgesSubdivide(config: MosaicConfig, layout: GridLayout): Boolean {
+    val validated = config.validated()
+    return validated.subdivideEdges &&
+        validated.mosaicKind != MosaicKind.COLLAGE &&
+        validated.layoutMode == LayoutMode.UNIFORM &&
+        !layout.staggered
+}
+
+private fun evenFine(count: Int, limit: Int): Int {
+    val doubled = (count * 2).coerceAtMost(limit).coerceAtMost(200)
+    val even = doubled - doubled % 2
+    return if (even > count) even else count
+}
+
 private fun rowsFor(targetWidth: Int, targetHeight: Int, columns: Int, config: MosaicConfig): Int {
     if (config.cellAspect != CellAspect.MATCH_GRID && config.linkAspectToGrid) {
         val ratio = config.cellAspect.ratio.toDouble()
@@ -145,7 +172,7 @@ fun planStackedOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig,
     if (stack == HybridStack.GRID) return planOutput(targetWidth, targetHeight, config, preview)
     if (stack == HybridStack.CUTOUTS) return planCollageOutput(targetWidth, targetHeight, config, preview)
     val picture = planCollageOutput(targetWidth, targetHeight, config, preview)
-    val grid = planGrid(targetWidth, targetHeight, config)
+    val grid = resolvedGrid(targetWidth, targetHeight, config)
     val cellWidth = (picture.width / grid.columns).coerceAtLeast(1)
     val cellHeight = (picture.height / grid.rows).coerceAtLeast(1)
     return OutputLayout(grid.columns, grid.rows, cellWidth, cellHeight, grid.staggered)
@@ -179,13 +206,15 @@ private fun fittedSize(
 
 fun planOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig, preview: Boolean): OutputLayout {
     val validated = config.validated()
-    val grid = planGrid(targetWidth, targetHeight, validated)
+    val base = planGrid(targetWidth, targetHeight, validated)
+    val grid = resolvedGrid(targetWidth, targetHeight, validated)
     val custom = !preview && (validated.customOutputWidth > 0 || validated.customOutputHeight > 0)
     if (custom) return planCustomOutput(targetWidth, targetHeight, grid, validated)
     val pixels = if (preview) validated.previewCellPixels else validated.outputMode.cellPixels
+    val divisor = if (grid.columns > base.columns) 2 else 1
     val cellAspect = gridCellAspect(targetWidth, targetHeight, grid)
-    val cellHeight = pixels.coerceAtLeast(1)
-    val cellWidth = (pixels * cellAspect).roundToInt().coerceIn(1, MAX_CELL_PIXELS)
+    val cellHeight = (pixels / divisor).coerceAtLeast(1)
+    val cellWidth = ((pixels * cellAspect) / divisor).roundToInt().coerceIn(1, MAX_CELL_PIXELS)
     return OutputLayout(grid.columns, grid.rows, cellWidth, cellHeight, grid.staggered)
 }
 

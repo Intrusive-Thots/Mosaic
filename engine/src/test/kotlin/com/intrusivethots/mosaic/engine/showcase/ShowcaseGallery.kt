@@ -180,7 +180,7 @@ private fun reportFaces(prefix: String, images: List<PixelImage>) {
         if (CartoonFaceFinder.find(image).isNotEmpty()) detected++
     }
     val name = if (prefix.isEmpty()) "naruto" else prefix.removeSuffix("-")
-    println("SHOWCASE $name faces detected $detected excluded ${images.size - detected} of ${images.size}")
+    println("SHOWCASE $name faces detected $detected no-face ${images.size - detected} of ${images.size}")
 }
 
 private suspend fun renderLegacy(
@@ -237,7 +237,7 @@ private fun denseCollage(edge: Int) = currentCollage(edge, HybridStack.CUTOUTS, 
     )
 }
 
-private fun currentCollage(edge: Int, stack: HybridStack, pieces: Int) = MosaicConfig(
+internal fun currentCollage(edge: Int, stack: HybridStack, pieces: Int) = MosaicConfig(
     gridColumns = 48,
     linkAspectToGrid = true,
     renderMode = RenderMode.COLOR_CORRECTED,
@@ -260,7 +260,7 @@ private fun currentCollage(edge: Int, stack: HybridStack, pieces: Int) = MosaicC
         background = CollageBackground.MEAN_COLOR,
         shapeWeight = 0.45f,
         refineSteps = 8,
-        separatePieces = true,
+        separatePieces = false,
         style = CollageStyle.DENSE,
         stack = stack
     )

@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,8 +14,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckBox
@@ -77,7 +79,7 @@ internal fun SourceSheet(
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (files) {
                     SourceButton("Images", "Pick one or more image files", onImages)
-                    SourceButton("A folder", "Add the photos inside a folder", onFolder)
+                    SourceButton("A folder", "Browse thumbnails and choose any subset", onFolder)
                 } else {
                     SourceButton("Photos on this phone", "Camera roll and photo apps", onPhotos)
                     SourceButton("Files and folders", "The system picker, including Google Drive", { files = true })
@@ -150,6 +152,7 @@ internal fun DriveSettingsCard(drive: DriveViewModel) {
 internal fun DriveBrowser(
     drive: DriveViewModel,
     stampCap: Boolean,
+    single: Boolean,
     pinned: () -> Set<String>,
     onAdded: (List<android.net.Uri>) -> Unit
 ) {
@@ -172,8 +175,8 @@ internal fun DriveBrowser(
                 if (state.error.isNotBlank()) {
                     Text(state.error, color = androidx.compose.material3.MaterialTheme.colorScheme.error, fontSize = 13.sp)
                 }
-                DriveEntryList(state, thumbs, drive, Modifier.weight(1f).fillMaxWidth())
-                DriveBrowserActions(state, drive, stampCap, pinned, onAdded)
+                DriveEntryGrid(state, thumbs, drive, single, Modifier.weight(1f).fillMaxWidth())
+                DriveBrowserActions(state, drive, stampCap, single, pinned, onAdded)
             }
         }
     }
@@ -194,37 +197,61 @@ private fun DriveBrowserHeader(state: DriveUiState, drive: DriveViewModel) {
 }
 
 @Composable
-private fun DriveEntryList(state: DriveUiState, thumbs: Map<String, Bitmap>, drive: DriveViewModel, modifier: Modifier) {
+private fun DriveEntryGrid(
+    state: DriveUiState,
+    thumbs: Map<String, Bitmap>,
+    drive: DriveViewModel,
+    single: Boolean,
+    modifier: Modifier
+) {
     if (state.entries.isEmpty() && !state.busy) {
         Text("This folder has no files.", color = TextSecondary, modifier = modifier.padding(top = 24.dp))
         return
     }
-    LazyColumn(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(108.dp),
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         items(state.entries, key = { it.id }) { entry ->
-            DriveRow(entry, entry.id in state.selected, thumbs[entry.id]) { drive.open(entry) }
+            DriveCell(entry, entry.id in state.selected, thumbs[entry.id]) {
+                if (entry.folder) drive.open(entry) else drive.toggle(entry.id, single)
+            }
         }
     }
 }
 
 @Composable
-private fun DriveRow(entry: DriveEntry, selected: Boolean, thumb: Bitmap?, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
+private fun DriveCell(entry: DriveEntry, selected: Boolean, thumb: Bitmap?, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier.clickable(onClick = onClick).padding(4.dp).semantics {
+            contentDescription = if (entry.image) "Select ${entry.name}" else entry.name
+        },
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        if (entry.folder) {
-            Icon(Icons.Default.Folder, contentDescription = null, tint = AccentPurple, modifier = Modifier.size(40.dp))
-        } else if (thumb != null && !thumb.isRecycled) {
-            Image(thumb.asImageBitmap(), contentDescription = null, modifier = Modifier.size(40.dp), contentScale = ContentScale.Crop)
-        } else {
-            Spacer(Modifier.size(40.dp))
+        Box(Modifier.size(96.dp), contentAlignment = Alignment.TopEnd) {
+            when {
+                entry.folder -> Icon(
+                    Icons.Default.Folder,
+                    contentDescription = null,
+                    tint = AccentPurple,
+                    modifier = Modifier.fillMaxSize()
+                )
+                thumb != null && !thumb.isRecycled -> Image(
+                    thumb.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+                else -> Spacer(Modifier.fillMaxSize())
+            }
+            if (entry.image) {
+                val icon = if (selected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank
+                Icon(icon, contentDescription = null, tint = AccentPink)
+            }
         }
-        Spacer(Modifier.width(12.dp))
-        Text(entry.name, color = TextPrimary, modifier = Modifier.weight(1f), maxLines = 1)
-        if (entry.image) {
-            val icon = if (selected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank
-            Icon(icon, contentDescription = "Select ${entry.name}", tint = AccentPink)
-        }
+        Text(entry.name, color = TextPrimary, fontSize = 11.sp, maxLines = 2)
     }
 }
 
@@ -233,6 +260,7 @@ private fun DriveBrowserActions(
     state: DriveUiState,
     drive: DriveViewModel,
     stampCap: Boolean,
+    single: Boolean,
     pinned: () -> Set<String>,
     onAdded: (List<android.net.Uri>) -> Unit
 ) {
@@ -245,18 +273,25 @@ private fun DriveBrowserActions(
                 colors = ButtonDefaults.buttonColors(containerColor = AccentPink)
             ) { Text("Save here") }
         } else {
+            if (!single) {
+                TextButton(onClick = drive::selectAll, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
+                    Text("Select all", color = AccentPurple)
+                }
+            }
             Button(
-                onClick = { drive.addSelected(pinned(), onAdded) },
+                onClick = { drive.addSelected(pinned(), onAdded, single) },
                 enabled = !state.busy && state.selected.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = AccentPink)
-            ) { Text("Add selected") }
-            Button(
-                onClick = { drive.addFolder(pinned(), if (stampCap) 40 else 400, onAdded) },
-                enabled = !state.busy,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = AccentPurple)
-            ) { Text("Add all images in this folder") }
+            ) { Text(if (single) "Use as picture" else "Add selected") }
+            if (!single) {
+                Button(
+                    onClick = { drive.addFolder(pinned(), if (stampCap) 40 else 400, onAdded) },
+                    enabled = !state.busy,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentPurple)
+                ) { Text("Add all images in this folder") }
+            }
         }
         if (!state.nextPageToken.isNullOrBlank()) {
             TextButton(onClick = drive::loadMore, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {

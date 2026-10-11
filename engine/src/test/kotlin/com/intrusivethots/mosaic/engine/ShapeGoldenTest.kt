@@ -23,7 +23,7 @@ class ShapeGoldenTest {
     }
 
     companion object {
-        const val SHAPE_GOLDEN_SHA256 = "009780e42478724ca33c5850cd01b5c16db1fdd496b5307b8afc45c493c29217"
+        const val SHAPE_GOLDEN_SHA256 = "4e9a75d488fd2c1b26231d1b3fed192cd7c380b5ea491423816771807d1e969b"
 
         suspend fun renderShapeGolden(): PixelImage {
             val tiles = (0 until 8).map { index ->

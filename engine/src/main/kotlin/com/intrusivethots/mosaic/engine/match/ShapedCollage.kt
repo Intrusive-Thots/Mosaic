@@ -21,11 +21,12 @@ internal class ShapedCollage {
         config: MosaicConfig,
         onSnapshot: suspend (List<CutoutPlacement>, String) -> Unit,
         onProgress: (Float, String) -> Unit,
-        knownFaces: List<List<FaceBox>>? = null
+        knownFaces: List<List<FaceBox>>? = null,
+        reserved: List<CutoutPlacement> = emptyList()
     ): Pair<MosaicPlan, MatchStats> {
         val validated = config.validated()
         val assembled = assembleCollage(
-            target, descriptors, thumbnails, index, validated, onSnapshot, onProgress, knownFaces
+            target, descriptors, thumbnails, index, validated, onSnapshot, onProgress, knownFaces, reserved
         )
         val coverage = if (assembled.placements.isEmpty()) 0f else 1f
         val tokens = descriptors.map { it.key.token() }
@@ -47,7 +48,9 @@ internal class ShapedCollage {
         val kept = existing.filter { piece ->
             piece.pinned || distance(piece.x, piece.y, centerX, centerY) > reach
         }
-        val rebuilt = place(target, descriptors, thumbnails, index, config, { _, _ -> }, { _, _ -> }).first
+        val rebuilt = place(
+            target, descriptors, thumbnails, index, config, { _, _ -> }, { _, _ -> }, reserved = kept
+        ).first
         val fresh = rebuilt.placements.filter { piece ->
             !piece.pinned && distance(piece.x, piece.y, centerX, centerY) <= reach
         }

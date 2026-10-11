@@ -32,7 +32,9 @@ import com.intrusivethots.mosaic.drive.DriveImageCache
 import com.intrusivethots.mosaic.drive.DriveViewModel
 import com.intrusivethots.mosaic.drive.OpenPersistableImages
 import com.intrusivethots.mosaic.drive.OpenPersistableTree
-import com.intrusivethots.mosaic.drive.collectTreeImages
+import com.intrusivethots.mosaic.drive.FolderListing
+import com.intrusivethots.mosaic.drive.OpenPersistableDocument
+import com.intrusivethots.mosaic.drive.listTreeImages
 import com.intrusivethots.mosaic.drive.copyFileToUri
 import com.intrusivethots.mosaic.drive.keepReadPermission
 import com.intrusivethots.mosaic.drive.keepWritePermission
@@ -44,7 +46,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class LibraryTarget { TILES, STAMPS }
+private enum class LibraryTarget { TILES, STAMPS, PICTURE }
 
 @Composable
 fun LibraryHost(main: MainViewModel, content: @Composable (LibrarySources) -> Unit) {
@@ -53,18 +55,20 @@ fun LibraryHost(main: MainViewModel, content: @Composable (LibrarySources) -> Un
     val snackbar = remember { SnackbarHostState() }
     var sheet by remember { mutableStateOf(false) }
     var target by remember { mutableStateOf(LibraryTarget.TILES) }
+    var folder by remember { mutableStateOf<FolderListing?>(null) }
     val targetState = rememberUpdatedState(target)
     var saveTitle by remember { mutableStateOf("Mosaic") }
     var savePath by remember { mutableStateOf<String?>(null) }
     var saveBitmap by remember { mutableStateOf<Bitmap?>(null) }
     val save = rememberDriveSavers(snackbar, saveTitle, savePath, saveBitmap)
     val picked = rememberUpdatedState<(List<Uri>) -> Unit> { uris ->
-        val tiles = targetState.value == LibraryTarget.TILES
-        val capped = if (tiles) uris.take(400) else uris.take(40)
-        if (capped.isEmpty()) return@rememberUpdatedState
-        if (tiles) main.addTileImages(capped) else main.extractStampBatch(capped)
+        when (targetState.value) {
+            LibraryTarget.TILES -> if (uris.isNotEmpty()) main.addTileImages(uris.take(400))
+            LibraryTarget.STAMPS -> if (uris.isNotEmpty()) main.extractStampBatch(uris.take(40))
+            LibraryTarget.PICTURE -> uris.firstOrNull()?.let(main::setTargetImage)
+        }
     }
-    val launchers = rememberLibraryLaunchers(snackbar, picked.value)
+    val launchers = rememberLibraryLaunchers(snackbar, picked.value) { folder = it }
     ConsentEffect(drive)
     LaunchedEffect(drive) { drive.messages.collect { snackbar.showSnackbar(it) } }
     val export = LibraryExport(
@@ -89,7 +93,8 @@ fun LibraryHost(main: MainViewModel, content: @Composable (LibrarySources) -> Un
         Box(Modifier.fillMaxSize()) {
             content(LibrarySources(
                 pickTiles = { target = LibraryTarget.TILES; sheet = true },
-                pickStamps = { target = LibraryTarget.STAMPS; sheet = true }
+                pickStamps = { target = LibraryTarget.STAMPS; sheet = true },
+                pickTarget = { target = LibraryTarget.PICTURE; sheet = true }
             ))
             SnackbarHost(snackbar, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
             if (sheet) {
@@ -99,9 +104,17 @@ fun LibraryHost(main: MainViewModel, content: @Composable (LibrarySources) -> Un
                     onPhotos = {
                         sheet = false
                         val request = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                        if (target == LibraryTarget.TILES) launchers.tiles.launch(request) else launchers.stamps.launch(request)
+                        when (target) {
+                            LibraryTarget.TILES -> launchers.tiles.launch(request)
+                            LibraryTarget.STAMPS -> launchers.stamps.launch(request)
+                            LibraryTarget.PICTURE -> launchers.picture.launch(request)
+                        }
                     },
-                    onImages = { sheet = false; launchers.files.launch(arrayOf("image/*")) },
+                    onImages = {
+                        sheet = false
+                        if (target == LibraryTarget.PICTURE) launchers.document.launch(arrayOf("image/*"))
+                        else launchers.files.launch(arrayOf("image/*"))
+                    },
                     onFolder = { sheet = false; launchers.folder.launch(null) },
                     onDrive = { sheet = false; drive.openLibrary() }
                 )
@@ -110,8 +123,21 @@ fun LibraryHost(main: MainViewModel, content: @Composable (LibrarySources) -> Un
                 DriveBrowser(
                     drive = drive,
                     stampCap = target == LibraryTarget.STAMPS,
+                    single = target == LibraryTarget.PICTURE,
                     pinned = { main.state.value.tileUris.mapNotNull { DriveImageCache.ownedName(it) }.toSet() },
                     onAdded = picked.value
+                )
+            }
+            val listing = folder
+            if (listing != null) {
+                FolderGrid(
+                    images = listing.images,
+                    single = target == LibraryTarget.PICTURE,
+                    onDismiss = { folder = null },
+                    onConfirm = { uris ->
+                        folder = null
+                        picked.value(uris)
+                    }
                 )
             }
         }
@@ -138,16 +164,24 @@ private fun ConsentEffect(drive: DriveViewModel) {
 private class LibraryLaunchers(
     val tiles: androidx.activity.result.ActivityResultLauncher<PickVisualMediaRequest>,
     val stamps: androidx.activity.result.ActivityResultLauncher<PickVisualMediaRequest>,
+    val picture: androidx.activity.result.ActivityResultLauncher<PickVisualMediaRequest>,
     val files: androidx.activity.result.ActivityResultLauncher<Array<String>>,
+    val document: androidx.activity.result.ActivityResultLauncher<Array<String>>,
     val folder: androidx.activity.result.ActivityResultLauncher<Uri?>
 )
 
 @Composable
-private fun rememberLibraryLaunchers(snackbar: SnackbarHostState, onPicked: (List<Uri>) -> Unit): LibraryLaunchers {
+private fun rememberLibraryLaunchers(
+    snackbar: SnackbarHostState,
+    onPicked: (List<Uri>) -> Unit,
+    onFolder: (FolderListing) -> Unit
+): LibraryLaunchers {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val latest = rememberUpdatedState(onPicked)
+    val folderReady = rememberUpdatedState(onFolder)
     val imageContract = remember { OpenPersistableImages() }
+    val documentContract = remember { OpenPersistableDocument() }
     val treeContract = remember { OpenPersistableTree() }
     val tiles = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(maxItems = 100)) { uris ->
         if (uris.isNotEmpty()) latest.value(uris)
@@ -155,14 +189,23 @@ private fun rememberLibraryLaunchers(snackbar: SnackbarHostState, onPicked: (Lis
     val stamps = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(maxItems = 40)) { uris ->
         if (uris.isNotEmpty()) latest.value(uris)
     }
+    val picture = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) latest.value(listOf(uri))
+    }
     val files = rememberLauncherForActivityResult(imageContract) { uris ->
         uris.forEach { keepReadPermission(context, it) }
         latest.value(uris)
     }
-    val folder = rememberLauncherForActivityResult(treeContract) { uri ->
-        if (uri != null) readFolder(context, scope, snackbar, uri, latest.value)
+    val document = rememberLauncherForActivityResult(documentContract) { uri ->
+        if (uri != null) {
+            keepReadPermission(context, uri)
+            latest.value(listOf(uri))
+        }
     }
-    return LibraryLaunchers(tiles, stamps, files, folder)
+    val folder = rememberLauncherForActivityResult(treeContract) { uri ->
+        if (uri != null) readFolder(context, scope, snackbar, uri, folderReady.value)
+    }
+    return LibraryLaunchers(tiles, stamps, picture, files, document, folder)
 }
 
 @Composable
@@ -201,14 +244,18 @@ private fun readFolder(
     scope: CoroutineScope,
     snackbar: SnackbarHostState,
     uri: Uri,
-    onPicked: (List<Uri>) -> Unit
+    onReady: (FolderListing) -> Unit
 ) {
     keepReadPermission(context, uri)
     scope.launch {
-        val read = withContext(Dispatchers.IO) { collectTreeImages(context, uri) }
-        read.uris.forEach { keepReadPermission(context, it) }
-        onPicked(read.uris)
-        if (read.uris.isEmpty()) snackbar.showSnackbar("No photos were found in that folder.")
-        else if (read.truncated) snackbar.showSnackbar("That folder has more photos than Mosaic added. Open a smaller folder for the rest.")
+        val listing = withContext(Dispatchers.IO) { listTreeImages(context, uri) }
+        listing.images.forEach { keepReadPermission(context, it.uri) }
+        if (listing.images.isEmpty()) snackbar.showSnackbar("No photos were found in that folder.")
+        else {
+            if (listing.truncated) {
+                snackbar.showSnackbar("That folder has more photos than this list. Open a smaller folder for the rest.")
+            }
+            onReady(listing)
+        }
     }
 }

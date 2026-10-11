@@ -20,6 +20,7 @@ import com.intrusivethots.mosaic.engine.image.rotateClockwise
 import com.intrusivethots.mosaic.engine.image.unrotateNormalizedRect
 import com.intrusivethots.mosaic.engine.index.TileIndex
 import com.intrusivethots.mosaic.engine.match.TileMatcher
+import com.intrusivethots.mosaic.engine.match.gridAdjacency
 import com.intrusivethots.mosaic.engine.render.DiscardRowSink
 import com.intrusivethots.mosaic.engine.tile.MemoryTileSource
 import com.intrusivethots.mosaic.engine.tile.TileAnalyzer
@@ -148,7 +149,8 @@ class ShapeLayoutTest {
             candidateCount = 4,
             descriptorMaxEdge = 32,
             scoreWeights = ScoreWeights(color = 0f, luminance = 0f, histogram = 0f, spatial = 1f, edge = 0f),
-            randomSeed = 3
+            randomSeed = 3,
+            subdivideEdges = false
         )
         val (plan, stats) = TileMatcher(analyzer).match(
             target,
@@ -158,11 +160,14 @@ class ShapeLayoutTest {
             listOf(descriptor.key.token())
         )
         assertEquals(16, plan.cellCount)
-        assertTrue(plan.assignments.all { it == 0 })
+        assertEquals(0, gridAdjacency(plan).violations)
+        val placed = plan.assignments.count { it == 0 }
+        assertTrue(placed >= 4, "placed $placed")
         assertEquals(1, stats.usage.size)
-        assertEquals(16, stats.usage[0])
+        assertEquals(placed, stats.usage[0])
         assertEquals(16, plan.orientations.size)
-        assertTrue(plan.orientations.distinct().size >= 2, "orientations ${plan.orientations.toList()}")
+        val turned = plan.orientations.filterIndexed { index, _ -> plan.assignments[index] == 0 }
+        assertTrue(turned.distinct().size >= 2, "orientations ${turned.toList()}")
     }
 
     @Test
@@ -196,7 +201,7 @@ class ShapeLayoutTest {
 
     @Test
     fun mixedLayoutCountsEachPlacementOnce() = runBlocking {
-        val tiles = listOf(MemoryTileSource(hueTile(0, 4, 16), "only"))
+        val tiles = (0 until 8).map { MemoryTileSource(hueTile(it, 8, 16), "mix-$it") }
         val config = MosaicConfig(
             gridColumns = 4,
             gridRows = 4,
@@ -211,7 +216,8 @@ class ShapeLayoutTest {
         val placements = packMixed(4, 4, 9)
         assertEquals(16, placements.sumOf { it.area })
         assertTrue(placements.any { it.area > 1 })
-        assertEquals(16, result.plan.assignments.count { it == 0 })
+        assertEquals(16, result.plan.assignments.count { it >= 0 })
+        assertEquals(0, gridAdjacency(result.plan).violations)
         val usage = result.plan.anchors.distinct().size
         assertTrue(usage < 16)
         assertEquals(placements.size, usage)
@@ -233,8 +239,8 @@ class ShapeLayoutTest {
             gridColumns = 4,
             gridRows = 4,
             linkAspectToGrid = false,
-            customOutputWidth = 4000,
-            customOutputHeight = 4000,
+            customOutputWidth = 6000,
+            customOutputHeight = 6000,
             lockOutputAspect = false
         )
         val layout = planOutput(40, 40, config, preview = false)
