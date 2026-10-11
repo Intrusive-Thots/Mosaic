@@ -367,9 +367,11 @@ GitHub Actions (`.github/workflows/ci.yml`) runs engine tests, detekt, benchmark
 
 If `KEYSTORE_BASE64` is empty, the workflow logs that and still builds unsigned artifacts. Upload the AAB to Play Console from a machine that has the real upload key. This repository does not contain one.
 
-A push of `cursor/collage-tuning-loop-fcee` publishes the debug APK only after the engine, Android, and instrumented jobs all succeed. The tag is `v` plus `versionName` plus `-dev`, so a version bump gets a new tag. The workflow force-updates that tag to the commit that was built. For 2.3.0 the file is `app-debug.apk` at `v2.3.0-dev`.
+A push of `cursor/collage-tuning-loop-fcee` publishes the debug APK only after the engine, Android, and instrumented jobs all succeed. The tag is `v` plus `versionName` plus `-dev`, so a version bump gets a new tag. The workflow force-updates that tag to the commit that was built. For 2.4.0 the file is `app-debug.apk` at `v2.4.0-dev`.
 
-https://github.com/Intrusive-Thots/Mosaic/releases/download/v2.3.0-dev/app-debug.apk
+https://github.com/Intrusive-Thots/Mosaic/releases/download/v2.4.0-dev/app-debug.apk
+
+Version 2.4.0 (versionCode 6). Crop the picture by drawing a rectangle on it. Drag inside the box to move it, drag the corners and edges to resize, and pinch to zoom in. Aspect can be free (the default), 1:1, 4:3, 16:9, 9:16, or the photo's own shape. The area outside the box is dimmed, with a rule-of-thirds grid. Reset, Cancel, and Apply sit under the photo. A crop drawn after rotating the picture lands on those same pixels of the original. The per-side crop sliders are gone.
 
 Version 2.3.0 (versionCode 5). A folder you already opened comes back as the thumbnail grid, and Drive reopens the last folder. A build shows about how long is left and stays cancellable. A library of 151 stickers is decoded small enough to fit a phone. Mean-color gaps take on a third of the local picture color, so sticker holes follow the subject. On the 560 px read, portrait ΔE moved from 0.0556 to 0.0547 and SSIM from 0.4598 to 0.4658. Gen 1 Pikachu moved from ΔE 0.0878 to 0.0838 and SSIM from 0.5551 to 0.5745. Same-source touches stayed 0. The collage golden moved for that gap color. The grid goldens did not.
 

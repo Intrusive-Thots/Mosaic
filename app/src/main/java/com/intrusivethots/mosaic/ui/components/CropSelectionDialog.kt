@@ -1,100 +1,135 @@
 package com.intrusivethots.mosaic.ui.components
 
 import android.graphics.Bitmap
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.intrusivethots.mosaic.ui.theme.AccentPink
-import com.intrusivethots.mosaic.ui.theme.AccentPurple
-import com.intrusivethots.mosaic.ui.theme.SurfaceDark
-import com.intrusivethots.mosaic.ui.theme.SurfaceVariantDark
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.intrusivethots.mosaic.engine.image.CropAspect
+import com.intrusivethots.mosaic.engine.image.label
+import com.intrusivethots.mosaic.ui.crop.CropSession
+import com.intrusivethots.mosaic.ui.crop.detectCropGestures
+import com.intrusivethots.mosaic.ui.crop.drawCropScene
+import com.intrusivethots.mosaic.ui.theme.Accent
+import com.intrusivethots.mosaic.ui.theme.DeepBackground
 import com.intrusivethots.mosaic.ui.theme.TextPrimary
 import com.intrusivethots.mosaic.ui.theme.TextSecondary
 
 @Composable
 fun CropSelectionDialog(bitmap: Bitmap, onDismiss: () -> Unit, onApplyCrop: (Float, Float, Float, Float) -> Unit) {
-    var left by remember { mutableFloatStateOf(0.1f) }
-    var top by remember { mutableFloatStateOf(0.1f) }
-    var right by remember { mutableFloatStateOf(0.9f) }
-    var bottom by remember { mutableFloatStateOf(0.9f) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Select mosaic crop", fontWeight = FontWeight.Bold, color = TextPrimary, fontSize = 18.sp) },
-        text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                Image(
-                    bitmap = bitmap.asImageBitmap(),
-                    contentDescription = "Original target",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .border(1.dp, SurfaceVariantDark, RoundedCornerShape(8.dp))
+    val session = remember(bitmap) { CropSession(bitmap.width, bitmap.height) }
+    val image = remember(bitmap) { bitmap.asImageBitmap() }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize(), color = DeepBackground) {
+            Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Text("Crop picture", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Text(
+                    "Drag a rectangle. Move it from inside, resize the edges, pinch to zoom.",
+                    color = TextSecondary,
+                    fontSize = 13.sp
                 )
-                Spacer(modifier = Modifier.height(14.dp))
-                Text("Left ${(left * 100).toInt()}%", fontSize = 12.sp, color = TextSecondary)
-                Slider(
-                    value = left,
-                    onValueChange = { left = it.coerceAtMost(right - 0.1f) },
-                    valueRange = 0f..0.8f,
-                    colors = SliderDefaults.colors(thumbColor = AccentPurple, activeTrackColor = AccentPurple)
-                )
-                Text("Right ${(right * 100).toInt()}%", fontSize = 12.sp, color = TextSecondary)
-                Slider(
-                    value = right,
-                    onValueChange = { right = it.coerceAtLeast(left + 0.1f) },
-                    valueRange = 0.2f..1f,
-                    colors = SliderDefaults.colors(thumbColor = AccentPurple, activeTrackColor = AccentPurple)
-                )
-                Text("Top ${(top * 100).toInt()}%", fontSize = 12.sp, color = TextSecondary)
-                Slider(
-                    value = top,
-                    onValueChange = { top = it.coerceAtMost(bottom - 0.1f) },
-                    valueRange = 0f..0.8f,
-                    colors = SliderDefaults.colors(thumbColor = AccentPink, activeTrackColor = AccentPink)
-                )
-                Text("Bottom ${(bottom * 100).toInt()}%", fontSize = 12.sp, color = TextSecondary)
-                Slider(
-                    value = bottom,
-                    onValueChange = { bottom = it.coerceAtLeast(top + 0.1f) },
-                    valueRange = 0.2f..1f,
-                    colors = SliderDefaults.colors(thumbColor = AccentPink, activeTrackColor = AccentPink)
-                )
+                AspectPresets(session.aspect, session::chooseAspect)
+                CropFrame(bitmap, image, session, Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp))
+                CropActions(onReset = session::reset, onCancel = onDismiss, onApply = { session.applyTo(onApplyCrop) })
             }
-        },
-        confirmButton = {
-            Button(onClick = { onApplyCrop(left, top, right, bottom) }, colors = ButtonDefaults.buttonColors(containerColor = AccentPurple)) {
-                Text("Apply crop")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = TextSecondary) } },
-        containerColor = SurfaceDark
-    )
+        }
+    }
+}
+
+@Composable
+private fun AspectPresets(selected: CropAspect, onSelect: (CropAspect) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        CropAspect.entries.forEach { preset ->
+            FilterChip(
+                selected = preset == selected,
+                onClick = { onSelect(preset) },
+                label = { Text(preset.label) },
+                modifier = Modifier.heightIn(min = 48.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun CropFrame(bitmap: Bitmap, image: ImageBitmap, session: CropSession, modifier: Modifier) {
+    BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+        val ratio = bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)
+        val boundsRatio = if (maxHeight > 0.dp) maxWidth / maxHeight else ratio
+        val frame = if (boundsRatio > ratio) {
+            Modifier.height(maxHeight).aspectRatio(ratio)
+        } else {
+            Modifier.fillMaxWidth().aspectRatio(ratio)
+        }
+        CropSurface(image, session, frame)
+    }
+}
+
+@Composable
+private fun CropSurface(image: ImageBitmap, session: CropSession, modifier: Modifier) {
+    val density = LocalDensity.current
+    val touchPx = with(density) { 48.dp.toPx() }
+    val gripPx = with(density) { 32.dp.toPx() }
+    val rect = session.rect
+    val camera = session.camera
+    Canvas(
+        modifier
+            .semantics { contentDescription = "Crop surface" }
+            .onSizeChanged { session.resizeView(it.width.toFloat(), it.height.toFloat()) }
+            .pointerInput(session, touchPx) { detectCropGestures(session, touchPx) }
+    ) {
+        drawCropScene(image, camera, rect, gripPx)
+    }
+}
+
+@Composable
+private fun CropActions(onReset: () -> Unit, onCancel: () -> Unit, onApply: () -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(onClick = onReset, modifier = Modifier.weight(1f).height(48.dp)) {
+            Text("Reset")
+        }
+        OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f).height(48.dp)) {
+            Text("Cancel")
+        }
+        Button(
+            onClick = onApply,
+            modifier = Modifier.weight(1f).height(48.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Accent)
+        ) {
+            Text("Apply")
+        }
+    }
 }
