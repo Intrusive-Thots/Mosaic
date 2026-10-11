@@ -84,7 +84,43 @@ private suspend fun AwaitPointerEventScope.trackGesture(
         }
         event = awaitPointerEvent()
     }
+    selectingNow = finishSelection(
+        event,
+        start,
+        selecting,
+        pastSlop,
+        selectingNow,
+        viewConfiguration.touchSlop,
+        onSelectStart,
+        onSelectMove
+    )
     if (selectingNow) onSelectEnd() else if (!pastSlop) noteTap(start, onDoubleTap) else onFling(trackerVelocity(tracker))
+}
+
+internal fun releaseClearsSlop(start: Offset, end: Offset, slop: Float): Boolean {
+    return hypot((end.x - start.x).toDouble(), (end.y - start.y).toDouble()) > slop
+}
+
+private fun finishSelection(
+    event: androidx.compose.ui.input.pointer.PointerEvent,
+    start: Offset,
+    selecting: Boolean,
+    pastSlop: Boolean,
+    selectingNow: Boolean,
+    slop: Float,
+    onSelectStart: (Offset) -> Unit,
+    onSelectMove: (Offset) -> Unit
+): Boolean {
+    val release = event.changes.firstOrNull()?.position ?: return selectingNow
+    if (!release.isSpecified) return selectingNow
+    if (selectingNow) {
+        onSelectMove(release)
+        return true
+    }
+    if (!selecting || pastSlop || !releaseClearsSlop(start, release, slop)) return selectingNow
+    onSelectStart(start)
+    onSelectMove(release)
+    return true
 }
 
 private fun applyMove(

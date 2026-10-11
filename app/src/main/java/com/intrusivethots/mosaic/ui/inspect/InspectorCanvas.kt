@@ -86,11 +86,10 @@ internal fun InspectorCanvas(
                             onLongPress(image.x / camera.imageWidth, image.y / camera.imageHeight)
                         },
                         onSelectStart = { point ->
-                            camera.ensureFitted()
-                            draft = listOf(camera.screenToImage(point.x, point.y))
+                            draft = listOf(camera.imagePoint(point.x, point.y))
                         },
                         onSelectMove = { point ->
-                            draft = extendDraft(tool, draft, camera.screenToImage(point.x, point.y))
+                            draft = extendDraft(tool, draft, camera.imagePoint(point.x, point.y))
                         },
                         onSelectEnd = {
                             onShape(shapeFrom(tool, draft, camera.imageWidth, camera.imageHeight))

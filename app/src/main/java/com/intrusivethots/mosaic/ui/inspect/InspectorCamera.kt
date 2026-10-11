@@ -81,6 +81,16 @@ class InspectorCamera {
 
     fun screenToImage(x: Float, y: Float) = Offset((x - offsetX) / scale, (y - offsetY) / scale)
 
+    /** Maps a screen point onto the drawn picture, so a drag in the margin stays on the image edge. */
+    fun imagePoint(x: Float, y: Float): Offset {
+        ensureFitted()
+        val shownW = imageWidth * scale
+        val shownH = imageHeight * scale
+        val clampedX = if (shownW <= 1f) x else x.coerceIn(offsetX, offsetX + shownW)
+        val clampedY = if (shownH <= 1f) y else y.coerceIn(offsetY, offsetY + shownH)
+        return screenToImage(clampedX, clampedY)
+    }
+
     fun imageToScreen(x: Float, y: Float) = Offset(x * scale + offsetX, y * scale + offsetY)
 
     private fun fitScale(): Float {

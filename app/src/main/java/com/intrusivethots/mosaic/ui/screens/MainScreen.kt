@@ -110,7 +110,9 @@ private fun HomeScreen(viewModel: MainViewModel, sources: LibrarySources) {
         if (success) cameraUri?.let(viewModel::setTargetImage)
     }
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
+        snackbarHost = {
+            if (!state.inspectOpen) SnackbarHost(snackbar)
+        },
         containerColor = DeepBackground,
         topBar = {
             if (!state.inspectOpen) TopAppBar(

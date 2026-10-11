@@ -71,31 +71,33 @@ fun ResultInspector(
     var strength by remember(colorStrength) { mutableFloatStateOf(colorStrength.coerceIn(0f, 1f)) }
     var exclude by remember { mutableStateOf(false) }
     var source by remember { mutableStateOf<String?>(null) }
-    Box(modifier = Modifier.fillMaxSize().background(DeepBackground)) {
-        InspectorCanvas(
-            path = imagePath,
-            token = imageToken,
-            camera = camera,
-            selecting = selecting && !busy,
-            tool = tool,
-            shape = shape,
-            onShape = { shape = it },
-            onLongPress = { x, y -> source = sourceAt(x, y) }
-        )
-        Text(
-            text = "${camera.zoomPercent}%",
-            color = TextPrimary,
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp).semantics { contentDescription = "Zoom level" }
-        )
-        source?.let { label ->
-            Text(
-                text = label,
-                color = TextPrimary,
-                modifier = Modifier.align(Alignment.TopStart).padding(16.dp).background(SurfaceDark, RoundedCornerShape(8.dp)).padding(8.dp)
+    Column(modifier = Modifier.fillMaxSize().background(DeepBackground)) {
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            InspectorCanvas(
+                path = imagePath,
+                token = imageToken,
+                camera = camera,
+                selecting = selecting && !busy,
+                tool = tool,
+                shape = shape,
+                onShape = { shape = it },
+                onLongPress = { x, y -> source = sourceAt(x, y) }
             )
+            Text(
+                text = "${camera.zoomPercent}%",
+                color = TextPrimary,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp).semantics { contentDescription = "Zoom level" }
+            )
+            source?.let { label ->
+                Text(
+                    text = label,
+                    color = TextPrimary,
+                    modifier = Modifier.align(Alignment.TopStart).padding(16.dp).background(SurfaceDark, RoundedCornerShape(8.dp)).padding(8.dp)
+                )
+            }
         }
         InspectorControls(
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier.fillMaxWidth(),
             selecting = selecting,
             tool = tool,
             shape = shape,
