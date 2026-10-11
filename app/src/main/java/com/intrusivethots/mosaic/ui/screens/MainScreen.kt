@@ -128,6 +128,10 @@ private fun HomeScreen(viewModel: MainViewModel, sources: LibrarySources) {
         }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (state.inspectOpen) {
+                InspectorOverlay(state, viewModel)
+                return@Scaffold
+            }
             when (tab) {
                 0 -> StudioScreen(
                     state = state,
@@ -183,7 +187,6 @@ private fun HomeScreen(viewModel: MainViewModel, sources: LibrarySources) {
                 2 -> ProjectLibraryScreen(state.projects, viewModel::deleteProject, viewModel::exportProjectToGallery)
                 else -> SettingsDialog(state.apiKey, state.keystoreAvailable, viewModel::saveApiKey)
             }
-            if (state.inspectOpen) InspectorOverlay(state, viewModel)
         }
     }
 }

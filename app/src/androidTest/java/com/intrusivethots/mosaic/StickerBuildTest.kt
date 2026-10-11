@@ -9,6 +9,7 @@ import android.os.SystemClock
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -66,17 +67,25 @@ class StickerBuildTest {
         val failed = viewModel.state.value.generation as? GenerationUiState.Failed
         assertTrue(failed?.message ?: "mosaic saved", failed == null)
         assertTrue(viewModel.state.value.hasFullRender)
-        val token = viewModel.state.value.inspectToken
         composeRule.runOnIdle { viewModel.openInspector() }
         waitUntil("inspector opened") { viewModel.state.value.inspectOpen && viewModel.state.value.inspectPath != null }
-        composeRule.onNode(hasContentDescription("Mosaic inspector")).assertExists()
+        val token = viewModel.state.value.inspectToken
+        composeRule.waitUntil(20_000) {
+            composeRule.onAllNodesWithText("Opening the mosaic…").fetchSemanticsNodes().isEmpty()
+        }
+        composeRule.onNodeWithText("The mosaic could not be shown.").assertDoesNotExist()
+        val picture = composeRule.onNode(hasContentDescription("Mosaic inspector")).fetchSemanticsNode().boundsInRoot
+        assertTrue("inspector is ${picture.width}x${picture.height}", picture.width > 200f && picture.height > 200f)
         composeRule.onNodeWithText("Select").performClick()
         composeRule.onNode(hasContentDescription("Mosaic inspector")).performTouchInput {
             swipe(
-                start = Offset(width * 0.2f, height * 0.18f),
-                end = Offset(width * 0.72f, height * 0.46f),
-                durationMillis = 400
+                start = Offset(width * 0.22f, height * 0.30f),
+                end = Offset(width * 0.78f, height * 0.42f),
+                durationMillis = 600
             )
+        }
+        composeRule.waitUntil(5_000) {
+            composeRule.onAllNodesWithText("Regenerate region").fetchSemanticsNodes().isNotEmpty()
         }
         composeRule.onNodeWithText("Regenerate region").performClick()
         waitUntil("region regenerated") {
