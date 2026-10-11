@@ -6,6 +6,8 @@ import com.intrusivethots.mosaic.engine.config.CollageBackground
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.OutputLayout
 import com.intrusivethots.mosaic.engine.config.RenderMode
+import com.intrusivethots.mosaic.engine.coord.HeapBudget
+import com.intrusivethots.mosaic.engine.coord.fitToEdge
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.WHOLE_STICKER_SPAN
 import com.intrusivethots.mosaic.engine.image.alphaSticker
@@ -261,23 +263,36 @@ class CollageRenderer {
      * blended color is closer to the target than what is already there.
      */
     internal class CloserGate(width: Int, height: Int) {
-        private val targetLab = FloatArray(width * height * 3)
-        private val currentLab = FloatArray(width * 3)
+        private val fieldWidth: Int
+        private val fieldHeight: Int
+        private val targetLab: FloatArray
+        private val currentLab: FloatArray
         private val proposed = FloatArray(3)
-        private val touched = BooleanArray(width)
+        private val touched: BooleanArray
         private var imageWidth = width
+        private var imageHeight = height
         private var rowStart = 0
         private var active = false
+
+        init {
+            val fitted = fitToEdge(width, height, HeapBudget.EXACT_FIELD_EDGE)
+            fieldWidth = fitted.first
+            fieldHeight = fitted.second
+            targetLab = FloatArray(fieldWidth * fieldHeight * 3)
+            currentLab = FloatArray(fieldWidth * 3)
+            touched = BooleanArray(fieldWidth)
+        }
 
         fun bind(target: PixelImage?, width: Int, height: Int) {
             active = target != null
             imageWidth = width
+            imageHeight = height
             if (target == null) return
             var cursor = 0
-            for (y in 0 until height) {
-                val sy = (y + 0.5f) * target.height / height - 0.5f
-                for (x in 0 until width) {
-                    val sx = (x + 0.5f) * target.width / width - 0.5f
+            for (y in 0 until fieldHeight) {
+                val sy = (y + 0.5f) * target.height / fieldHeight - 0.5f
+                for (x in 0 until fieldWidth) {
+                    val sx = (x + 0.5f) * target.width / fieldWidth - 0.5f
                     OkLab.writeLab(target.sampleBilinear(sx, sy), targetLab, cursor)
                     cursor += 3
                 }
@@ -285,16 +300,19 @@ class CollageRenderer {
         }
 
         fun prepare(y: Int, width: Int) {
-            touched.fill(false, 0, width)
-            rowStart = y * imageWidth * 3
+            val sampleY = if (fieldHeight == imageHeight) y else (y * fieldHeight / imageHeight).coerceIn(0, fieldHeight - 1)
+            val limit = if (fieldWidth == imageWidth) width else fieldWidth
+            touched.fill(false, 0, limit.coerceIn(0, touched.size))
+            rowStart = sampleY * fieldWidth * 3
         }
 
         fun allows(x: Int, blended: Int): Boolean {
             if (!active) return true
             OkLab.writeLab(blended, proposed, 0)
-            val at = x * 3
-            if (!touched[x]) {
-                touched[x] = true
+            val sampleX = if (fieldWidth == imageWidth) x else (x * fieldWidth / imageWidth).coerceIn(0, fieldWidth - 1)
+            val at = sampleX * 3
+            if (!touched[sampleX]) {
+                touched[sampleX] = true
                 currentLab[at] = proposed[0]
                 currentLab[at + 1] = proposed[1]
                 currentLab[at + 2] = proposed[2]

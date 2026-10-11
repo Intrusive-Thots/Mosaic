@@ -367,9 +367,11 @@ GitHub Actions (`.github/workflows/ci.yml`) runs engine tests, detekt, benchmark
 
 If `KEYSTORE_BASE64` is empty, the workflow logs that and still builds unsigned artifacts. Upload the AAB to Play Console from a machine that has the real upload key. This repository does not contain one.
 
-A push of `cursor/collage-tuning-loop-fcee` publishes the debug APK only after the engine, Android, and instrumented jobs all succeed. The tag is `v` plus `versionName` plus `-dev`, so a version bump gets a new tag. The workflow force-updates that tag to the commit that was built. For 2.4.0 the file is `app-debug.apk` at `v2.4.0-dev`.
+A push of `cursor/collage-tuning-loop-fcee` publishes the debug APK only after the engine, Android, and instrumented jobs all succeed. The tag is `v` plus `versionName` plus `-dev`, so a version bump gets a new tag. The workflow force-updates that tag to the commit that was built. For 2.4.1 the file is `app-debug.apk` at `v2.4.1-dev`.
 
-https://github.com/Intrusive-Thots/Mosaic/releases/download/v2.4.0-dev/app-debug.apk
+https://github.com/Intrusive-Thots/Mosaic/releases/download/v2.4.1-dev/app-debug.apk
+
+Version 2.4.1 (versionCode 7). Cutout collage on a phone no longer dies with "Not enough memory" while the preview is a field of speckle. Search and the piece-floor check run on a small working image, color and outline fields stay small, and the full picture is painted in rows at a size that fits the phone's memory class. Library photos are decoded at the piece size and released after their colors are copied. If that is still too big, the build finishes at a smaller size and says so. The result preview is the collage itself, large enough that each piece reads as a photo.
 
 Version 2.4.0 (versionCode 6). Crop the picture by drawing a rectangle on it. Drag inside the box to move it, drag the corners and edges to resize, and pinch to zoom in. Aspect can be free (the default), 1:1, 4:3, 16:9, 9:16, or the photo's own shape. The area outside the box is dimmed, with a rule-of-thirds grid. Reset, Cancel, and Apply sit under the photo. A crop drawn after rotating the picture lands on those same pixels of the original. The per-side crop sliders are gone.
 

@@ -2,20 +2,33 @@ package com.intrusivethots.mosaic.engine.render
 
 import com.intrusivethots.mosaic.engine.color.OkLab
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
+import com.intrusivethots.mosaic.engine.coord.HeapBudget
+import com.intrusivethots.mosaic.engine.coord.fitToEdge
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.sampleBilinear
 import kotlin.math.sqrt
 
-/** Sobel magnitude of the target, stored 0–255 at the output size. */
+/**
+ * Sobel magnitude of the target, stored 0–255.
+ * [width] and [height] are the output. The samples stay at that size until the long edge
+ * passes [HeapBudget.EXACT_FIELD_EDGE], then [magnitude] is a smaller field.
+ */
 class EdgeField(
     val width: Int,
     val height: Int,
-    val magnitude: ByteArray
+    val magnitude: ByteArray,
+    val sampleWidth: Int = width,
+    val sampleHeight: Int = height
 )
 
 fun outlineField(target: PixelImage?, config: MosaicConfig, width: Int, height: Int): EdgeField? {
     if (target == null || !config.preserveTargetEdges || width < 3 || height < 3) return null
-    return targetEdgeField(target, width, height)
+    val fitted = fitToEdge(width, height, HeapBudget.EXACT_FIELD_EDGE)
+    if (fitted.first == width && fitted.second == height) return targetEdgeField(target, width, height)
+    val sampleWidth = fitted.first.coerceAtLeast(3)
+    val sampleHeight = fitted.second.coerceAtLeast(3)
+    val sample = targetEdgeField(target, sampleWidth, sampleHeight)
+    return EdgeField(width, height, sample.magnitude, sampleWidth, sampleHeight)
 }
 
 fun targetEdgeField(target: PixelImage, width: Int, height: Int): EdgeField {
@@ -49,9 +62,15 @@ fun targetEdgeField(target: PixelImage, width: Int, height: Int): EdgeField {
  */
 fun darkenOutline(row: IntArray, y: Int, field: EdgeField?) {
     if (field == null || y !in 0 until field.height || row.size != field.width) return
-    val offset = y * field.width
+    val sampleY = if (field.sampleHeight == field.height) {
+        y
+    } else {
+        (y * field.sampleHeight / field.height).coerceIn(0, field.sampleHeight - 1)
+    }
+    val direct = field.sampleWidth == field.width
     for (x in row.indices) {
-        val mag = field.magnitude[offset + x].toInt() and 255
+        val sampleX = if (direct) x else (x * field.sampleWidth / field.width).coerceIn(0, field.sampleWidth - 1)
+        val mag = field.magnitude[sampleY * field.sampleWidth + sampleX].toInt() and 255
         if (mag < INK_FLOOR) continue
         val pull = (mag - INK_FLOOR) / (255f - INK_FLOOR) * INK_PULL
         val argb = row[x]

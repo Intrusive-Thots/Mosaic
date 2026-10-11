@@ -2,6 +2,8 @@ package com.intrusivethots.mosaic.engine.match
 
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.RenderMode
+import com.intrusivethots.mosaic.engine.coord.HeapBudget
+import com.intrusivethots.mosaic.engine.coord.fitToEdge
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.alphaSticker
 import com.intrusivethots.mosaic.engine.index.ProbeCounter
@@ -44,6 +46,7 @@ internal suspend fun assembleCollage(
         edges, target.width, target.height, library, requireFaces, stickers
     )
     fit.seedReserved(reserved)
+    val measured = fitToEdge(target.width, target.height, HeapBudget.MEASURE_EDGE)
     val correct = config.renderMode != RenderMode.ORIGINAL && config.colorMatchWeight > 0f
     val canvas = WorkCanvas(plane, luminanceGradient(plane))
     val pieces = ArrayList<PlacedPiece>()
@@ -55,16 +58,16 @@ internal suspend fun assembleCollage(
     refine(plane, config, fit, canvas, pieces, correct)
     coroutineContext.ensureActive()
     relax(fit, canvas, pieces, correct, config.colorMatchWeight)
-    sealToFloor(plane, target.width, target.height, config, fit, pieces, correct)
+    sealToFloor(plane, measured.first, measured.second, config, fit, pieces, correct)
     val beforeCull = pieces.size
-    cullHiddenFaces(pieces, target.width, target.height)
+    cullHiddenFaces(pieces, measured.first, measured.second)
     if (pieces.size < beforeCull) {
         fit.syncReserved(pieces.map { it.placement })
         fit.syncContact(pieces.map { it.placement })
         coroutineContext.ensureActive()
         refine(plane, config, fit, canvas, pieces, correct)
-        sealToFloor(plane, target.width, target.height, config, fit, pieces, correct)
-        cullHiddenFaces(pieces, target.width, target.height)
+        sealToFloor(plane, measured.first, measured.second, config, fit, pieces, correct)
+        cullHiddenFaces(pieces, measured.first, measured.second)
     }
     untouchCopies(fit, pieces)
     onSnapshot(pieces.map { it.placement }, "Cutting edge shapes")

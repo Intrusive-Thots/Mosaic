@@ -52,7 +52,8 @@ internal class MosaicInspector(
     private val disarm: (Int) -> Unit,
     private val beginRun: () -> Int,
     private val bindJob: (Job) -> Unit,
-    private val isCurrent: (Int) -> Boolean
+    private val isCurrent: (Int) -> Boolean,
+    private val heapBytes: Long = Runtime.getRuntime().maxMemory()
 ) {
     private val clock = BuildClock()
     fun open() {
@@ -126,7 +127,7 @@ internal class MosaicInspector(
         return try {
             showProgress(0.02f, "Loading images")
             val product = withContext(Dispatchers.Default) {
-                RegionEdit(loader, repository, inspectDir).run(snapshot, previous, request) { fraction, label ->
+                RegionEdit(loader, repository, inspectDir, heapBytes).run(snapshot, previous, request) { fraction, label ->
                     if (isCurrent(run)) showProgress(fraction, label)
                 }
             }

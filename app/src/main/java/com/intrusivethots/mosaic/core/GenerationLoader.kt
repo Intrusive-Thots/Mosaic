@@ -83,7 +83,7 @@ internal class GenerationLoader(
             val sticker = readyMadeSticker(large, edgeFor(snapshot))
             if (sticker != null) {
                 owned += sticker
-                sources += BitmapTileSource(bitmapIdentity(sticker, "sticker-$index"), sticker)
+                sources += BitmapTileSource(bitmapIdentity(sticker, "sticker-$index"), sticker, ownsBitmap = true)
                 if (!large.isRecycled) large.recycle()
                 return@forEachIndexed
             }
@@ -93,7 +93,7 @@ internal class GenerationLoader(
                     val thumb = scaleToLongEdge(subject, 128)
                     if (thumb !== subject) subject.recycle()
                     owned += thumb
-                    sources += BitmapTileSource(bitmapIdentity(thumb, "subject-$index-$subjectIndex"), thumb)
+                    sources += BitmapTileSource(bitmapIdentity(thumb, "subject-$index-$subjectIndex"), thumb, ownsBitmap = true)
                 }
             } catch (failure: Exception) {
                 skipped++
@@ -137,7 +137,7 @@ internal class GenerationLoader(
                 return@forEachIndexed
             }
             val token = if (turns == 0) uri.toString() else "${uri}#q$turns"
-            sources += BitmapTileSource(identityOf(uri, token, oriented), oriented)
+            sources += BitmapTileSource(identityOf(uri, token, oriented), oriented, ownsBitmap = true)
         }
         return skipped
     }

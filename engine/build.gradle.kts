@@ -35,6 +35,25 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    filter {
+        excludeTestsMatching("com.intrusivethots.mosaic.engine.CollageMemoryTest")
+    }
+}
+
+tasks.register<Test>("collageMemory") {
+    group = "verification"
+    description = "Cutout collage of a 12 MP target and 150 sources under a 384 MB heap."
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform()
+    filter {
+        includeTestsMatching("com.intrusivethots.mosaic.engine.CollageMemoryTest")
+    }
+    maxHeapSize = "384m"
+    testLogging {
+        showStandardStreams = true
+        events("passed", "failed", "skipped")
+    }
 }
 
 tasks.register<JavaExec>("showcase") {

@@ -10,6 +10,7 @@ import com.intrusivethots.mosaic.core.BuildClock
 import com.intrusivethots.mosaic.core.GenerationLoader
 import com.intrusivethots.mosaic.core.PreviewShelf
 import com.intrusivethots.mosaic.core.PixelHistory
+import com.intrusivethots.mosaic.core.phoneHeapBytes
 import com.intrusivethots.mosaic.core.SubjectSegmenterHelper
 import com.intrusivethots.mosaic.core.generationFailureMessage
 import com.intrusivethots.mosaic.core.readyMadeSticker
@@ -44,6 +45,8 @@ import com.intrusivethots.mosaic.engine.config.restyle
 import com.intrusivethots.mosaic.engine.image.unrotateNormalizedRect
 import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
 import com.intrusivethots.mosaic.engine.coord.GenerationResult
+import com.intrusivethots.mosaic.engine.coord.HeapBudget
+import com.intrusivethots.mosaic.engine.coord.capOutputLayout
 import com.intrusivethots.mosaic.engine.match.CollageSession
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.match.PlanHistory
@@ -74,6 +77,7 @@ import kotlin.math.roundToInt
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = ProjectRepository(application)
+    private val heapBudgetBytes = phoneHeapBytes(application)
     private val descriptorCache = FileDescriptorCache(File(application.filesDir, "descriptor-cache.bin"))
     private val coordinator = GenerationCoordinator(cache = descriptorCache)
     private val bitmapCache = BitmapLruCache(maxBytes = 32 * 1024 * 1024)
@@ -120,6 +124,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         },
         tiles = { tileCount },
         persist = { persistSession() },
+        heapBytes = heapBudgetBytes,
         publishHistory = { publishHistory() },
         preview = { generatePreview() },
         arm = { previous ->
@@ -585,6 +590,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         null
                     } else {
                         { width, height ->
+                            runCatching { png?.close() }
+                            runCatching { stream?.close() }
                             stream = FileOutputStream(fullFile)
                             StreamingPngWriter(stream!!, width, height).also { png = it }
                         }
@@ -592,7 +599,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     onProgress = { progress ->
                         publish(progress.stage, progress.fraction, progress.message, progress.preview?.toBitmap())
                     },
-                    requireCurrentPlan = strict
+                    requireCurrentPlan = strict,
+                    heapBytes = heapBudgetBytes
                     )
                 }
                 if (!acceptFinishedPlan(run, epoch, result)) return@launch
@@ -601,6 +609,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     usedTileIndexes(result.plan)
                 )
                 if (stickerNote != null) _events.tryEmit(UiEvent.Message(stickerNote.message()))
+                result.budgetNote?.let { note -> _events.tryEmit(UiEvent.Message(note)) }
                 if (preview) {
                     val bitmap = previews.offer(result.image?.toBitmap(), System.currentTimeMillis(), force = true)
                     _state.update {
@@ -701,7 +710,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun estimateBytes(width: Int, height: Int, config: MosaicConfig): Long {
-        val layout = com.intrusivethots.mosaic.engine.config.planStackedOutput(width, height, config, preview = false)
+        val natural = com.intrusivethots.mosaic.engine.config.planStackedOutput(width, height, config, preview = false)
+        val layout = capOutputLayout(natural, HeapBudget.outputLongEdge(heapBudgetBytes))
         return layout.pixels * 4L
     }
 

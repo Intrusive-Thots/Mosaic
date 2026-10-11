@@ -135,7 +135,8 @@ fun planCollageOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig,
         return OutputLayout(1, 1, sized.first, sized.second, false)
     }
     if (preview) {
-        val edge = (validated.previewCellPixels * 20).coerceIn(48, 240)
+        val readable = (READABLE_PIECE_PX / validated.collage.minPiece).toInt()
+        val edge = readable.coerceIn(48, 960)
         val longEdge = maxOf(targetWidth, targetHeight).coerceAtLeast(1)
         val scale = if (longEdge <= edge) 1f else edge.toFloat() / longEdge.toFloat()
         val width = (targetWidth * scale).roundToInt().coerceAtLeast(1)
@@ -217,6 +218,9 @@ fun planOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig, previe
     val cellWidth = ((pixels * cellAspect) / divisor).roundToInt().coerceIn(1, MAX_CELL_PIXELS)
     return OutputLayout(grid.columns, grid.rows, cellWidth, cellHeight, grid.staggered)
 }
+
+/** Smallest piece, in preview pixels, that still reads as a photo instead of speckle. */
+private const val READABLE_PIECE_PX = 28f
 
 private fun planCustomOutput(
     targetWidth: Int,

@@ -15,7 +15,7 @@ jobs:
           distribution: temurin
           java-version: 17
       - name: Test and benchmark
-        run: ./gradlew :engine:test :engine:detekt :engine:benchmark --no-daemon
+        run: ./gradlew :engine:test :engine:detekt :engine:benchmark :engine:collageMemory --no-daemon
       - name: Upload benchmark report
         if: always()
         uses: actions/upload-artifact@v4
