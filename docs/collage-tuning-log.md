@@ -2,7 +2,7 @@
 
 Measurements use the showcase cutout settings (`currentCollage`: color grade 0.72, dense style, separate pieces off) at a 560 px long edge and 640 requested pieces. Distance ΔE and SSIM are the 64 px read. Fidelity is piece-content SSIM, median and 10th percentile. Coverage is the union of piece masks on a 160 px grid. Touch is the number of same-source pairs whose visible regions share an edge or a corner. Edge F1 compares 64 px Sobel maps and allows a one-pixel miss.
 
-Grid golden `d1a220dd54d8b766667c236a44c91e01e3d53afd6c4a9393adb7e23d6fade175`. Collage golden `85053792cc9f8fcb056e8649fddca20a83e0a7e6b4c80596eab907c0a517db0c`. Shaped-grid golden `4e9a75d488fd2c1b26231d1b3fed192cd7c380b5ea491423816771807d1e969b`. The collage golden moved when mean-color gaps take on a third of the local target color. The grid and shaped-grid goldens are unchanged.
+Grid golden `d1a220dd54d8b766667c236a44c91e01e3d53afd6c4a9393adb7e23d6fade175`. Collage golden `c5eb97cdc087cf23fa896648ed7505607fd6766b03ad52a8d3c2f1b216e70ad8`. Shaped-grid golden `4e9a75d488fd2c1b26231d1b3fed192cd7c380b5ea491423816771807d1e969b`. The collage golden moved when mean-color gaps took on local picture color, first a third and then half. The grid and shaped-grid goldens are unchanged.
 
 ## Baseline
 
@@ -117,3 +117,18 @@ Mean-color gaps were a flat average, so a sticker's clear pixels and the seams b
 | gen1 after | 0.0838 | 0.5745 | 0.118 | 0.000 | 0.976 | 0 | 0.876 | 0.84 |
 
 Portrait ΔE fell by 0.0009 and SSIM rose by 0.006. Piece fidelity stayed within 0.001. Gen 1 Pikachu, rebuilt from the other 150 stickers at 560 px, moved ΔE from 0.0878 to 0.0838 and SSIM from 0.5551 to 0.5745. Sticker piece fidelity fell from 0.140 to 0.118 because a semi-transparent edge is now composited on local color. Coverage and touch did not change. Kept. The collage golden moved. The grid goldens did not.
+
+## 7. Gaps follow the picture halfway
+
+The 560 px renders still showed pale seams and white fringes. Mean-color gaps were 34% local picture color. They are now an even mix, 50% local and 50% average. Pieces, placement, and coverage are unchanged. Same-source copies still cannot touch.
+
+| Theme | ΔE | SSIM | fidelity | p10 | coverage | touch | edge F1 | chamfer |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| portrait before | 0.0547 | 0.4658 | 0.931 | 0.681 | 0.973 | 0 | 0.861 | 1.68 |
+| portrait after | 0.0543 | 0.4679 | 0.931 | 0.686 | 0.973 | 0 | 0.880 | 1.64 |
+| gen1 before | 0.0838 | 0.5745 | 0.118 | 0.000 | 0.976 | 0 | 0.876 | 0.84 |
+| gen1 after | 0.0818 | 0.5806 | 0.107 | 0.000 | 0.976 | 0 | 0.879 | 0.83 |
+| koth before | 0.0873 | 0.4364 | 0.319 | 0.051 | 0.985 | 0 | 0.791 | 1.49 |
+| koth after | 0.0842 | 0.4518 | 0.312 | 0.084 | 0.985 | 0 | 0.799 | 1.45 |
+
+ΔE fell and SSIM rose on the portrait, on Gen 1 Pikachu from the other 150 stickers, and on the King of the Hill crossover. Touch stayed 0. Piece counts stayed 415, 397, and 396. Sticker piece fidelity fell from 0.118 to 0.107 because a clear edge is composited on more of the local picture. Kept. The collage golden moved for that gap color. The grid goldens did not.

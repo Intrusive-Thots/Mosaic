@@ -152,7 +152,7 @@ internal const val OVERLAP_HELP =
 
 internal fun backgroundHelp(background: CollageBackground): String = when (background) {
     CollageBackground.MEAN_COLOR ->
-        "Gaps are mostly the picture's average color, with a muted trace of the photo showing through."
+        "Gaps mix the picture's average color evenly with the photo at that spot, so holes follow the subject."
     CollageBackground.TARGET -> "Gaps show the target photo."
 }
 

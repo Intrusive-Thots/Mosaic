@@ -350,7 +350,8 @@ class CollageRenderer {
     companion object {
         private const val OPAQUE = 0xFF shl 24
         private const val OPAQUE_MASK = OPAQUE
-        private const val GAP_HINT = 0.34f
+        /** Half the gap is the local picture color, so seams and sticker holes follow the subject. */
+        private const val GAP_HINT = 0.50f
         private const val SHADOW_SHIFT = 2
         private const val SHADOW_ALPHA = 70
         private const val OUTLINE = 0x1C140E
