@@ -10,6 +10,8 @@ import com.intrusivethots.mosaic.engine.index.ProbeCounter
 import com.intrusivethots.mosaic.engine.index.TileIndex
 import com.intrusivethots.mosaic.engine.index.TopK
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import java.util.ArrayDeque
 import kotlin.coroutines.coroutineContext
@@ -30,8 +32,10 @@ internal suspend fun assembleCollage(
     onSnapshot: suspend (List<CutoutPlacement>, String) -> Unit,
     onProgress: (Float, String) -> Unit,
     knownFaces: List<List<FaceBox>>? = null,
-    reserved: List<CutoutPlacement> = emptyList()
+    reserved: List<CutoutPlacement> = emptyList(),
+    budgets: StageBudgets = StageBudgets.PHONE
 ): Assembled {
+    val job = coroutineContext[Job]
     val plane = labPlane(workingCopy(target))
     val swatches = buildSwatches(thumbnails, descriptors)
     val probes = ProbeCounter()
@@ -51,25 +55,29 @@ internal suspend fun assembleCollage(
     val canvas = WorkCanvas(plane, luminanceGradient(plane))
     val pieces = ArrayList<PlacedPiece>()
     onProgress(0.02f, "Cutting large shapes")
-    blockIn(target, config, fit, canvas, pieces, correct) { done ->
+    blockIn(target, config, fit, canvas, pieces, correct, StageClock(budgets.largeMs, job)) { done ->
         onProgress(LARGE_START + (LARGE_END - LARGE_START) * done, "Cutting large shapes")
     }
     onProgress(LARGE_END, "Previewing large shapes")
     onSnapshot(pieces.map { it.placement }, "Previewing large shapes")
     onProgress(0.45f, "Cutting edge shapes")
     coroutineContext.ensureActive()
-    refine(plane, config, fit, canvas, pieces, correct)
+    val edgeClock = StageClock(budgets.edgeMs, job)
+    refine(plane, config, fit, canvas, pieces, correct, edgeClock)
     coroutineContext.ensureActive()
     onProgress(SETTLE_START, "Settling pieces")
-    relax(fit, canvas, pieces, correct, config.colorMatchWeight)
+    relax(fit, canvas, pieces, correct, config.colorMatchWeight, StageClock(budgets.settleMs, job))
+    coroutineContext.ensureActive()
     sealToFloor(plane, measured.first, measured.second, config, fit, pieces, correct)
     val beforeCull = pieces.size
     cullHiddenFaces(pieces, measured.first, measured.second)
-    if (pieces.size < beforeCull) {
+    // The second pass only polishes. Skip it when the edge budget is already spent.
+    if (pieces.size < beforeCull && !edgeClock.over()) {
         fit.syncReserved(pieces.map { it.placement })
         fit.syncContact(pieces.map { it.placement })
         coroutineContext.ensureActive()
-        refine(plane, config, fit, canvas, pieces, correct)
+        refine(plane, config, fit, canvas, pieces, correct, edgeClock)
+        coroutineContext.ensureActive()
         sealToFloor(plane, measured.first, measured.second, config, fit, pieces, correct)
         cullHiddenFaces(pieces, measured.first, measured.second)
     }
@@ -97,12 +105,15 @@ private suspend fun blockIn(
     canvas: WorkCanvas,
     pieces: MutableList<PlacedPiece>,
     correct: Boolean,
+    clock: StageClock,
     onStep: (Float) -> Unit
 ) {
     val ordered = cutTargetShapes(target, config.collage).sortedByDescending { it.scale }
     for (ordinal in ordered.indices) {
         coroutineContext.ensureActive()
         onStep(ordinal.toFloat() / ordered.size.coerceAtLeast(1))
+        // Out of time: keep the large pieces placed so far. The edge pass and seal fill the rest.
+        if (pieces.isNotEmpty() && clock.over()) break
         val cut = ordered[ordinal]
         val chosen = fit.choose(cut, ordinal) ?: continue
         val tone = paintTone(cut, chosen, fit, correct, config.colorMatchWeight)
@@ -118,6 +129,8 @@ private suspend fun refine(
     canvas: WorkCanvas,
     pieces: MutableList<PlacedPiece>,
     correct: Boolean
+,
+    clock: StageClock
 ) {
     val detail = (config.collage.pieceCount * 0.22f).toInt().coerceIn(0, 110)
     if (detail == 0) return
@@ -131,8 +144,8 @@ private suspend fun refine(
     val broadCount = detail / 3
     val pull = config.colorMatchWeight
     val broad = (fine * 2).coerceAtMost(short / 5).coerceAtLeast(fine)
-    wave(plane, fit, canvas, pieces, correct, pull, broadCount, broad, plane.height / 8, taken, floor)
-    wave(plane, fit, canvas, pieces, correct, pull, detail - broadCount, fine, fine, taken, floor)
+    wave(plane, fit, canvas, pieces, correct, pull, broadCount, broad, plane.height / 8, taken, floor, clock)
+    wave(plane, fit, canvas, pieces, correct, pull, detail - broadCount, fine, fine, taken, floor, clock)
 }
 
 private suspend fun wave(
@@ -146,12 +159,14 @@ private suspend fun wave(
     radius: Int,
     blur: Int,
     taken: BooleanArray,
-    floor: PieceFloor
+    floor: PieceFloor,
+    clock: StageClock
 ) {
-    if (count <= 0) return
+    if (count <= 0 || clock.over()) return
     val peaks = canvas.peaks(count, radius, blur)
     for (peak in peaks) {
         coroutineContext.ensureActive()
+        if (clock.over()) return
         if (taken[peak]) continue
         tryBlob(plane, fit, canvas, pieces, correct, pull, peak, radius, taken, floor)
     }
@@ -457,9 +472,17 @@ private fun claimCells(
     }
 }
 
-private fun relax(fit: ShapeFit, canvas: WorkCanvas, pieces: MutableList<PlacedPiece>, correct: Boolean, pull: Float) {
+private fun relax(
+    fit: ShapeFit,
+    canvas: WorkCanvas,
+    pieces: MutableList<PlacedPiece>,
+    correct: Boolean,
+    pull: Float,
+    clock: StageClock
+) {
     var index = pieces.lastIndex
     while (index >= 0) {
+        if (clock.over()) return
         val blocking = pieces[index].cut.blocking || pieces[index].required
         val dropped = if (blocking) null else dropIfUseless(canvas, pieces, index)
         if (dropped != null) {
@@ -938,3 +961,27 @@ private const val PEAK = 0.035f
 private const val FACE_PX = 44f
 private const val REFERENCE_EDGE = 1680f
 private const val FACE_VISIBLE = 0.55f
+
+/** Wall-clock limits for the optional collage stages. A stage that runs out keeps what it has. */
+internal class StageBudgets(val largeMs: Long, val edgeMs: Long, val settleMs: Long) {
+    companion object {
+        val PHONE = StageBudgets(largeMs = 20_000L, edgeMs = 20_000L, settleMs = 10_000L)
+    }
+}
+
+/**
+ * Deadline for one stage. [over] also throws when the build was cancelled, so loops that
+ * are not suspend functions still stop on Cancel.
+ */
+internal class StageClock(private val budgetMs: Long, private val job: Job?) {
+    private val start = System.nanoTime()
+
+    fun over(): Boolean {
+        if (job != null && !job.isActive) throw CancellationException("Collage build cancelled")
+        return (System.nanoTime() - start) / NANOS_PER_MS >= budgetMs
+    }
+
+    private companion object {
+        const val NANOS_PER_MS = 1_000_000L
+    }
+}
