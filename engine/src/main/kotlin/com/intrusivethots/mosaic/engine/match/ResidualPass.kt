@@ -51,12 +51,16 @@ internal suspend fun assembleCollage(
     val canvas = WorkCanvas(plane, luminanceGradient(plane))
     val pieces = ArrayList<PlacedPiece>()
     onProgress(0.02f, "Cutting large shapes")
-    blockIn(target, config, fit, canvas, pieces, correct)
-    onSnapshot(pieces.map { it.placement }, "Cutting large shapes")
+    blockIn(target, config, fit, canvas, pieces, correct) { done ->
+        onProgress(LARGE_START + (LARGE_END - LARGE_START) * done, "Cutting large shapes")
+    }
+    onProgress(LARGE_END, "Previewing large shapes")
+    onSnapshot(pieces.map { it.placement }, "Previewing large shapes")
     onProgress(0.45f, "Cutting edge shapes")
     coroutineContext.ensureActive()
     refine(plane, config, fit, canvas, pieces, correct)
     coroutineContext.ensureActive()
+    onProgress(SETTLE_START, "Settling pieces")
     relax(fit, canvas, pieces, correct, config.colorMatchWeight)
     sealToFloor(plane, measured.first, measured.second, config, fit, pieces, correct)
     val beforeCull = pieces.size
@@ -70,8 +74,8 @@ internal suspend fun assembleCollage(
         cullHiddenFaces(pieces, measured.first, measured.second)
     }
     untouchCopies(fit, pieces)
-    onSnapshot(pieces.map { it.placement }, "Cutting edge shapes")
-    onProgress(1f, "Cutting edge shapes")
+    onSnapshot(pieces.map { it.placement }, "Settling pieces")
+    onProgress(1f, "Settling pieces")
     return Assembled(pieces.map { it.placement }, statsOf(fit, probes, descriptors.size, pieces))
 }
 
@@ -92,11 +96,13 @@ private suspend fun blockIn(
     fit: ShapeFit,
     canvas: WorkCanvas,
     pieces: MutableList<PlacedPiece>,
-    correct: Boolean
+    correct: Boolean,
+    onStep: (Float) -> Unit
 ) {
     val ordered = cutTargetShapes(target, config.collage).sortedByDescending { it.scale }
     for (ordinal in ordered.indices) {
         coroutineContext.ensureActive()
+        onStep(ordinal.toFloat() / ordered.size.coerceAtLeast(1))
         val cut = ordered[ordinal]
         val chosen = fit.choose(cut, ordinal) ?: continue
         val tone = paintTone(cut, chosen, fit, correct, config.colorMatchWeight)
@@ -691,9 +697,10 @@ private fun statsOf(fit: ShapeFit, probes: ProbeCounter, tiles: Int, pieces: Lis
 }
 
 private class WorkCanvas(val plane: LabPlane, private val edges: FloatArray) {
-    val l = FloatArray(plane.l.size) { meanOf(plane.l) }
-    val a = FloatArray(plane.a.size) { meanOf(plane.a) }
-    val b = FloatArray(plane.b.size) { meanOf(plane.b) }
+    // One mean per channel. Computing it inside the array initializer ran it once per pixel.
+    val l = FloatArray(plane.l.size).also { it.fill(meanOf(plane.l)) }
+    val a = FloatArray(plane.a.size).also { it.fill(meanOf(plane.a)) }
+    val b = FloatArray(plane.b.size).also { it.fill(meanOf(plane.b)) }
 
     fun paint(cut: ShapeCut, pl: Float, pa: Float, pb: Float) {
         visit(cut) { index ->
@@ -920,6 +927,9 @@ private fun meanOf(values: FloatArray): Float {
 
 private class Peak(val index: Int, val score: Float)
 
+private const val LARGE_START = 0.02f
+private const val LARGE_END = 0.4f
+private const val SETTLE_START = 0.8f
 private const val COVER_SCALE = 0.07f
 private const val RUIN_GAP = 0.18f
 private const val SEAM_LIMIT = 0.08f

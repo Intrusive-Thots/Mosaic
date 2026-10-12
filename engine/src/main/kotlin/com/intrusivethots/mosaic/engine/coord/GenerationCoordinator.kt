@@ -263,7 +263,9 @@ class GenerationCoordinator(
         fingerprint: String,
         progress: ThrottledProgress,
         knownFaces: List<List<FaceBox>>?
-    ) = collagePlacer.place(
+    ): Pair<MosaicPlan, MatchStats> {
+        var shownLabel = ""
+        return collagePlacer.place(
         target,
         descriptors,
         index,
@@ -274,10 +276,14 @@ class GenerationCoordinator(
             emitLanding(target, descriptors, thumbnails, config, fingerprint, placements, label, progress)
         },
         onProgress = { fraction, label ->
-            progress.report(GenerationStage.MATCHING, fraction, label)
+            // A new stage label always reaches the screen. The throttle only drops repeats of the same label.
+            val changed = label != shownLabel
+            shownLabel = label
+            progress.report(GenerationStage.MATCHING, fraction, label, force = changed)
         },
         knownFaces = knownFaces
     )
+    }
 
     private suspend fun emitLanding(
         target: PixelImage,
