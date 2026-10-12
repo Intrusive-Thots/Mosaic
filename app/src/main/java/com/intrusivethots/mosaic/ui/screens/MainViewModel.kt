@@ -93,6 +93,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _events = MutableSharedFlow<UiEvent>(extraBufferCapacity = 8)
     val events = _events.asSharedFlow()
+    private val gallerySaver = GallerySaver(repository, _events)
 
     private var generationJob: Job? = null
     private var extractJob: Job? = null
@@ -491,35 +492,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _events.tryEmit(UiEvent.Message("Build cancelled."))
     }
 
+    fun reportMessage(text: String) {
+        _events.tryEmit(UiEvent.Message(text))
+    }
+
     fun exportToGallery(title: String) {
-        val path = _state.value.fullImagePath
-        val bitmap = _state.value.outputBitmap
+        val snapshot = _state.value
         viewModelScope.launch {
-            val uri = if (path != null) {
-                repository.exportFileToGallery(File(path), title)
-            } else if (bitmap != null) {
-                repository.exportBitmapToGallery(bitmap, title)
-            } else {
-                null
-            }
-            _events.tryEmit(
-                UiEvent.Message(
-                    if (uri != null) "Saved to Pictures / Mosaic." else "Could not export the image."
-                )
-            )
+            gallerySaver.save(snapshot.fullImagePath, snapshot.outputBitmap, title)
         }
     }
 
     fun exportProjectToGallery(projectId: String) {
         val project = _state.value.projects.find { it.id == projectId } ?: return
-        viewModelScope.launch {
-            val uri = repository.exportFileToGallery(File(project.fullImagePath), project.title)
-            _events.tryEmit(
-                UiEvent.Message(
-                    if (uri != null) "Saved ${project.title} to Pictures / Mosaic." else "That project file is missing."
-                )
-            )
-        }
+        viewModelScope.launch { gallerySaver.saveProject(project) }
     }
 
     fun deleteProject(id: String) {

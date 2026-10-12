@@ -103,14 +103,27 @@ jobs:
         run: |
           version=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)
           echo "version=$version" >> "$GITHUB_ENV"
-          echo "tag=v${version}-dev" >> "$GITHUB_ENV"
+          tag="v${version}-dev"
+          echo "tag=$tag" >> "$GITHUB_ENV"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "publish_release=false" >> "$GITHUB_ENV"
+            echo "Release $tag already exists. Leaving its tag and files alone."
+          else
+            echo "publish_release=true" >> "$GITHUB_ENV"
+            echo "No release named $tag yet. This push will publish it."
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Point the prerelease tag at this commit
+        if: env.publish_release == 'true'
         run: git push --force origin "$GITHUB_SHA:refs/tags/${tag}"
       - uses: actions/download-artifact@v4
+        if: env.publish_release == 'true'
         with:
           name: android-packages
           path: packages
       - name: Attach the debug APK to the prerelease
+        if: env.publish_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.tag }}

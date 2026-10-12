@@ -51,4 +51,5 @@ sealed interface GenerationUiState {
 
 sealed interface UiEvent {
     data class Message(val text: String) : UiEvent
+    data class Saved(val text: String, val uri: Uri, val mime: String) : UiEvent
 }

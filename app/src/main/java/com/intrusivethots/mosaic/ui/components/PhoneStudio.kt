@@ -1,8 +1,6 @@
 package com.intrusivethots.mosaic.ui.components
 
 import android.app.Activity
-import android.content.Intent
-import android.graphics.Bitmap
 import android.view.WindowManager
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -51,7 +49,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
+import com.intrusivethots.mosaic.core.MosaicShare
 import com.intrusivethots.mosaic.engine.config.CollageStyle
 import com.intrusivethots.mosaic.engine.config.HybridStack
 import com.intrusivethots.mosaic.engine.config.MosaicKind
@@ -66,11 +64,7 @@ import com.intrusivethots.mosaic.ui.state.CollageEdit
 import com.intrusivethots.mosaic.ui.state.GenerationUiState
 import com.intrusivethots.mosaic.ui.state.MosaicUiState
 import com.intrusivethots.mosaic.ui.theme.OutlineSubtle
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
 
 @Composable
 fun PhoneStudioBody(
@@ -103,7 +97,7 @@ fun PhoneStudioBody(
     }
     val content: @Composable () -> Unit = {
         ModeSwitch(state, shapeEditor)
-        ResultPanel(state, shapeEditor, onExport, onEnlarge)
+        ResultPanel(state, shapeEditor, onExport, onEnlarge, title)
         TargetImageCard(shownTarget, onGallery, onCamera, onCrop, onResetCrop, shapeEditor.onRotateTarget)
         TileLibraryCard(
             state.tileUris.size,
@@ -130,7 +124,7 @@ fun PhoneStudioBody(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     ModeSwitch(state, shapeEditor)
-                    ResultPanel(state, shapeEditor, onExport, onEnlarge)
+                    ResultPanel(state, shapeEditor, onExport, onEnlarge, title)
                     TargetImageCard(shownTarget, onGallery, onCamera, onCrop, onResetCrop, shapeEditor.onRotateTarget)
                 }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -233,10 +227,17 @@ private fun ProjectCard(title: String, onTitle: (String) -> Unit) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ResultPanel(state: MosaicUiState, shapeEditor: ShapeEditor, onExport: () -> Unit, onEnlarge: () -> Unit) {
+fun ResultPanel(
+    state: MosaicUiState,
+    shapeEditor: ShapeEditor,
+    onExport: () -> Unit,
+    onEnlarge: () -> Unit,
+    title: String
+) {
     val bitmap = state.outputBitmap ?: return
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val report = LocalUserMessage.current
     MosaicCard {
         CardHeader("Result") {
             IconButton(onClick = onEnlarge) {
@@ -246,8 +247,12 @@ private fun ResultPanel(state: MosaicUiState, shapeEditor: ShapeEditor, onExport
                 Icon(Icons.Default.Download, contentDescription = "Save to gallery")
             }
             IconButton(
-                onClick = { scope.launch { shareFile(context, state) } },
-                enabled = state.outputBitmap != null || state.fullImagePath != null
+                onClick = {
+                    scope.launch {
+                        val shared = MosaicShare(context).shareResult(state.fullImagePath, bitmap, title)
+                        if (!shared) report("Could not share the mosaic.")
+                    }
+                }
             ) { Icon(Icons.Default.Share, contentDescription = "Share") }
         }
         Box(
@@ -355,19 +360,3 @@ private fun KeepScreenOn(enabled: Boolean) {
     }
 }
 
-private suspend fun shareFile(context: android.content.Context, state: MosaicUiState) {
-    val file = withContext(Dispatchers.IO) {
-        state.fullImagePath?.let { File(it) }?.takeIf { it.exists() } ?: state.outputBitmap?.let { bitmap ->
-            val dir = File(context.cacheDir, "share").apply { mkdirs() }
-            val out = File(dir, "mosaic-share.png")
-            FileOutputStream(out).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-            out
-        }
-    } ?: return
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-    val intent = Intent(Intent.ACTION_SEND)
-        .setType("image/png")
-        .putExtra(Intent.EXTRA_STREAM, uri)
-        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    context.startActivity(Intent.createChooser(intent, "Share mosaic"))
-}
