@@ -8,8 +8,10 @@ import com.intrusivethots.mosaic.engine.index.ProbeCounter
 import com.intrusivethots.mosaic.engine.index.TileIndex
 import com.intrusivethots.mosaic.engine.index.TopK
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 internal class TileSwatch(
     val grid: Int,
@@ -357,7 +359,80 @@ private fun scoreTile(
         val searched = searchAnchors(swatch, cut, angles, span, penalty, solve, shape)
         refineCrop(swatch, cut, searched, span, penalty, solve, shape)
     }
-    return phaseSlide(swatch, cut, coarse, span, penalty, solve, shape)
+    val slid = phaseSlide(swatch, cut, coarse, span, penalty, solve, shape)
+    return if (PoseTuning.hillClimb) hillClimb(swatch, cut, slid, span, penalty, solve, shape) else slid
+}
+
+/**
+ * Local pose refinement after the lattice pick, in the style of primitive and geometrize:
+ * try small crop moves in eight directions, keep any that lower the true sample error,
+ * and halve the step when none does. Bounded at [HILL_ROUNDS] rounds.
+ */
+private fun hillClimb(
+    swatch: TileSwatch,
+    cut: ShapeCut,
+    start: Scored,
+    span: Float,
+    penalty: Float,
+    solve: Boolean,
+    shape: Float
+): Scored {
+    if (start.score == Float.POSITIVE_INFINITY) return start
+    val radians = Math.toRadians(start.angle.toDouble())
+    val turnCos = cos(radians).toFloat()
+    val turnSin = sin(radians).toFloat()
+    var best = start
+    var step = HILL_START_STEP * span.coerceAtMost(1f)
+    var rounds = 0
+    while (rounds < HILL_ROUNDS && step >= HILL_MIN_STEP) {
+        rounds++
+        var moved = false
+        for (direction in HILL_DIRECTIONS) {
+            val u = (best.u + direction[0] * step).coerceIn(0.05f, 0.95f)
+            val v = (best.v + direction[1] * step).coerceIn(0.05f, 0.95f)
+            val score = anchorScore(swatch, cut, turnCos, turnSin, u, v, span, penalty, solve, shape)
+            if (score < best.score) {
+                best = Scored(score, best.angle, u, v)
+                moved = true
+            }
+        }
+        if (!moved) step *= 0.5f
+    }
+    return best
+}
+
+/**
+ * Gradient-orientation disagreement between the target under the cut and the source crop,
+ * weighted by target edge strength (Hausner 2001; Kim and Pellacini 2002). 0 when every target
+ * edge has a parallel source edge, 1 when none does.
+ */
+internal fun edgeMisalignment(target: FloatArray, source: FloatArray, edge: Int): Float {
+    if (target.size < edge * edge || source.size < edge * edge) return 0f
+    var agree = 0f
+    var weight = 0f
+    for (y in 1 until edge - 1) {
+        for (x in 1 until edge - 1) {
+            val i = y * edge + x
+            val tx = target[i + 1] - target[i - 1]
+            val ty = target[i + edge] - target[i - edge]
+            val tm = sqrt(tx * tx + ty * ty)
+            if (tm < EDGE_FLOOR) continue
+            val sx = source[i + 1] - source[i - 1]
+            val sy = source[i + edge] - source[i - edge]
+            val sm = sqrt(sx * sx + sy * sy)
+            weight += tm
+            if (sm < 1e-6f) continue
+            agree += abs(tx * sx + ty * sy) / sm
+        }
+    }
+    if (weight <= 0f) return 0f
+    return (1f - agree / weight).coerceIn(0f, 1f)
+}
+
+/** Switches for the pose and outline terms. System properties let the tuning harness A/B them. */
+internal object PoseTuning {
+    val hillClimb: Boolean = System.getProperty("mosaic.hill")?.toBoolean() ?: HILL_DEFAULT
+    val edgeWeight: Float = System.getProperty("mosaic.edgeWeight")?.toFloatOrNull() ?: EDGE_WEIGHT_DEFAULT
 }
 
 private fun searchAnchors(
@@ -467,7 +542,12 @@ private fun anchorScore(
     if (color == Float.POSITIVE_INFINITY) return color
     val subject = subjectCost(swatch.salientU, swatch.salientV, anchorU, anchorV, span, sourceBusy(swatch))
     val focus = if (coversSalient(swatch, anchorU, anchorV, span)) FOCUS_BONUS else FOCUS_MISS
-    return color + penalty + shape + subject + contentCost(swatch, anchorU, anchorV, span) + focus
+    val outline = if (PoseTuning.edgeWeight > 0f && cut.gridL.size >= PATCH_EDGE * PATCH_EDGE) {
+        PoseTuning.edgeWeight * edgeMisalignment(cut.gridL, sourcePatch(swatch, anchorU, anchorV, span), PATCH_EDGE)
+    } else {
+        0f
+    }
+    return color + penalty + shape + subject + contentCost(swatch, anchorU, anchorV, span) + focus + outline
 }
 
 private fun coversSalient(swatch: TileSwatch, anchorU: Float, anchorV: Float, span: Float): Boolean {
@@ -781,6 +861,16 @@ private const val FACE_OVERLAP = 0.34f
 private const val CONTACT_FALLBACK = 0.12f
 private val UPRIGHT = floatArrayOf(0f)
 private val ANCHORS = floatArrayOf(0.34f, 0.5f, 0.66f)
+private const val HILL_DEFAULT = false
+private const val EDGE_WEIGHT_DEFAULT = 0f
+private const val HILL_ROUNDS = 10
+private const val HILL_START_STEP = 0.06f
+private const val HILL_MIN_STEP = 0.004f
+private const val EDGE_FLOOR = 0.02f
+private val HILL_DIRECTIONS = arrayOf(
+    floatArrayOf(1f, 0f), floatArrayOf(-1f, 0f), floatArrayOf(0f, 1f), floatArrayOf(0f, -1f),
+    floatArrayOf(0.7f, 0.7f), floatArrayOf(-0.7f, 0.7f), floatArrayOf(0.7f, -0.7f), floatArrayOf(-0.7f, -0.7f)
+)
 private val CROP_SHIFTS = floatArrayOf(-0.10f, -0.05f, 0f, 0.05f, 0.10f)
 private val FLAT_ANCHORS = floatArrayOf(0.24f, 0.4f, 0.56f, 0.72f)
 private val FLAT_WINDOW = floatArrayOf(-0.06f, 0f, 0.06f)

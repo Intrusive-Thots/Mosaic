@@ -9,7 +9,7 @@ import kotlin.math.min
  * and the source may be used many times. Their visible regions must not touch, even at a corner,
  * and must not overlap after later pieces have covered what is underneath.
  *
- * The owner grid follows the output's shape. Its long side has [longCells] cells, so one cell is
+ * The owner grid has [longCells] cells on each side of the output, so one cell is
  * a few output pixels instead of about 1% of the frame. Each opaque mask texel is stamped over its
  * whole footprint, so thin slivers cannot fall between cells. Two copies clash when their visible
  * cells come within [marginCells] of each other. Scratch buffers are reused across calls, and each
@@ -28,16 +28,11 @@ internal class SourceContact(
     val marginCells: Int
 
     init {
-        val w = outputWidth.coerceAtLeast(1)
-        val h = outputHeight.coerceAtLeast(1)
+        // Square in normalized coordinates, so the placement check and the adjacency report use
+        // the same cells whatever the output shape. The short side just gets finer cells.
         val long = longCells.coerceAtLeast(8)
-        if (w >= h) {
-            columns = long
-            rows = (long.toLong() * h / w).toInt().coerceAtLeast(8)
-        } else {
-            rows = long
-            columns = (long.toLong() * w / h).toInt().coerceAtLeast(8)
-        }
+        columns = long
+        rows = long
         val cellPx = outputLongPx.coerceAtLeast(1).toFloat() / long
         marginCells = ceil(MARGIN_PX / cellPx).toInt().coerceIn(1, MAX_MARGIN_CELLS)
     }
@@ -237,8 +232,11 @@ internal class SourceContact(
         /** Cells along the long side of the output. */
         const val CONTACT_LONG = 512
 
-        /** Smallest allowed gap between two copies, in output pixels. */
-        const val MARGIN_PX = 2f
+        /**
+         * Smallest allowed gap between two copies' masks, in output pixels. The renderer paints
+         * one pixel past each mask edge, so two masks this far apart still leave a clear pixel.
+         */
+        const val MARGIN_PX = 4f
 
         /** Output long edge assumed when the caller only has normalized placements. */
         const val DEFAULT_OUTPUT_LONG = 1600
