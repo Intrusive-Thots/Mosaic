@@ -22,7 +22,7 @@ internal class SourceContact(
     longCells: Int = CONTACT_LONG,
     outputLongPx: Int = if (max(outputWidth, outputHeight) > 1) max(outputWidth, outputHeight) else DEFAULT_OUTPUT_LONG,
     private val prefilter: Boolean = true
-) {
+) : ContactIndex {
     val columns: Int
     val rows: Int
     val marginCells: Int
@@ -45,7 +45,7 @@ internal class SourceContact(
     private var stampId = 0
     private val cells = IntList()
 
-    fun clashes(tile: Int, mask: PieceMask?): Boolean {
+    override fun clashes(tile: Int, mask: PieceMask?): Boolean {
         if (tile < 0 || mask == null) return false
         val copies = byTile[tile] ?: return false
         if (copies.isEmpty()) return false
@@ -92,7 +92,7 @@ internal class SourceContact(
         return false
     }
 
-    fun add(placement: CutoutPlacement) {
+    override fun add(placement: CutoutPlacement) {
         val slot = slots.size
         slots.add(placement)
         val mask = placement.mask
@@ -102,7 +102,7 @@ internal class SourceContact(
         if (mask != null) stampCells(mask) { cell -> owner[cell] = slot }
     }
 
-    fun remove(placement: CutoutPlacement) {
+    override fun remove(placement: CutoutPlacement) {
         val slot = slotOf(placement)
         if (slot < 0) return
         slots[slot] = null
@@ -153,7 +153,7 @@ internal class SourceContact(
         }
     }
 
-    fun rebuild(placements: List<CutoutPlacement>) {
+    override fun rebuild(placements: List<CutoutPlacement>) {
         val copy = ArrayList(placements)
         owner.fill(-1)
         slots.clear()
@@ -163,7 +163,7 @@ internal class SourceContact(
     }
 
     /** Pairs of distinct visible copies of one source that touch, counted once per pair. */
-    fun touchingPairs(): Int {
+    override fun touchingPairs(): Int {
         val seen = HashSet<Long>()
         val reach = marginCells
         for (y in 0 until rows) {
