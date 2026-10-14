@@ -343,7 +343,26 @@ private fun readCapped(stream: InputStream): ByteArray? {
     return buffer.toByteArray()
 }
 
-private fun sampleSize(width: Int, height: Int, maxEdge: Int): Int {
+/** Decodes encoded image bytes at most [maxEdge] on the long side, keeping alpha. */
+fun decodeSampledBytes(bytes: ByteArray, maxEdge: Int): Bitmap? {
+    return try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxEdge)
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
+        fitLongEdge(decoded, maxEdge)
+    } catch (oom: OutOfMemoryError) {
+        null
+    } catch (failure: Exception) {
+        null
+    }
+}
+
+internal fun sampleSize(width: Int, height: Int, maxEdge: Int): Int {
     var sample = 1
     val longEdge = max(width, height)
     while (longEdge / (sample * 2) >= maxEdge) sample *= 2
