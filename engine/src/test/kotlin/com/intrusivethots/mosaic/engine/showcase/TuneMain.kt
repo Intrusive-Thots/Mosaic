@@ -3,6 +3,8 @@ package com.intrusivethots.mosaic.engine.showcase
 import com.intrusivethots.mosaic.engine.config.HybridStack
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
+import com.intrusivethots.mosaic.engine.refine.OfflineRefine
+import com.intrusivethots.mosaic.engine.refine.refineOffline
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.downscaleLongEdge
 import com.intrusivethots.mosaic.engine.match.CartoonFaceFinder
@@ -110,10 +112,17 @@ private suspend fun scoreTheme(theme: String, edge: Int, pieces: Int, out: File)
     val loaded = loadTheme(theme, edge)
     val config = sizedCollage(edge, loaded.target, pieces)
     val started = System.nanoTime()
-    val result = GenerationCoordinator().generate(
+    val first = GenerationCoordinator().generate(
         loaded.target, loaded.tiles, config, preview = false, knownFaces = loaded.faces
     )
     val seconds = (System.nanoTime() - started) / 1_000_000_000.0
+    val result = if (OfflineRefine.enabled) {
+        val report = refineOffline(loaded.target, loaded.tiles, config, first.plan)
+        println("REFINE $theme objective ${"%.4f".format(report.before)} -> ${"%.4f".format(report.after)} evals ${report.evaluations} kept ${report.accepted}")
+        GenerationCoordinator().generate(loaded.target, loaded.tiles, config, preview = false, reusePlan = report.plan)
+    } else {
+        first
+    }
     val image = result.image ?: error("$theme produced no image")
     val distance = distanceReadability(image, loaded.target)
     val sources = loaded.tiles.map { it.loadThumbnail(512) }
