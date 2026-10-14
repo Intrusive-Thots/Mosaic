@@ -49,8 +49,8 @@ android {
         applicationId = "com.intrusivethots.mosaic"
         minSdk = 29
         targetSdk = 36
-        versionCode = 11
-        versionName = "2.4.5"
+        versionCode = 12
+        versionName = "2.4.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GOOGLE_DRIVE_CLIENT_ID", "\"$driveClientId\"")
     }
