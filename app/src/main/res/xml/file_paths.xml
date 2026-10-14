@@ -2,4 +2,5 @@
 <paths>
     <cache-path name="camera" path="camera/" />
     <files-path name="projects" path="projects/" />
+    <files-path name="drive" path="drive-library/" />
 </paths>
