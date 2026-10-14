@@ -44,7 +44,7 @@ internal class ShapeFit(
 ) {
     private val handful = HandfulPenalty()
     private val reserved = ArrayList<FaceBox>()
-    private val contact = SourceContact()
+    private val contact = SourceContact(outputWidth, outputHeight)
     private val outside = ArrayList<CutoutPlacement>()
     var comparisons: Long = 0
 
