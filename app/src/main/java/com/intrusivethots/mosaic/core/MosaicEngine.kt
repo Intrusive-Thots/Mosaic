@@ -6,6 +6,7 @@ import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.MosaicStyle
 import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
 import com.intrusivethots.mosaic.engine.image.centerAspectRect
+import com.intrusivethots.mosaic.engine.match.FaceBox
 import com.intrusivethots.mosaic.engine.tile.MemoryTileSource
 import com.intrusivethots.mosaic.engine.tile.TileAnalyzer
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
@@ -41,7 +42,8 @@ class MosaicEngine(
                 avgGreen = features.meanGreen,
                 avgBlue = features.meanBlue,
                 thumbnail = scaleToLongEdge(bitmap, 64),
-                descriptor = descriptor
+                descriptor = descriptor,
+                faces = PhotoFaceDetector.detect(bitmap)
             )
         }
     }
@@ -67,7 +69,8 @@ class MosaicEngine(
             tiles = sources,
             config = config,
             preview = isPreview,
-            onProgress = { progress -> onProgress(progress.fraction) }
+            onProgress = { progress -> onProgress(progress.fraction) },
+            knownFaces = tiles.map { it.faces }
         )
         return result.image?.toBitmap()
             ?: error("This mosaic is too large to return as one bitmap. Render it to a file instead.")
@@ -80,7 +83,8 @@ data class TileAnalysis(
     val avgGreen: Int,
     val avgBlue: Int,
     val thumbnail: Bitmap,
-    val descriptor: TileDescriptor? = null
+    val descriptor: TileDescriptor? = null,
+    val faces: List<FaceBox> = emptyList()
 )
 
 typealias AspectRatioPreset = com.intrusivethots.mosaic.engine.config.AspectRatioPreset

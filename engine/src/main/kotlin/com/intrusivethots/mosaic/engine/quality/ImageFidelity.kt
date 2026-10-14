@@ -438,23 +438,42 @@ fun pieceContentFidelity(
 /** Last placement to cover a pixel wins, matching the painter's order. */
 private fun visibleOwners(width: Int, height: Int, placements: List<CutoutPlacement>): IntArray {
     val owners = IntArray(width * height) { -1 }
+    val locked = BooleanArray(owners.size)
     for (index in placements.indices) {
-        val mask = placements[index].mask ?: continue
-        stampOwner(owners, width, height, mask, index)
+        val placement = placements[index]
+        val mask = placement.mask ?: continue
+        stampOwner(owners, locked, width, height, mask, placement, index)
     }
     return owners
 }
 
-private fun stampOwner(owners: IntArray, width: Int, height: Int, mask: PieceMask, owner: Int) {
+private fun stampOwner(
+    owners: IntArray,
+    locked: BooleanArray,
+    width: Int,
+    height: Int,
+    mask: PieceMask,
+    placement: CutoutPlacement,
+    owner: Int
+) {
     val left = (mask.left * width).toInt().coerceIn(0, width - 1)
     val right = (mask.right * width).toInt().coerceIn(left, width - 1)
     val top = (mask.top * height).toInt().coerceIn(0, height - 1)
     val bottom = (mask.bottom * height).toInt().coerceIn(top, height - 1)
+    val face = placement.faceRight > placement.faceLeft
     for (y in top..bottom) {
         val row = y * width
         val ny = (y + 0.5f) / height.toFloat()
         for (x in left..right) {
-            if (mask.contains((x + 0.5f) / width.toFloat(), ny)) owners[row + x] = owner
+            if (locked[row + x]) continue
+            val nx = (x + 0.5f) / width.toFloat()
+            if (!mask.contains(nx, ny)) continue
+            owners[row + x] = owner
+            if (face && nx >= placement.faceLeft && nx <= placement.faceRight &&
+                ny >= placement.faceTop && ny <= placement.faceBottom
+            ) {
+                locked[row + x] = true
+            }
         }
     }
 }
@@ -505,8 +524,8 @@ private fun pieceStructure(
 }
 
 private fun renderedLuma(image: PixelImage, nx: Float, ny: Float): Float {
-    val x = nx * (image.width - 1).coerceAtLeast(1)
-    val y = ny * (image.height - 1).coerceAtLeast(1)
+    val x = nx * image.width - 0.5f
+    val y = ny * image.height - 0.5f
     return OkLab.fromArgb(image.sampleBilinear(x, y)).l
 }
 

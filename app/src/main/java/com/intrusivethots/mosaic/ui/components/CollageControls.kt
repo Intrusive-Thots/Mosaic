@@ -56,6 +56,7 @@ private fun CollageSliders(settings: CollageSettings, onCollage: (CollageSetting
         Text(
             "Shapes are cut from the picture itself, then filled from your library. " +
                 "Large pieces block in regions. Smaller ones follow edges and can overlap. " +
+                "Minimum piece is the smallest visible short side, so a sliver is merged or covered instead of stamped. " +
                 "Color strength gives each piece a light grade toward the target and leaves the source photo readable.",
             fontSize = 12.sp,
             color = TextSecondary
@@ -65,6 +66,15 @@ private fun CollageSliders(settings: CollageSettings, onCollage: (CollageSetting
     }
     LabeledSlider("Fine shapes: ${(settings.minScale * 100).roundToInt()}%", settings.minScale, 0.015f, 0.4f, AccentAmber) {
         onCollage(settings.copy(minScale = it))
+    }
+    LabeledSlider(
+        "Minimum piece: ${(settings.minPiece * 100).roundToInt()}%",
+        settings.minPiece,
+        CollageSettings.MIN_PIECE_LOW,
+        CollageSettings.MIN_PIECE_HIGH,
+        AccentAmber
+    ) {
+        onCollage(settings.copy(minPiece = it))
     }
     LabeledSlider("Large shapes: ${(settings.maxScale * 100).roundToInt()}%", settings.maxScale, 0.12f, 0.7f, AccentAmber) {
         onCollage(settings.copy(maxScale = it.coerceAtLeast(settings.minScale)))

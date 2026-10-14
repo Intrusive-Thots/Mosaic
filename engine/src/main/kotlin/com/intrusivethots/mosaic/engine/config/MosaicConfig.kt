@@ -223,6 +223,7 @@ fun MosaicConfig.matchFingerprint(targetWidth: Int, targetHeight: Int, tileToken
         val pieces = collage.sanitized()
         append("|pieces").append(pieces.pieceCount)
         append("|smin").append((pieces.minScale * 1000f).toInt())
+        append("|mpiece").append((pieces.minPiece * 1000f).toInt())
         append("|smax").append((pieces.maxScale * 1000f).toInt())
         append("|rdeg").append(pieces.rotationRangeDegrees.toInt())
         append("|ov").append((pieces.overlap * 100f).toInt())

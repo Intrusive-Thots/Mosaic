@@ -112,17 +112,25 @@ class TileIndex private constructor(
             val labL = FloatArray(count)
             val labA = FloatArray(count)
             val labB = FloatArray(count)
-            val grouped = Array(BIN_COUNT) { mutableListOf<Int>() }
             descriptors.forEachIndexed { index, descriptor ->
                 labL[index] = descriptor.labL
                 labA[index] = descriptor.labA
                 labB[index] = descriptor.labB
-                grouped[binOf(descriptor.labL, descriptor.labA, descriptor.labB)].add(index)
+            }
+            return fromColors(labL, labA, labB)
+        }
+
+        /** Same bins as [build], with one OKLab key per tile supplied by the caller. */
+        fun fromColors(labL: FloatArray, labA: FloatArray, labB: FloatArray): TileIndex {
+            val count = minOf(labL.size, labA.size, labB.size)
+            val grouped = Array(BIN_COUNT) { mutableListOf<Int>() }
+            for (index in 0 until count) {
+                grouped[binOf(labL[index], labA[index], labB[index])].add(index)
             }
             val bins = Array(BIN_COUNT) { bin ->
                 grouped[bin].sortedBy { labL[it] }.toIntArray()
             }
-            return TileIndex(labL, labA, labB, bins)
+            return TileIndex(labL.copyOf(count), labA.copyOf(count), labB.copyOf(count), bins)
         }
 
         fun binOf(l: Float, a: Float, b: Float): Int {
