@@ -117,6 +117,8 @@ class ExactContactTest {
     }
 
     companion object {
+        private val RENDER_REACH = listOf(0 to 0, 1 to 0, -1 to 0, 0 to 1, 0 to -1)
+
         /** Owner of every output pixel, top piece last, then 8-neighbour same-source contact. */
         fun fullResolutionTouches(placements: List<CutoutPlacement>, width: Int = 1600, height: Int = 1200): Int {
             val owner = IntArray(width * height) { -1 }
@@ -126,10 +128,29 @@ class ExactContactTest {
                 val x1 = (mask.right * width).toInt().coerceIn(0, width - 1)
                 val y0 = (mask.top * height).toInt().coerceIn(0, height - 1)
                 val y1 = (mask.bottom * height).toInt().coerceIn(0, height - 1)
+                // The renderer also paints the pixel just outside a mask edge, so dilate by one pixel.
+                val inside = BooleanArray((x1 - x0 + 3) * (y1 - y0 + 3))
+                val stride = x1 - x0 + 3
                 for (y in y0..y1) for (x in x0..x1) {
-                    if (mask.contains((x + 0.5f) / width, (y + 0.5f) / height)) owner[y * width + x] = index
+                    if (mask.contains((x + 0.5f) / width, (y + 0.5f) / height)) inside[(y - y0 + 1) * stride + (x - x0 + 1)] = true
+                }
+                for (y in (y0 - 1)..(y1 + 1)) for (x in (x0 - 1)..(x1 + 1)) {
+                    if (x !in 0 until width || y !in 0 until height) continue
+                    val lx = x - x0 + 1
+                    val ly = y - y0 + 1
+                    if (reached(inside, stride, lx, ly)) owner[y * width + x] = index
                 }
             }
+            return touchingPairs(placements, owner, width, height)
+        }
+
+        private fun reached(inside: BooleanArray, stride: Int, lx: Int, ly: Int): Boolean = RENDER_REACH.any { (dx, dy) ->
+            val qx = lx + dx
+            val qy = ly + dy
+            qx in 0 until stride && qy >= 0 && qy * stride + qx in inside.indices && inside[qy * stride + qx]
+        }
+
+        private fun touchingPairs(placements: List<CutoutPlacement>, owner: IntArray, width: Int, height: Int): Int {
             val pairs = HashSet<Long>()
             for (y in 0 until height) for (x in 0 until width) {
                 val a = owner[y * width + x]
