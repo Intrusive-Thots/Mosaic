@@ -5,6 +5,7 @@ import android.net.Uri
 import com.intrusivethots.mosaic.cache.BitmapLruCache
 import com.intrusivethots.mosaic.data.ProjectRepository
 import com.intrusivethots.mosaic.engine.config.MosaicKind
+import com.intrusivethots.mosaic.engine.config.effectiveStack
 import com.intrusivethots.mosaic.engine.tile.TileIdentity
 import com.intrusivethots.mosaic.engine.tile.TileSource
 import com.intrusivethots.mosaic.ui.state.MosaicUiState
@@ -79,13 +80,20 @@ internal class GenerationLoader(
                 skipped++
                 return@forEachIndexed
             }
+            val sticker = readyMadeSticker(large, edgeFor(snapshot))
+            if (sticker != null) {
+                owned += sticker
+                sources += BitmapTileSource(bitmapIdentity(sticker, "sticker-$index"), sticker, ownsBitmap = true)
+                if (!large.isRecycled) large.recycle()
+                return@forEachIndexed
+            }
             try {
                 val subjects = SubjectSegmenterHelper.extractForLibrary(large, originals, snapshot.config.segmentation)
                 subjects.forEachIndexed { subjectIndex, subject ->
                     val thumb = scaleToLongEdge(subject, 128)
                     if (thumb !== subject) subject.recycle()
                     owned += thumb
-                    sources += BitmapTileSource(bitmapIdentity(thumb, "subject-$index-$subjectIndex"), thumb)
+                    sources += BitmapTileSource(bitmapIdentity(thumb, "subject-$index-$subjectIndex"), thumb, ownsBitmap = true)
                 }
             } catch (failure: Exception) {
                 skipped++
@@ -98,13 +106,18 @@ internal class GenerationLoader(
         return skipped
     }
 
+    private fun edgeFor(snapshot: MosaicUiState): Int {
+        return snapshot.config.descriptorMaxEdge.coerceAtLeast(96).coerceAtMost(128)
+    }
+
     private suspend fun appendPhotos(
         snapshot: MosaicUiState,
         sources: MutableList<TileSource>,
         owned: MutableList<Bitmap>,
         onLoad: (String, Float) -> Unit
     ): Int {
-        val edge = snapshot.config.descriptorMaxEdge.coerceAtLeast(96).coerceAtMost(128)
+        val collage = snapshot.config.effectiveStack().usesCollage()
+        val edge = if (collage) collageLibraryEdge(snapshot.tileUris.size) else edgeFor(snapshot)
         var skipped = 0
         snapshot.tileUris.forEachIndexed { index, uri ->
             coroutineContext.ensureActive()
@@ -124,7 +137,7 @@ internal class GenerationLoader(
                 return@forEachIndexed
             }
             val token = if (turns == 0) uri.toString() else "${uri}#q$turns"
-            sources += BitmapTileSource(identityOf(uri, token, oriented), oriented)
+            sources += BitmapTileSource(identityOf(uri, token, oriented), oriented, ownsBitmap = true)
         }
         return skipped
     }

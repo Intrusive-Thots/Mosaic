@@ -12,7 +12,6 @@ import com.intrusivethots.mosaic.engine.config.MosaicStyle
 import com.intrusivethots.mosaic.engine.config.RotationMode
 import com.intrusivethots.mosaic.engine.config.TileFit
 import com.intrusivethots.mosaic.ui.design.ChoiceGroup
-import com.intrusivethots.mosaic.ui.design.HintText
 import com.intrusivethots.mosaic.ui.design.SettingSlider
 import com.intrusivethots.mosaic.ui.design.SettingSwitch
 
@@ -30,20 +29,27 @@ fun GridControls(
     onFit: (TileFit) -> Unit
 ) {
     Column(Modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        ChoiceGroup("Pattern", MosaicStyle.entries, config.mosaicStyle, { it.label }, onStyle)
+        ChoiceGroup(
+            title = "Pattern",
+            options = MosaicStyle.entries,
+            selected = config.mosaicStyle,
+            label = { it.label },
+            onSelect = onStyle,
+            description = patternHelp(config.mosaicStyle)
+        )
         SettingSlider(
             label = "Columns",
             valueText = "${config.gridColumns}",
             value = config.gridColumns.toFloat(),
             range = 8f..120f,
             onChange = { onColumns(it.toInt()) },
-            description = "More columns capture finer detail but take longer to generate."
+            description = COLUMNS_HELP
         )
         SettingSwitch(
             title = "Match rows to image shape",
             checked = config.linkAspectToGrid,
             onChange = onLink,
-            description = "Rows are derived from the columns and the aspect ratio."
+            description = matchRowsHelp(config.linkAspectToGrid)
         )
         if (!config.linkAspectToGrid) {
             SettingSlider(
@@ -51,21 +57,25 @@ fun GridControls(
                 valueText = "${config.gridRows}",
                 value = config.gridRows.toFloat(),
                 range = 8f..120f,
-                onChange = { onRows(it.toInt()) }
+                onChange = { onRows(it.toInt()) },
+                description = ROWS_HELP
             )
         }
-        ChoiceGroup("Cell shape", CellAspect.entries, config.cellAspect, { it.label }, onCellAspect)
+        ChoiceGroup(
+            title = "Cell shape",
+            options = CellAspect.entries,
+            selected = config.cellAspect,
+            label = { it.label },
+            onSelect = onCellAspect,
+            description = cellShapeHelp(config.cellAspect, config.linkAspectToGrid)
+        )
         ChoiceGroup(
             title = "Layout",
             options = LayoutMode.entries,
             selected = config.layoutMode,
             label = { it.label },
             onSelect = onLayout,
-            description = if (config.layoutMode == LayoutMode.MIXED) {
-                "Portrait and landscape photos get tall or wide cells, with no gaps."
-            } else {
-                null
-            }
+            description = layoutHelp(config.layoutMode)
         )
         ChoiceGroup(
             title = "Photo placement",
@@ -73,11 +83,7 @@ fun GridControls(
             selected = config.tileFit,
             label = { it.label },
             onSelect = onFit,
-            description = if (config.tileFit == TileFit.CENTER_CROP) {
-                "Crops each photo to fill its cell."
-            } else {
-                "Shows the whole photo and leaves bars where the shapes differ."
-            }
+            description = placementHelp(config.tileFit)
         )
         ChoiceGroup(
             title = "Automatic rotation",
@@ -85,14 +91,7 @@ fun GridControls(
             selected = config.rotationMode,
             label = { it.label },
             onSelect = onRotation,
-            description = when (config.rotationMode) {
-                RotationMode.OFF -> "Every photo stays upright."
-                RotationMode.ORIENTATION -> "Turns a photo 90° when that fits its cell better."
-                RotationMode.FULL -> "Also tries 180° turns and mirrored copies."
-            }
+            description = rotationHelp(config.rotationMode)
         )
-        if (config.cellAspect == CellAspect.MATCH_GRID && config.layoutMode == LayoutMode.UNIFORM) {
-            HintText("Cell shape follows the grid. Pick a ratio to use rectangular cells.")
-        }
     }
 }

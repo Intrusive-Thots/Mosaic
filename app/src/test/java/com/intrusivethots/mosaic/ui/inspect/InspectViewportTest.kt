@@ -1,6 +1,8 @@
 package com.intrusivethots.mosaic.ui.inspect
 
+import androidx.compose.ui.geometry.Offset
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -33,6 +35,19 @@ class InspectViewportTest {
         val fit = min(1344f / 2100f, 2992f / 2800f)
         assertEquals(fit, camera.scale, 0.001f)
         assertTrue(camera.zoomPercent in 60..70)
+    }
+
+    @Test
+    fun aLongDragInsideTheFittedPictureSelectsARegion() {
+        val camera = InspectorCamera()
+        camera.attach(320f, 280f, 180, 180)
+        val start = camera.imagePoint(320f * 0.22f, 280f * 0.22f)
+        val end = camera.imagePoint(320f * 0.78f, 280f * 0.78f)
+        assertTrue(releaseClearsSlop(Offset(70f, 60f), Offset(250f, 220f), slop = 24f))
+        val shape = shapeFrom(InspectTool.RECTANGLE, listOf(start, end), camera.imageWidth, camera.imageHeight)
+        assertNotNull(shape)
+        assertTrue(shape!!.right - shape.left > 0.2f)
+        assertTrue(shape.bottom - shape.top > 0.2f)
     }
 
     @Test

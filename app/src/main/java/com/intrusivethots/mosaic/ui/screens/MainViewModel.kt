@@ -6,11 +6,16 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.intrusivethots.mosaic.cache.BitmapLruCache
+import com.intrusivethots.mosaic.core.BuildClock
 import com.intrusivethots.mosaic.core.GenerationLoader
+import com.intrusivethots.mosaic.core.PreviewShelf
 import com.intrusivethots.mosaic.core.PixelHistory
+import com.intrusivethots.mosaic.core.phoneHeapBytes
 import com.intrusivethots.mosaic.core.SubjectSegmenterHelper
 import com.intrusivethots.mosaic.core.generationFailureMessage
+import com.intrusivethots.mosaic.core.readyMadeSticker
 import com.intrusivethots.mosaic.core.skippedImageMessage
+import com.intrusivethots.mosaic.engine.image.stickerUsage
 import com.intrusivethots.mosaic.core.tightenSubject
 import com.intrusivethots.mosaic.core.toBitmap
 import com.intrusivethots.mosaic.core.toPixelImage
@@ -40,6 +45,8 @@ import com.intrusivethots.mosaic.engine.config.restyle
 import com.intrusivethots.mosaic.engine.image.unrotateNormalizedRect
 import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
 import com.intrusivethots.mosaic.engine.coord.GenerationResult
+import com.intrusivethots.mosaic.engine.coord.HeapBudget
+import com.intrusivethots.mosaic.engine.coord.capOutputLayout
 import com.intrusivethots.mosaic.engine.match.CollageSession
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.match.PlanHistory
@@ -70,6 +77,7 @@ import kotlin.math.roundToInt
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = ProjectRepository(application)
+    private val heapBudgetBytes = phoneHeapBytes(application)
     private val descriptorCache = FileDescriptorCache(File(application.filesDir, "descriptor-cache.bin"))
     private val coordinator = GenerationCoordinator(cache = descriptorCache)
     private val bitmapCache = BitmapLruCache(maxBytes = 32 * 1024 * 1024)
@@ -85,6 +93,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _events = MutableSharedFlow<UiEvent>(extraBufferCapacity = 8)
     val events = _events.asSharedFlow()
+    private val gallerySaver = GallerySaver(repository, _events)
 
     private var generationJob: Job? = null
     private var extractJob: Job? = null
@@ -98,6 +107,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var strictRestore = false
     private var planEdit: com.intrusivethots.mosaic.engine.coord.PlanEdit? = null
     private var tileCount: Int = 0
+    private val buildClock = BuildClock()
+    private val previews = PreviewShelf(viewModelScope)
     private val inspector = MosaicInspector(
         repository = repository,
         loader = libraryLoader,
@@ -114,6 +125,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         },
         tiles = { tileCount },
         persist = { persistSession() },
+        heapBytes = heapBudgetBytes,
         publishHistory = { publishHistory() },
         preview = { generatePreview() },
         arm = { previous ->
@@ -477,37 +489,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancelGeneration() {
         generationJob?.cancel()
+        _events.tryEmit(UiEvent.Message("Build cancelled."))
+    }
+
+    fun reportMessage(text: String) {
+        _events.tryEmit(UiEvent.Message(text))
     }
 
     fun exportToGallery(title: String) {
-        val path = _state.value.fullImagePath
-        val bitmap = _state.value.outputBitmap
+        val snapshot = _state.value
         viewModelScope.launch {
-            val uri = if (path != null) {
-                repository.exportFileToGallery(File(path), title)
-            } else if (bitmap != null) {
-                repository.exportBitmapToGallery(bitmap, title)
-            } else {
-                null
-            }
-            _events.tryEmit(
-                UiEvent.Message(
-                    if (uri != null) "Saved to Pictures / Mosaic." else "Could not export the image."
-                )
-            )
+            gallerySaver.save(snapshot.fullImagePath, snapshot.outputBitmap, title)
         }
     }
 
     fun exportProjectToGallery(projectId: String) {
         val project = _state.value.projects.find { it.id == projectId } ?: return
-        viewModelScope.launch {
-            val uri = repository.exportFileToGallery(File(project.fullImagePath), project.title)
-            _events.tryEmit(
-                UiEvent.Message(
-                    if (uri != null) "Saved ${project.title} to Pictures / Mosaic." else "That project file is missing."
-                )
-            )
-        }
+        viewModelScope.launch { gallerySaver.saveProject(project) }
     }
 
     fun deleteProject(id: String) {
@@ -519,10 +517,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     suspend fun extractStampsFromUri(uri: Uri): List<Bitmap> {
         val bitmap = repository.loadBitmapFromUri(uri, maxDimension = 1024) ?: return emptyList()
+        val sticker = readyMadeSticker(bitmap, 512)
+        if (sticker != null) {
+            if (sticker !== bitmap && !bitmap.isRecycled) bitmap.recycle()
+            return listOf(sticker)
+        }
         return try {
             SubjectSegmenterHelper.extractSubjects(bitmap)
         } finally {
-            bitmap.recycle()
+            if (!bitmap.isRecycled) bitmap.recycle()
         }
     }
 
@@ -536,6 +539,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         generationJob?.cancel()
         val run = ++runSerial
+        buildClock.reset()
         generationJob = viewModelScope.launch {
             val strict = strictRestore
             strictRestore = false
@@ -572,6 +576,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         null
                     } else {
                         { width, height ->
+                            runCatching { png?.close() }
+                            runCatching { stream?.close() }
                             stream = FileOutputStream(fullFile)
                             StreamingPngWriter(stream!!, width, height).also { png = it }
                         }
@@ -579,12 +585,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     onProgress = { progress ->
                         publish(progress.stage, progress.fraction, progress.message, progress.preview?.toBitmap())
                     },
-                    requireCurrentPlan = strict
+                    requireCurrentPlan = strict,
+                    heapBytes = heapBudgetBytes
                     )
                 }
                 if (!acceptFinishedPlan(run, epoch, result)) return@launch
+                val stickerNote = stickerUsage(
+                    result.descriptors.map { it.alphaCoverage },
+                    usedTileIndexes(result.plan)
+                )
+                if (stickerNote != null) _events.tryEmit(UiEvent.Message(stickerNote.message()))
+                result.budgetNote?.let { note -> _events.tryEmit(UiEvent.Message(note)) }
                 if (preview) {
-                    val bitmap = result.image?.toBitmap()
+                    val bitmap = previews.offer(result.image?.toBitmap(), System.currentTimeMillis(), force = true)
                     _state.update {
                         it.copy(
                             previewBitmap = bitmap,
@@ -668,9 +681,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             targetQuarterTurns = config.targetQuarterTurns,
             tileRotations = encodeTileRotations(snapshot.tileUris.map { it.toString() }, snapshot.tileQuarterTurns)
         )
+        previews.release()
         _state.update {
             it.copy(
                 displayBitmap = display,
+                previewBitmap = null,
                 hasFullRender = true,
                 fullImagePath = saved.fullImagePath,
                 generation = GenerationUiState.Complete,
@@ -681,15 +696,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun estimateBytes(width: Int, height: Int, config: MosaicConfig): Long {
-        val layout = com.intrusivethots.mosaic.engine.config.planStackedOutput(width, height, config, preview = false)
+        val natural = com.intrusivethots.mosaic.engine.config.planStackedOutput(width, height, config, preview = false)
+        val layout = capOutputLayout(natural, HeapBudget.outputLongEdge(heapBudgetBytes))
         return layout.pixels * 4L
     }
 
     private fun publish(stage: GenerationStage, fraction: Float, label: String, preview: Bitmap? = null) {
+        val shown = if (preview == null) null else previews.offer(preview, System.currentTimeMillis())
+        val eta = buildClock.eta(stage, fraction)
         _state.update { state ->
             state.copy(
-                generation = GenerationUiState.Running(stage, fraction, label),
-                previewBitmap = preview ?: state.previewBitmap,
+                generation = GenerationUiState.Running(stage, fraction, label, eta),
+                previewBitmap = shown ?: state.previewBitmap,
                 displayBitmap = if (preview != null) null else state.displayBitmap,
                 hasFullRender = if (preview != null) false else state.hasFullRender
             )
@@ -747,6 +765,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun publishHistory() {
         _state.update { it.copy(canUndoEdit = history.canUndo, canRedoEdit = history.canRedo) }
+    }
+
+    private fun usedTileIndexes(plan: MosaicPlan): Set<Int> {
+        val fromPieces = plan.placements.map { it.tileIndex }.filter { it >= 0 }
+        if (fromPieces.isNotEmpty()) return fromPieces.toSet()
+        return plan.assignments.filter { it >= 0 }.toSet()
     }
 
     private fun dropPlan() {

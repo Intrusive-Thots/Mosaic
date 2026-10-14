@@ -8,3 +8,4 @@ local.properties
 keystore.properties
 release/*.jks
 showcase-sources/
+scripts/__pycache__/

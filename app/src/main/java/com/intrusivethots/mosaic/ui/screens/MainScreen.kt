@@ -2,7 +2,6 @@ package com.intrusivethots.mosaic.ui.screens
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -28,10 +27,12 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -46,8 +47,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import com.intrusivethots.mosaic.core.MosaicShare
 import com.intrusivethots.mosaic.ui.components.LibraryHost
 import com.intrusivethots.mosaic.ui.components.LibrarySources
+import com.intrusivethots.mosaic.ui.components.LocalUserMessage
 import com.intrusivethots.mosaic.ui.components.ProjectLibraryScreen
 import com.intrusivethots.mosaic.ui.components.SettingsDialog
 import com.intrusivethots.mosaic.ui.components.ShapeEditor
@@ -56,6 +59,7 @@ import com.intrusivethots.mosaic.ui.components.StudioScreen
 import com.intrusivethots.mosaic.ui.inspect.ResultInspector
 import com.intrusivethots.mosaic.ui.state.CollageEdit
 import com.intrusivethots.mosaic.ui.state.GenerationUiState
+import com.intrusivethots.mosaic.ui.state.UiEvent
 import com.intrusivethots.mosaic.ui.theme.AccentAmber
 import com.intrusivethots.mosaic.ui.theme.DeepBackground
 import com.intrusivethots.mosaic.ui.theme.SurfaceDark
@@ -98,23 +102,15 @@ private fun HomeScreen(viewModel: MainViewModel, sources: LibrarySources) {
     var tab by remember { mutableIntStateOf(0) }
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
     val snackbar = remember { SnackbarHostState() }
-
-    LaunchedEffect(Unit) {
-        viewModel.events.collect { event ->
-            when (event) {
-                is com.intrusivethots.mosaic.ui.state.UiEvent.Message -> snackbar.showSnackbar(event.text)
-            }
-        }
-    }
+    MosaicEvents(viewModel, snackbar)
 
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         if (success) cameraUri?.let(viewModel::setTargetImage)
     }
-    val targetPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) viewModel.setTargetImage(uri)
-    }
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
+        snackbarHost = {
+            if (!state.inspectOpen) SnackbarHost(snackbar)
+        },
         containerColor = DeepBackground,
         topBar = {
             if (!state.inspectOpen) TopAppBar(
@@ -132,12 +128,14 @@ private fun HomeScreen(viewModel: MainViewModel, sources: LibrarySources) {
         }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (state.inspectOpen) {
+                InspectorOverlay(state, viewModel)
+                return@Scaffold
+            }
             when (tab) {
-                0 -> StudioScreen(
+                0 -> CompositionLocalProvider(LocalUserMessage provides viewModel::reportMessage) { StudioScreen(
                     state = state,
-                    onGallery = {
-                        targetPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                    },
+                    onGallery = sources.pickTarget,
                     onCamera = {
                         val dir = File(context.cacheDir, "camera").apply { mkdirs() }
                         val file = File(dir, "target_${System.currentTimeMillis()}.jpg")
@@ -174,7 +172,7 @@ private fun HomeScreen(viewModel: MainViewModel, sources: LibrarySources) {
                     onRender = viewModel::generateFullMosaic,
                     onCancel = viewModel::cancelGeneration,
                     onExport = viewModel::exportToGallery
-                )
+                ) }
                 1 -> StampsScreen(
                     stamps = state.customStamps,
                     extracting = state.libraryMessage.isNotEmpty(),
@@ -189,7 +187,25 @@ private fun HomeScreen(viewModel: MainViewModel, sources: LibrarySources) {
                 2 -> ProjectLibraryScreen(state.projects, viewModel::deleteProject, viewModel::exportProjectToGallery)
                 else -> SettingsDialog(state.apiKey, state.keystoreAvailable, viewModel::saveApiKey)
             }
-            if (state.inspectOpen) InspectorOverlay(state, viewModel)
+        }
+    }
+}
+
+@Composable
+private fun MosaicEvents(viewModel: MainViewModel, snackbar: SnackbarHostState) {
+    val context = LocalContext.current
+    LaunchedEffect(viewModel) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is UiEvent.Message -> snackbar.showSnackbar(event.text)
+                is UiEvent.Saved -> {
+                    val result = snackbar.showSnackbar(event.text, actionLabel = "Share")
+                    if (result == SnackbarResult.ActionPerformed) {
+                        val opened = runCatching { MosaicShare(context).shareContent(event.uri, event.mime) }.isSuccess
+                        if (!opened) snackbar.showSnackbar("Could not share the mosaic.")
+                    }
+                }
+            }
         }
     }
 }

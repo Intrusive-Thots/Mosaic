@@ -4,7 +4,8 @@ import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.effectiveStack
 import com.intrusivethots.mosaic.engine.config.planStackedOutput
 import com.intrusivethots.mosaic.engine.config.validated
-import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
+import com.intrusivethots.mosaic.engine.coord.HeapBudget
+import com.intrusivethots.mosaic.engine.coord.capOutputLayout
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.centerAspectRect
 import com.intrusivethots.mosaic.engine.image.crop
@@ -51,9 +52,10 @@ class RegionRegenerator(
         config: MosaicConfig,
         request: RegionRequest,
         preview: Boolean,
-        onProgress: (Float, String) -> Unit = { _, _ -> }
+        onProgress: (Float, String) -> Unit = { _, _ -> },
+        heapBytes: Long = Runtime.getRuntime().maxMemory()
     ): RegionOutcome {
-        val context = prepare(target, tiles, config, preview, onProgress)
+        val context = prepare(target, tiles, config, preview, onProgress, heapBytes)
         require(base.width == context.layout.width && base.height == context.layout.height) {
             "The saved image is ${base.width}×${base.height}, but this mosaic renders at ${context.layout.width}×${context.layout.height}."
         }
@@ -74,9 +76,10 @@ class RegionRegenerator(
         config: MosaicConfig,
         request: RegionRequest,
         preview: Boolean,
-        onProgress: (Float, String) -> Unit = { _, _ -> }
+        onProgress: (Float, String) -> Unit = { _, _ -> },
+        heapBytes: Long = Runtime.getRuntime().maxMemory()
     ): RegionOutcome {
-        val context = prepare(target, tiles, config, preview, onProgress)
+        val context = prepare(target, tiles, config, preview, onProgress, heapBytes)
         require(context.layout.width == outputWidth && context.layout.height == outputHeight) {
             "The saved image is ${outputWidth}×${outputHeight}, but this mosaic renders at ${context.layout.width}×${context.layout.height}."
         }
@@ -93,9 +96,10 @@ class RegionRegenerator(
         preview: Boolean,
         outputWidth: Int,
         outputHeight: Int,
-        onProgress: (Float, String) -> Unit = { _, _ -> }
+        onProgress: (Float, String) -> Unit = { _, _ -> },
+        heapBytes: Long = Runtime.getRuntime().maxMemory()
     ): RegionPass {
-        val context = prepare(target, tiles, config, preview, onProgress)
+        val context = prepare(target, tiles, config, preview, onProgress, heapBytes)
         require(context.layout.width == outputWidth && context.layout.height == outputHeight) {
             "The saved image is ${outputWidth}×${outputHeight}, but this mosaic renders at ${context.layout.width}×${context.layout.height}."
         }
@@ -203,7 +207,8 @@ class RegionRegenerator(
         tiles: List<TileSource>,
         config: MosaicConfig,
         preview: Boolean,
-        onProgress: (Float, String) -> Unit
+        onProgress: (Float, String) -> Unit,
+        heapBytes: Long
     ): Prepared {
         onProgress(0.05f, "Loading images")
         val validated = config.validated()
@@ -212,27 +217,28 @@ class RegionRegenerator(
         val descriptors = ArrayList<TileDescriptor>(tiles.size)
         val thumbnails = ArrayList<PixelImage>(tiles.size)
         val collage = validated.effectiveStack().usesCollage()
+        val renderEdge = HeapBudget.thumbnailEdge(collage, validated.descriptorMaxEdge, tiles.size, heapBytes)
         tiles.forEachIndexed { index, source ->
             coroutineContext.ensureActive()
             val key = source.identity.toKey(analyzer.algorithmVersion)
-            val renderEdge = if (collage) {
-                maxOf(validated.descriptorMaxEdge, GenerationCoordinator.COLLAGE_RENDER_EDGE)
-            } else {
-                validated.descriptorMaxEdge
-            }
             val loaded = source.loadThumbnail(renderEdge)
-            val analyzed = if (collage) loaded.downscaleLongEdge(validated.descriptorMaxEdge) else loaded
-            val descriptor = cache.get(key) ?: analyzer.describe(
-                key = key,
-                sourceWidth = source.identity.width,
-                sourceHeight = source.identity.height,
-                image = analyzed
-            ).also { cache.put(key, it) }
-            descriptors.add(descriptor)
-            thumbnails.add(if (collage) loaded else analyzed)
+            try {
+                val analyzed = if (collage) loaded.downscaleLongEdge(validated.descriptorMaxEdge) else loaded
+                val descriptor = cache.get(key) ?: analyzer.describe(
+                    key = key,
+                    sourceWidth = source.identity.width,
+                    sourceHeight = source.identity.height,
+                    image = analyzed
+                ).also { cache.put(key, it) }
+                descriptors.add(descriptor)
+                thumbnails.add(if (collage) loaded else analyzed)
+            } finally {
+                source.release()
+            }
             onProgress(0.05f + 0.2f * (index + 1) / tiles.size.coerceAtLeast(1), "Loading images")
         }
-        val layout = planStackedOutput(preparedTarget.width, preparedTarget.height, validated, preview)
+        val natural = planStackedOutput(preparedTarget.width, preparedTarget.height, validated, preview)
+        val layout = capOutputLayout(natural, HeapBudget.outputLongEdge(heapBytes))
         return Prepared(
             target = preparedTarget,
             descriptors = descriptors,

@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.intrusivethots.mosaic.BuildConfig
 import com.intrusivethots.mosaic.ui.design.CardHeader
 import com.intrusivethots.mosaic.ui.design.GroupLabel
 import com.intrusivethots.mosaic.ui.design.HintText
@@ -112,7 +113,7 @@ fun SettingsDialog(apiKey: String, keystoreAvailable: Boolean, onSaveKey: (Strin
             Row(Modifier.fillMaxWidth()) {
                 Text("Version", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                 Text(
-                    "2.0.0",
+                    BuildConfig.VERSION_NAME,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

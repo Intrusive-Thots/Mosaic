@@ -43,11 +43,23 @@ class DriveLibraryTest {
     @Test
     fun listUrlEncodesTheFolderQueryAndPage() {
         val url = listUrl("abc'd", "next token")
-        assertTrue(url.contains("pageSize=40"))
+        assertTrue(url.contains("pageSize=$DRIVE_PAGE_SIZE"))
         assertTrue(url.contains("pageToken="))
         assertFalse(url.contains("next token"))
         assertFalse(url.contains("'abc'd'"))
         assertTrue(url.contains("in+parents") || url.contains("in%20parents"))
+    }
+
+    @Test
+    fun driveSelectionTogglesOneImageAndAllImages() {
+        val images = setOf("a", "b")
+        val one = driveSelection(emptySet(), images, "a", single = false)
+        assertEquals(setOf("a"), one)
+        val both = driveSelection(one, images, null, single = false)
+        assertEquals(images, both)
+        assertEquals(emptySet<String>(), driveSelection(both, images, null, single = false))
+        assertEquals(setOf("b"), driveSelection(setOf("a"), images, "b", single = true))
+        assertEquals(emptySet<String>(), driveSelection(setOf("b"), images, "b", single = true))
     }
 
     @Test

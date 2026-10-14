@@ -46,7 +46,7 @@ class MosaicRenderer(
             return
         }
         if (plan.anchors.isNotEmpty()) {
-            renderPlaced(plan, descriptors, thumbnails, layout, config, sink, onProgress)
+            renderPlaced(plan, descriptors, thumbnails, layout, config, sink, target, onProgress)
             return
         }
         val validated = config.validated()
@@ -55,6 +55,7 @@ class MosaicRenderer(
         val cellHeight = layout.cellHeight
         val strength = validated.colorMatchWeight
         val centerCrop = validated.tileFit == TileFit.CENTER_CROP
+        val outlines = outlineField(target, validated, layout.width, layout.height)
         var lastReported = -1
         for (y in 0 until layout.height) {
             if (y % cellHeight == 0) coroutineContext.ensureActive()
@@ -84,6 +85,7 @@ class MosaicRenderer(
                     mirror = code >= 4
                 )
             }
+            darkenOutline(row, y, outlines)
             sink.writeRow(y, row)
             val percent = ((y + 1) * 100) / layout.height
             if (percent != lastReported) {
@@ -100,11 +102,13 @@ class MosaicRenderer(
         layout: OutputLayout,
         config: MosaicConfig,
         sink: RowSink,
+        target: PixelImage?,
         onProgress: (Float) -> Unit
     ) {
         val validated = config.validated()
         val row = IntArray(layout.width)
         val centerCrop = validated.tileFit == TileFit.CENTER_CROP
+        val outlines = outlineField(target, validated, layout.width, layout.height)
         var lastReported = -1
         for (y in 0 until layout.height) {
             if (y % layout.cellHeight == 0) coroutineContext.ensureActive()
@@ -134,6 +138,7 @@ class MosaicRenderer(
                     mirror = code >= 4
                 )
             }
+            darkenOutline(row, y, outlines)
             sink.writeRow(y, row)
             val percent = ((y + 1) * 100) / layout.height
             if (percent != lastReported) {
@@ -241,6 +246,7 @@ class MosaicRenderer(
         val gridRow = IntArray(layout.width)
         val locked = BooleanArray(layout.width * layout.height)
         val grout = (minOf(layout.cellWidth, layout.cellHeight) / 10).coerceAtLeast(1)
+        val outlines = outlineField(target, config, layout.width, layout.height)
         var lastReported = -1
         for (y in 0 until layout.height) {
             if (y % 8 == 0) coroutineContext.ensureActive()
@@ -253,6 +259,7 @@ class MosaicRenderer(
                 fillUniformRow(plan, descriptors, thumbnails, layout, config, y, gridRow)
                 overlayGrid(row, gridRow, y, layout, grout, coverage)
             }
+            darkenOutline(row, y, outlines)
             sink.writeRow(y, row)
             val percent = ((y + 1) * 100) / layout.height
             if (percent != lastReported) {

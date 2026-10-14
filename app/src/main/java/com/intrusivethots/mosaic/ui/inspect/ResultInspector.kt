@@ -39,10 +39,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.intrusivethots.mosaic.engine.match.RegionRequest
 import com.intrusivethots.mosaic.engine.match.RegionShape
+import com.intrusivethots.mosaic.ui.components.DENSITY_HELP
+import com.intrusivethots.mosaic.ui.components.EXCLUDE_REGION_HELP
+import com.intrusivethots.mosaic.ui.components.REGION_COLOR_HELP
+import com.intrusivethots.mosaic.ui.components.VARIATION_HELP
 import com.intrusivethots.mosaic.ui.theme.AccentAmber
 import com.intrusivethots.mosaic.ui.theme.DeepBackground
 import com.intrusivethots.mosaic.ui.theme.SurfaceDark
 import com.intrusivethots.mosaic.ui.theme.TextPrimary
+import com.intrusivethots.mosaic.ui.theme.TextSecondary
 
 @Composable
 fun ResultInspector(
@@ -71,31 +76,33 @@ fun ResultInspector(
     var strength by remember(colorStrength) { mutableFloatStateOf(colorStrength.coerceIn(0f, 1f)) }
     var exclude by remember { mutableStateOf(false) }
     var source by remember { mutableStateOf<String?>(null) }
-    Box(modifier = Modifier.fillMaxSize().background(DeepBackground)) {
-        InspectorCanvas(
-            path = imagePath,
-            token = imageToken,
-            camera = camera,
-            selecting = selecting && !busy,
-            tool = tool,
-            shape = shape,
-            onShape = { shape = it },
-            onLongPress = { x, y -> source = sourceAt(x, y) }
-        )
-        Text(
-            text = "${camera.zoomPercent}%",
-            color = TextPrimary,
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp).semantics { contentDescription = "Zoom level" }
-        )
-        source?.let { label ->
-            Text(
-                text = label,
-                color = TextPrimary,
-                modifier = Modifier.align(Alignment.TopStart).padding(16.dp).background(SurfaceDark, RoundedCornerShape(8.dp)).padding(8.dp)
+    Column(modifier = Modifier.fillMaxSize().background(DeepBackground)) {
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            InspectorCanvas(
+                path = imagePath,
+                token = imageToken,
+                camera = camera,
+                selecting = selecting && !busy,
+                tool = tool,
+                shape = shape,
+                onShape = { shape = it },
+                onLongPress = { x, y -> source = sourceAt(x, y) }
             )
+            Text(
+                text = "${camera.zoomPercent}%",
+                color = TextPrimary,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp).semantics { contentDescription = "Zoom level" }
+            )
+            source?.let { label ->
+                Text(
+                    text = label,
+                    color = TextPrimary,
+                    modifier = Modifier.align(Alignment.TopStart).padding(16.dp).background(SurfaceDark, RoundedCornerShape(8.dp)).padding(8.dp)
+                )
+            }
         }
         InspectorControls(
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier.fillMaxWidth(),
             selecting = selecting,
             tool = tool,
             shape = shape,
@@ -198,65 +205,96 @@ private fun ModeRow(
     canRedo: Boolean,
     actions: InspectActions
 ) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(onClick = actions.onClose, modifier = Modifier.heightIn(min = 48.dp)) { Text("Close") }
-        FilterChip(
-            selected = !selecting,
-            onClick = { actions.onSelecting(false) },
-            label = { Text("Pan") },
-            modifier = Modifier.heightIn(min = 48.dp)
-        )
-        FilterChip(
-            selected = selecting,
-            onClick = { actions.onSelecting(true) },
-            label = { Text("Select") },
-            modifier = Modifier.heightIn(min = 48.dp)
-        )
-        TextButton(onClick = { camera.oneToOne(camera.viewWidth / 2f, camera.viewHeight / 2f) }, modifier = Modifier.heightIn(min = 48.dp)) {
-            Text("1:1")
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = actions.onClose, modifier = Modifier.heightIn(min = 48.dp)) { Text("Close") }
+            FilterChip(
+                selected = !selecting,
+                onClick = { actions.onSelecting(false) },
+                label = { Text("Pan") },
+                modifier = Modifier.heightIn(min = 48.dp)
+            )
+            FilterChip(
+                selected = selecting,
+                onClick = { actions.onSelecting(true) },
+                label = { Text("Select") },
+                modifier = Modifier.heightIn(min = 48.dp)
+            )
+            TextButton(
+                onClick = { camera.oneToOne(camera.viewWidth / 2f, camera.viewHeight / 2f) },
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
+                Text("1:1")
+            }
+            if (canUndo) TextButton(onClick = actions.onUndo, modifier = Modifier.heightIn(min = 48.dp)) { Text("Undo") }
+            if (canRedo) TextButton(onClick = actions.onRedo, modifier = Modifier.heightIn(min = 48.dp)) { Text("Redo") }
         }
-        if (canUndo) TextButton(onClick = actions.onUndo, modifier = Modifier.heightIn(min = 48.dp)) { Text("Undo") }
-        if (canRedo) TextButton(onClick = actions.onRedo, modifier = Modifier.heightIn(min = 48.dp)) { Text("Redo") }
+        Text(inspectGestureHelp(selecting), color = TextSecondary, fontSize = 12.sp)
     }
+}
+
+private fun inspectGestureHelp(selecting: Boolean): String = if (selecting) {
+    "Draw on the picture to choose an area. 1:1 shows the result at its own pixels."
+} else {
+    "Drag to move the picture. Pinch to zoom. 1:1 shows the result at its own pixels."
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ToolRow(tool: InspectTool, onTool: (InspectTool) -> Unit) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(
-            selected = tool == InspectTool.RECTANGLE,
-            onClick = { onTool(InspectTool.RECTANGLE) },
-            label = { Text("Rectangle") },
-            modifier = Modifier.heightIn(min = 48.dp)
-        )
-        FilterChip(
-            selected = tool == InspectTool.LASSO,
-            onClick = { onTool(InspectTool.LASSO) },
-            label = { Text("Lasso") },
-            modifier = Modifier.heightIn(min = 48.dp)
-        )
-        FilterChip(
-            selected = tool == InspectTool.BRUSH,
-            onClick = { onTool(InspectTool.BRUSH) },
-            label = { Text("Brush") },
-            modifier = Modifier.heightIn(min = 48.dp)
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = tool == InspectTool.RECTANGLE,
+                onClick = { onTool(InspectTool.RECTANGLE) },
+                label = { Text("Rectangle") },
+                modifier = Modifier.heightIn(min = 48.dp)
+            )
+            FilterChip(
+                selected = tool == InspectTool.LASSO,
+                onClick = { onTool(InspectTool.LASSO) },
+                label = { Text("Lasso") },
+                modifier = Modifier.heightIn(min = 48.dp)
+            )
+            FilterChip(
+                selected = tool == InspectTool.BRUSH,
+                onClick = { onTool(InspectTool.BRUSH) },
+                label = { Text("Brush") },
+                modifier = Modifier.heightIn(min = 48.dp)
+            )
+        }
+        Text(inspectToolHelp(tool), color = TextSecondary, fontSize = 12.sp)
     }
+}
+
+private fun inspectToolHelp(tool: InspectTool): String = when (tool) {
+    InspectTool.RECTANGLE -> "Drag a box around the area to rebuild."
+    InspectTool.LASSO -> "Draw a freehand outline around the area to rebuild."
+    InspectTool.BRUSH -> "Paint over the area to rebuild."
 }
 
 @Composable
 private fun OptionRow(density: Float, strength: Float, exclude: Boolean, actions: InspectActions) {
-    Text("Piece size ${if (density < 0.9f) "larger" else if (density > 1.1f) "smaller" else "same"}", color = TextPrimary, fontSize = 13.sp)
+    Text(
+        "Piece size ${if (density < 0.9f) "larger" else if (density > 1.1f) "smaller" else "same"}",
+        color = TextPrimary,
+        fontSize = 13.sp
+    )
+    Text(DENSITY_HELP, color = TextSecondary, fontSize = 12.sp)
     Slider(value = density, onValueChange = actions.onDensity, valueRange = 0.5f..2.2f)
-    Text("Color strength", color = TextPrimary, fontSize = 13.sp)
+    Text("Color strength ${(strength * 100).toInt()}%", color = TextPrimary, fontSize = 13.sp)
+    Text(REGION_COLOR_HELP, color = TextSecondary, fontSize = 12.sp)
     Slider(value = strength, onValueChange = actions.onStrength, valueRange = 0f..1f)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-        Text("Exclude photos used here", color = TextPrimary, fontSize = 14.sp)
+        Column(Modifier.weight(1f)) {
+            Text("Exclude photos used here", color = TextPrimary, fontSize = 14.sp)
+            Text(EXCLUDE_REGION_HELP, color = TextSecondary, fontSize = 12.sp)
+        }
         Switch(checked = exclude, onCheckedChange = actions.onExclude)
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         TextButton(onClick = actions.onVariation, modifier = Modifier.heightIn(min = 48.dp)) { Text("New variation") }
         TextButton(onClick = actions.onClear, modifier = Modifier.heightIn(min = 48.dp)) { Text("Clear") }
     }
+    Text(VARIATION_HELP, color = TextSecondary, fontSize = 12.sp)
 }

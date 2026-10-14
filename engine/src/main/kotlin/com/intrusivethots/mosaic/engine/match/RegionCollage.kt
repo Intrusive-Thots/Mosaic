@@ -24,7 +24,9 @@ internal suspend fun rebuildCollageRegion(
 ): List<CutoutPlacement> {
     val kept = plan.placements.filter { piece -> piece.pinned || !fullyInside(piece, shape, outputWidth, outputHeight) }
     val excluded = if (excludeUsed) excludedPieceTiles(plan.placements, shape, outputWidth, outputHeight, descriptors.size) else BooleanArray(0)
-    val fresh = placeInside(target, descriptors, thumbnails, index, config, shape, outputWidth, outputHeight, marginPx, excluded, placer)
+    val fresh = placeInside(
+        target, descriptors, thumbnails, index, config, shape, outputWidth, outputHeight, marginPx, excluded, placer, kept
+    )
     val unpinned = ArrayList<CutoutPlacement>(kept.size + fresh.size)
     kept.filterTo(unpinned) { !it.pinned }
     unpinned.addAll(fresh)
@@ -43,17 +45,21 @@ private suspend fun placeInside(
     outputHeight: Int,
     marginPx: Int,
     excluded: BooleanArray,
-    placer: CollagePlacer
+    placer: CollagePlacer,
+    kept: List<CutoutPlacement>
 ): List<CutoutPlacement> {
     val rect = normalizedCropRect(target.width, target.height, shape.left, shape.top, shape.right, shape.bottom, 8)
     val cropped = target.crop(rect)
-    val placed = placer.place(cropped, descriptors, index, config, emptyList(), thumbnails, { _, _ -> }, { _, _ -> }).first
     val left = rect.x.toFloat() / target.width
     val top = rect.y.toFloat() / target.height
     val spanX = rect.width.toFloat() / target.width
     val spanY = rect.height.toFloat() / target.height
     val fullShort = min(target.width, target.height).toFloat()
     val cropShort = min(rect.width, rect.height).toFloat()
+    val reserved = kept.map { piece -> intoCrop(piece, left, top, spanX, spanY, fullShort, cropShort) }
+    val placed = placer.place(
+        cropped, descriptors, index, config, emptyList(), thumbnails, { _, _ -> }, { _, _ -> }, reserved = reserved
+    ).first
     return placed.placements.map { piece ->
         val moved = rebase(piece, left, top, spanX, spanY, fullShort, cropShort)
         val feathered = moved.mask?.let { featherMask(it, shape, outputWidth, outputHeight, marginPx) }
@@ -84,6 +90,33 @@ private fun rebase(
     }
     val scale = piece.scale * cropShort / fullShort.coerceAtLeast(1f)
     return piece.moved(x = left + piece.x * spanX, y = top + piece.y * spanY, scale = scale, mask = mask)
+}
+
+/** Inverse of [rebase], so a kept piece can block new copies inside the crop. */
+private fun intoCrop(
+    piece: CutoutPlacement,
+    left: Float,
+    top: Float,
+    spanX: Float,
+    spanY: Float,
+    fullShort: Float,
+    cropShort: Float
+): CutoutPlacement {
+    val safeX = spanX.coerceAtLeast(1e-5f)
+    val safeY = spanY.coerceAtLeast(1e-5f)
+    val mask = piece.mask?.let { source ->
+        PieceMask(
+            (source.left - left) / safeX,
+            (source.top - top) / safeY,
+            (source.right - left) / safeX,
+            (source.bottom - top) / safeY,
+            source.width,
+            source.height,
+            source.alpha
+        )
+    }
+    val scale = piece.scale * fullShort / cropShort.coerceAtLeast(1f)
+    return piece.moved(x = (piece.x - left) / safeX, y = (piece.y - top) / safeY, scale = scale, mask = mask)
 }
 
 private fun featherMask(mask: PieceMask, shape: RegionShape, width: Int, height: Int, marginPx: Int): PieceMask {

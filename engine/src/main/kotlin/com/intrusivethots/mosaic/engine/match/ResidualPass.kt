@@ -2,11 +2,15 @@ package com.intrusivethots.mosaic.engine.match
 
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.RenderMode
+import com.intrusivethots.mosaic.engine.coord.HeapBudget
+import com.intrusivethots.mosaic.engine.coord.fitToEdge
 import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.image.alphaSticker
 import com.intrusivethots.mosaic.engine.index.ProbeCounter
 import com.intrusivethots.mosaic.engine.index.TileIndex
 import com.intrusivethots.mosaic.engine.index.TopK
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import java.util.ArrayDeque
 import kotlin.coroutines.coroutineContext
@@ -26,49 +30,65 @@ internal suspend fun assembleCollage(
     config: MosaicConfig,
     onSnapshot: suspend (List<CutoutPlacement>, String) -> Unit,
     onProgress: (Float, String) -> Unit,
-    knownFaces: List<List<FaceBox>>? = null
+    knownFaces: List<List<FaceBox>>? = null,
+    reserved: List<CutoutPlacement> = emptyList(),
+    budgets: StageBudgets = StageBudgets.PHONE
 ): Assembled {
+    val job = coroutineContext[Job]
     val plane = labPlane(workingCopy(target))
     val swatches = buildSwatches(thumbnails, descriptors)
     val probes = ProbeCounter()
     val edges = IntArray(thumbnails.size) { index -> maxOf(thumbnails[index].width, thumbnails[index].height) }
     val library = faceLibrary(thumbnails, descriptors, knownFaces)
     val requireFaces = library.any { it.isNotEmpty() }
+    val stickers = BooleanArray(thumbnails.size) { index -> alphaSticker(thumbnails[index]) }
     val fit = ShapeFit(
         swatches, index, config,
         UsageTracker(descriptors.size, config.maxRepetitionDistance, config.allowTileRepetition, config.usageBalanceWeight),
         probes, TopK(config.candidateCount.coerceAtLeast(1)),
-        edges, target.width, target.height, library, requireFaces
+        edges, target.width, target.height, library, requireFaces, stickers
     )
+    fit.seedReserved(reserved)
+    val measured = fitToEdge(target.width, target.height, HeapBudget.MEASURE_EDGE)
     val correct = config.renderMode != RenderMode.ORIGINAL && config.colorMatchWeight > 0f
     val canvas = WorkCanvas(plane, luminanceGradient(plane))
     val pieces = ArrayList<PlacedPiece>()
     onProgress(0.02f, "Cutting large shapes")
-    blockIn(target, config, fit, canvas, pieces, correct)
-    onSnapshot(pieces.map { it.placement }, "Cutting large shapes")
+    blockIn(target, config, fit, canvas, pieces, correct, StageClock(budgets.largeMs, job)) { done ->
+        onProgress(LARGE_START + (LARGE_END - LARGE_START) * done, "Cutting large shapes")
+    }
+    onProgress(LARGE_END, "Previewing large shapes")
+    onSnapshot(pieces.map { it.placement }, "Previewing large shapes")
     onProgress(0.45f, "Cutting edge shapes")
     coroutineContext.ensureActive()
-    refine(plane, config, fit, canvas, pieces, correct)
+    val edgeClock = StageClock(budgets.edgeMs, job)
+    refine(plane, config, fit, canvas, pieces, correct, edgeClock)
     coroutineContext.ensureActive()
-    relax(fit, canvas, pieces, correct, config.colorMatchWeight)
-    sealToFloor(plane, target.width, target.height, config, fit, pieces, correct)
+    onProgress(SETTLE_START, "Settling pieces")
+    relax(fit, canvas, pieces, correct, config.colorMatchWeight, StageClock(budgets.settleMs, job))
+    coroutineContext.ensureActive()
+    sealToFloor(plane, measured.first, measured.second, config, fit, pieces, correct)
     val beforeCull = pieces.size
-    cullHiddenFaces(pieces, target.width, target.height)
-    if (pieces.size < beforeCull) {
+    cullHiddenFaces(pieces, measured.first, measured.second)
+    // The second pass only polishes. Skip it when the edge budget is already spent.
+    if (pieces.size < beforeCull && !edgeClock.over()) {
         fit.syncReserved(pieces.map { it.placement })
+        fit.syncContact(pieces.map { it.placement })
         coroutineContext.ensureActive()
-        refine(plane, config, fit, canvas, pieces, correct)
-        sealToFloor(plane, target.width, target.height, config, fit, pieces, correct)
-        cullHiddenFaces(pieces, target.width, target.height)
+        refine(plane, config, fit, canvas, pieces, correct, edgeClock)
+        coroutineContext.ensureActive()
+        sealToFloor(plane, measured.first, measured.second, config, fit, pieces, correct)
+        cullHiddenFaces(pieces, measured.first, measured.second)
     }
-    onSnapshot(pieces.map { it.placement }, "Cutting edge shapes")
-    onProgress(1f, "Cutting edge shapes")
+    untouchCopies(fit, pieces)
+    onSnapshot(pieces.map { it.placement }, "Settling pieces")
+    onProgress(1f, "Settling pieces")
     return Assembled(pieces.map { it.placement }, statsOf(fit, probes, descriptors.size, pieces))
 }
 
 internal class Assembled(val placements: List<CutoutPlacement>, val stats: MatchStats)
 
-private class PlacedPiece(
+internal class PlacedPiece(
     val cut: ShapeCut,
     var placement: CutoutPlacement,
     var l: Float,
@@ -83,11 +103,16 @@ private suspend fun blockIn(
     fit: ShapeFit,
     canvas: WorkCanvas,
     pieces: MutableList<PlacedPiece>,
-    correct: Boolean
+    correct: Boolean,
+    clock: StageClock,
+    onStep: (Float) -> Unit
 ) {
     val ordered = cutTargetShapes(target, config.collage).sortedByDescending { it.scale }
     for (ordinal in ordered.indices) {
         coroutineContext.ensureActive()
+        onStep(ordinal.toFloat() / ordered.size.coerceAtLeast(1))
+        // Out of time: keep the large pieces placed so far. The edge pass and seal fill the rest.
+        if (pieces.isNotEmpty() && clock.over()) break
         val cut = ordered[ordinal]
         val chosen = fit.choose(cut, ordinal) ?: continue
         val tone = paintTone(cut, chosen, fit, correct, config.colorMatchWeight)
@@ -103,6 +128,8 @@ private suspend fun refine(
     canvas: WorkCanvas,
     pieces: MutableList<PlacedPiece>,
     correct: Boolean
+,
+    clock: StageClock
 ) {
     val detail = (config.collage.pieceCount * 0.22f).toInt().coerceIn(0, 110)
     if (detail == 0) return
@@ -116,8 +143,8 @@ private suspend fun refine(
     val broadCount = detail / 3
     val pull = config.colorMatchWeight
     val broad = (fine * 2).coerceAtMost(short / 5).coerceAtLeast(fine)
-    wave(plane, fit, canvas, pieces, correct, pull, broadCount, broad, plane.height / 8, taken, floor)
-    wave(plane, fit, canvas, pieces, correct, pull, detail - broadCount, fine, fine, taken, floor)
+    wave(plane, fit, canvas, pieces, correct, pull, broadCount, broad, plane.height / 8, taken, floor, clock)
+    wave(plane, fit, canvas, pieces, correct, pull, detail - broadCount, fine, fine, taken, floor, clock)
 }
 
 private suspend fun wave(
@@ -131,12 +158,14 @@ private suspend fun wave(
     radius: Int,
     blur: Int,
     taken: BooleanArray,
-    floor: PieceFloor
+    floor: PieceFloor,
+    clock: StageClock
 ) {
-    if (count <= 0) return
+    if (count <= 0 || clock.over()) return
     val peaks = canvas.peaks(count, radius, blur)
     for (peak in peaks) {
         coroutineContext.ensureActive()
+        if (clock.over()) return
         if (taken[peak]) continue
         tryBlob(plane, fit, canvas, pieces, correct, pull, peak, radius, taken, floor)
     }
@@ -181,7 +210,7 @@ private fun sealToFloor(
     val radius = (floor.shortOfShort * min(measureWidth, measureHeight)).toInt().coerceAtLeast(2)
     liftBuried(plane, measureWidth, measureHeight, config, fit, pieces, correct, floor, radius)
     coverOpen(plane, measureWidth, measureHeight, config, fit, pieces, correct, floor)
-    mendSeams(plane, pieces, floor, measureWidth, measureHeight)
+    mendSeams(plane, pieces, floor, measureWidth, measureHeight, fit)
     liftBuried(plane, measureWidth, measureHeight, config, fit, pieces, correct, floor, radius)
 }
 
@@ -203,16 +232,20 @@ private fun liftBuried(
         if (buried == null) return
         var index = pieces.lastIndex
         while (index >= 0) {
-            if (buried.drop[index]) pieces.removeAt(index)
+            if (buried.drop[index]) {
+                fit.release(pieces[index].placement)
+                pieces.removeAt(index)
+            }
             index--
         }
         val masks = pieces.map { it.placement.mask }
         val assign = nearestPiece(masks, buried.holes, measureWidth, measureHeight, radius)
         for (pieceIndex in pieces.indices) {
             val piece = pieces[pieceIndex]
-            piece.placement = withAbsorbed(
+            val grown = withAbsorbed(
                 piece.placement, assign, pieceIndex, buried.holes, measureWidth, measureHeight, radius
             )
+            piece.placement = fit.acceptMask(piece.placement, grown)
         }
         val leftover = BooleanArray(buried.holes.size) { hole -> buried.holes[hole] && assign[hole] < 0 }
         coverHoles(plane, leftover, measureWidth, measureHeight, config, fit, pieces, correct, floor)
@@ -224,7 +257,8 @@ private fun mendSeams(
     pieces: MutableList<PlacedPiece>,
     floor: PieceFloor,
     measureWidth: Int,
-    measureHeight: Int
+    measureHeight: Int,
+    fit: ShapeFit
 ) {
     if (pieces.isEmpty() || plane.width < 1 || plane.height < 1) return
     val reach = (floor.shortOfShort * min(plane.width, plane.height)).toInt().coerceIn(2, 6)
@@ -248,7 +282,8 @@ private fun mendSeams(
     val measureReach = (reach * maxOf(measureWidth, measureHeight) / maxOf(plane.width, plane.height)).coerceAtLeast(reach)
     for (pieceIndex in pieces.indices) {
         val piece = pieces[pieceIndex]
-        piece.placement = withAbsorbed(piece.placement, wide, pieceIndex, open, measureWidth, measureHeight, measureReach)
+        val grown = withAbsorbed(piece.placement, wide, pieceIndex, open, measureWidth, measureHeight, measureReach)
+        piece.placement = fit.acceptMask(piece.placement, grown)
     }
 }
 
@@ -436,9 +471,17 @@ private fun claimCells(
     }
 }
 
-private fun relax(fit: ShapeFit, canvas: WorkCanvas, pieces: MutableList<PlacedPiece>, correct: Boolean, pull: Float) {
+private fun relax(
+    fit: ShapeFit,
+    canvas: WorkCanvas,
+    pieces: MutableList<PlacedPiece>,
+    correct: Boolean,
+    pull: Float,
+    clock: StageClock
+) {
     var index = pieces.lastIndex
     while (index >= 0) {
+        if (clock.over()) return
         val blocking = pieces[index].cut.blocking || pieces[index].required
         val dropped = if (blocking) null else dropIfUseless(canvas, pieces, index)
         if (dropped != null) {
@@ -475,7 +518,7 @@ private fun swapIfBetter(
     fit.release(piece.placement)
     val alternate = fit.choose(piece.cut, index, piece.placement.tileIndex, commit = false)
     if (alternate == null) {
-        fit.hold(piece.placement)
+        fit.restore(piece.placement)
         return
     }
     val tone = paintTone(piece.cut, alternate, fit, correct, pull)
@@ -483,7 +526,7 @@ private fun swapIfBetter(
     val swapped = canvas.predictedError(piece.cut, tone[0], tone[1], tone[2])
     canvas.paint(piece.cut, piece.l, piece.a, piece.b)
     if (swapped + ACCEPT * maskArea(piece.cut) >= canvas.maskedError(piece.cut)) {
-        fit.hold(piece.placement)
+        fit.restore(piece.placement)
         return
     }
     fit.keep(alternate)
@@ -537,69 +580,30 @@ private fun faceLibrary(
     knownFaces: List<List<FaceBox>>?
 ): List<List<FaceBox>> {
     return List(thumbnails.size) { index ->
-        val given = knownFaces?.getOrNull(index).orEmpty()
-        val boxes = if (given.isNotEmpty()) {
-            given
-        } else {
-            try {
-                CartoonFaceFinder.find(thumbnails[index])
-            } catch (failure: Exception) {
-                emptyList()
-            } catch (oom: OutOfMemoryError) {
-                emptyList()
-            }
-        }
-        boxes.mapNotNull { faceInContent(it, descriptors.getOrNull(index)) }
+        facesFor(thumbnails[index], descriptors.getOrNull(index), knownFaces?.getOrNull(index).orEmpty())
     }
+}
+
+/**
+ * A supplied face still seats the crop. An alpha sticker with no supplied face is the whole
+ * artwork: a cartoon detector hit must not zoom it or drop it.
+ */
+private fun facesFor(image: PixelImage, descriptor: TileDescriptor?, given: List<FaceBox>): List<FaceBox> {
+    if (given.isNotEmpty()) return given.mapNotNull { faceInContent(it, descriptor) }
+    if (alphaSticker(image)) return emptyList()
+    val boxes = try {
+        CartoonFaceFinder.find(image)
+    } catch (failure: Exception) {
+        emptyList()
+    } catch (oom: OutOfMemoryError) {
+        emptyList()
+    }
+    return boxes.mapNotNull { faceInContent(it, descriptor) }
 }
 
 private fun faceStep(plane: LabPlane): Int {
     val longEdge = maxOf(plane.width, plane.height)
     return (longEdge * FACE_PX / REFERENCE_EDGE).toInt().coerceIn(4, 20)
-}
-
-private fun cullHiddenFaces(pieces: MutableList<PlacedPiece>, width: Int, height: Int) {
-    if (width <= 0 || height <= 0) return
-    val owners = IntArray(width * height) { -1 }
-    val locked = BooleanArray(owners.size)
-    for (index in pieces.indices) paintOwners(pieces[index].placement, index, owners, locked, width, height)
-    val keep = pieces.filterIndexed { index, piece ->
-        val face = faceOf(piece.placement)
-        if (face.right <= face.left || face.bottom <= face.top) true
-        else ownedFaceFraction(owners, width, height, index, face) >= FACE_VISIBLE
-    }
-    if (keep.size != pieces.size) {
-        pieces.clear()
-        pieces.addAll(keep)
-    }
-}
-
-private fun paintOwners(placement: CutoutPlacement, owner: Int, owners: IntArray, locked: BooleanArray, width: Int, height: Int) {
-    val mask = placement.mask ?: return
-    val face = faceOf(placement)
-    val x0 = (mask.left * width).toInt().coerceIn(0, width - 1)
-    val x1 = (mask.right * width).toInt().coerceIn(x0, width - 1)
-    val y0 = (mask.top * height).toInt().coerceIn(0, height - 1)
-    val y1 = (mask.bottom * height).toInt().coerceIn(y0, height - 1)
-    for (y in y0..y1) {
-        val row = y * width
-        for (x in x0..x1) {
-            if (locked[row + x]) continue
-            val nx = (x + 0.5f) / width
-            val ny = (y + 0.5f) / height
-            if (!mask.contains(nx, ny)) continue
-            owners[row + x] = owner
-            if (insideFace(face, nx, ny)) locked[row + x] = true
-        }
-    }
-}
-
-private fun faceOf(placement: CutoutPlacement) = FaceBox(
-    placement.faceLeft, placement.faceTop, placement.faceRight, placement.faceBottom
-)
-
-private fun insideFace(face: FaceBox, x: Float, y: Float): Boolean {
-    return face.right > face.left && x >= face.left && x <= face.right && y >= face.top && y <= face.bottom
 }
 
 private fun statsOf(fit: ShapeFit, probes: ProbeCounter, tiles: Int, pieces: List<PlacedPiece>): MatchStats {
@@ -615,9 +619,10 @@ private fun statsOf(fit: ShapeFit, probes: ProbeCounter, tiles: Int, pieces: Lis
 }
 
 private class WorkCanvas(val plane: LabPlane, private val edges: FloatArray) {
-    val l = FloatArray(plane.l.size) { meanOf(plane.l) }
-    val a = FloatArray(plane.a.size) { meanOf(plane.a) }
-    val b = FloatArray(plane.b.size) { meanOf(plane.b) }
+    // One mean per channel. Computing it inside the array initializer ran it once per pixel.
+    val l = FloatArray(plane.l.size).also { it.fill(meanOf(plane.l)) }
+    val a = FloatArray(plane.a.size).also { it.fill(meanOf(plane.a)) }
+    val b = FloatArray(plane.b.size).also { it.fill(meanOf(plane.b)) }
 
     fun paint(cut: ShapeCut, pl: Float, pa: Float, pb: Float) {
         visit(cut) { index ->
@@ -844,6 +849,9 @@ private fun meanOf(values: FloatArray): Float {
 
 private class Peak(val index: Int, val score: Float)
 
+private const val LARGE_START = 0.02f
+private const val LARGE_END = 0.4f
+private const val SETTLE_START = 0.8f
 private const val COVER_SCALE = 0.07f
 private const val RUIN_GAP = 0.18f
 private const val SEAM_LIMIT = 0.08f
@@ -851,4 +859,3 @@ private const val ACCEPT = 0.012f
 private const val PEAK = 0.035f
 private const val FACE_PX = 44f
 private const val REFERENCE_EDGE = 1680f
-private const val FACE_VISIBLE = 0.55f

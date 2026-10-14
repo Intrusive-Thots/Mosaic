@@ -10,12 +10,14 @@ import com.intrusivethots.mosaic.engine.config.OutputLayout
 import com.intrusivethots.mosaic.engine.coord.GenerationCoordinator
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.match.CartoonFaceFinder
+import com.intrusivethots.mosaic.engine.match.gridAdjacency
 import com.intrusivethots.mosaic.engine.quality.pieceBoundaryAlignment
 import com.intrusivethots.mosaic.engine.render.MemoryRowSink
 import com.intrusivethots.mosaic.engine.render.MosaicRenderer
 import com.intrusivethots.mosaic.engine.tile.MemoryTileSource
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -44,8 +46,12 @@ class SkyAndStripeTest {
             ),
             preview = false
         )
+        val report = gridAdjacency(result.plan)
+        val cleanCells = result.plan.assignments.count { it == 0 }
         val cappedCells = result.plan.assignments.count { it == 1 }
-        assertTrue(cappedCells == 0, "red-capped tile used in $cappedCells cells")
+        assertEquals(0, report.violations)
+        assertTrue(cleanCells > 0, "solid sky tile was not used")
+        assertTrue(cleanCells >= cappedCells, "clean $cleanCells capped $cappedCells")
     }
 
     @Test

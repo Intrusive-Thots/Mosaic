@@ -17,6 +17,7 @@ import com.intrusivethots.mosaic.engine.config.MosaicKind
 import com.intrusivethots.mosaic.engine.config.OutputMode
 import com.intrusivethots.mosaic.engine.config.customSizeError
 import com.intrusivethots.mosaic.engine.config.outputLimitError
+import com.intrusivethots.mosaic.engine.config.effectiveStack
 import com.intrusivethots.mosaic.engine.config.planCollageOutput
 import com.intrusivethots.mosaic.engine.config.planOutput
 import com.intrusivethots.mosaic.ui.design.ChoiceGroup
@@ -38,24 +39,32 @@ fun ShapeControls(
     onOutput: (Int, Int, Boolean) -> Unit
 ) {
     Column(Modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        ChoiceGroup("Aspect ratio", AspectRatioPreset.entries, config.aspectRatio, { it.label }, onAspect)
+        ChoiceGroup(
+            title = "Aspect ratio",
+            options = AspectRatioPreset.entries,
+            selected = config.aspectRatio,
+            label = { it.label },
+            onSelect = onAspect,
+            description = aspectHelp(config.aspectRatio)
+        )
         SettingSlider(
             label = "Source scale",
             valueText = "${(config.targetScale * 100).toInt()}%",
             value = config.targetScale,
             range = 0.25f..1f,
             onChange = onScale,
-            description = "Shrinks the target before matching. Lower values are faster."
+            description = SOURCE_SCALE_HELP
         )
         ChoiceGroup(
             title = "Output resolution",
             options = OutputMode.entries,
             selected = config.outputMode,
-            label = { "${it.label} · ${it.cellPixels}px" },
+            label = { outputResolutionLabel(it, config.effectiveStack()) },
             onSelect = onOutputMode,
-            description = "Pixels per cell in the full render."
+            description = outputResolutionHelp(config.outputMode, config.effectiveStack())
         )
         GroupLabel("Custom size")
+        HintText(CUSTOM_SIZE_HELP)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
             OutlinedTextField(
                 value = if (config.customOutputWidth == 0) "" else config.customOutputWidth.toString(),
@@ -85,7 +94,7 @@ fun ShapeControls(
             title = "Lock aspect ratio",
             checked = config.lockOutputAspect,
             onChange = { onOutput(config.customOutputWidth, config.customOutputHeight, it) },
-            description = "Height follows the width."
+            description = LOCK_ASPECT_HELP
         )
         OutputHint(config, targetWidth, targetHeight)
     }

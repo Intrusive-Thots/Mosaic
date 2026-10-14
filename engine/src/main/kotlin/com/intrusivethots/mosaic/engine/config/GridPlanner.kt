@@ -38,6 +38,33 @@ fun planGrid(targetWidth: Int, targetHeight: Int, config: MosaicConfig): GridLay
     return GridLayout(columns = columns, rows = rows, staggered = staggered)
 }
 
+/**
+ * Matching grid. Uniform mosaics use a finer grid so outlines can sit in smaller cells.
+ * [planGrid] itself stays the caller's column count.
+ */
+fun resolvedGrid(targetWidth: Int, targetHeight: Int, config: MosaicConfig): GridLayout {
+    val base = planGrid(targetWidth, targetHeight, config)
+    if (!edgesSubdivide(config, base)) return base
+    val columns = evenFine(base.columns, targetWidth)
+    val rows = evenFine(base.rows, targetHeight)
+    if (columns <= base.columns || rows <= base.rows) return base
+    return GridLayout(columns, rows, staggered = false)
+}
+
+fun edgesSubdivide(config: MosaicConfig, layout: GridLayout): Boolean {
+    val validated = config.validated()
+    return validated.subdivideEdges &&
+        validated.mosaicKind != MosaicKind.COLLAGE &&
+        validated.layoutMode == LayoutMode.UNIFORM &&
+        !layout.staggered
+}
+
+private fun evenFine(count: Int, limit: Int): Int {
+    val doubled = (count * 2).coerceAtMost(limit).coerceAtMost(200)
+    val even = doubled - doubled % 2
+    return if (even > count) even else count
+}
+
 private fun rowsFor(targetWidth: Int, targetHeight: Int, columns: Int, config: MosaicConfig): Int {
     if (config.cellAspect != CellAspect.MATCH_GRID && config.linkAspectToGrid) {
         val ratio = config.cellAspect.ratio.toDouble()
@@ -105,10 +132,12 @@ fun planCollageOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig,
             validated.customOutputHeight,
             validated.lockOutputAspect
         )
-        return OutputLayout(1, 1, sized.first, sized.second, false)
+        val (customWidth, customHeight) = fitPixelCap(sized.first, sized.second, MAX_OUTPUT_PIXELS)
+        return OutputLayout(1, 1, customWidth, customHeight, false)
     }
     if (preview) {
-        val edge = (validated.previewCellPixels * 20).coerceIn(48, 240)
+        val readable = (READABLE_PIECE_PX / validated.collage.minPiece).toInt()
+        val edge = readable.coerceIn(48, 960)
         val longEdge = maxOf(targetWidth, targetHeight).coerceAtLeast(1)
         val scale = if (longEdge <= edge) 1f else edge.toFloat() / longEdge.toFloat()
         val width = (targetWidth * scale).roundToInt().coerceAtLeast(1)
@@ -124,14 +153,30 @@ fun planCollageOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig,
         width = (width * scale).roundToInt().coerceAtLeast(1)
         height = (height * scale).roundToInt().coerceAtLeast(1)
     }
-    val pixels = width.toLong() * height.toLong()
-    if (pixels > MAX_OUTPUT_PIXELS) {
-        val scale = kotlin.math.sqrt(MAX_OUTPUT_PIXELS.toDouble() / pixels.toDouble())
-        width = (width * scale).roundToInt().coerceAtLeast(1)
-        height = (height * scale).roundToInt().coerceAtLeast(1)
-    }
-    return OutputLayout(1, 1, width, height, false)
+    val (cappedWidth, cappedHeight) = fitPixelCap(width, height, MAX_OUTPUT_PIXELS)
+    return OutputLayout(1, 1, cappedWidth, cappedHeight, false)
 }
+
+/**
+ * Shrinks [width]×[height] uniformly, rounding down, until it holds at most [maxPixels].
+ * Rounding to nearest could land one row or column over the cap, which then failed the build.
+ */
+fun fitPixelCap(width: Int, height: Int, maxPixels: Long): Pair<Int, Int> {
+    val w = width.coerceAtLeast(1)
+    val h = height.coerceAtLeast(1)
+    if (w.toLong() * h.toLong() <= maxPixels) return w to h
+    var scale = kotlin.math.sqrt(maxPixels.toDouble() / (w.toLong() * h.toLong()).toDouble())
+    var outW = (w * scale).toInt().coerceAtLeast(1)
+    var outH = (h * scale).toInt().coerceAtLeast(1)
+    while (outW.toLong() * outH.toLong() > maxPixels && (outW > 1 || outH > 1)) {
+        scale *= PIXEL_CAP_STEP
+        outW = (w * scale).toInt().coerceAtLeast(1)
+        outH = (h * scale).toInt().coerceAtLeast(1)
+    }
+    return outW to outH
+}
+
+private const val PIXEL_CAP_STEP = 0.999
 
 /** Final collage long edge for each output preset. Preview and custom sizes do not use this. */
 fun collageLongEdge(mode: OutputMode): Int = when (mode) {
@@ -145,7 +190,7 @@ fun planStackedOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig,
     if (stack == HybridStack.GRID) return planOutput(targetWidth, targetHeight, config, preview)
     if (stack == HybridStack.CUTOUTS) return planCollageOutput(targetWidth, targetHeight, config, preview)
     val picture = planCollageOutput(targetWidth, targetHeight, config, preview)
-    val grid = planGrid(targetWidth, targetHeight, config)
+    val grid = resolvedGrid(targetWidth, targetHeight, config)
     val cellWidth = (picture.width / grid.columns).coerceAtLeast(1)
     val cellHeight = (picture.height / grid.rows).coerceAtLeast(1)
     return OutputLayout(grid.columns, grid.rows, cellWidth, cellHeight, grid.staggered)
@@ -179,15 +224,20 @@ private fun fittedSize(
 
 fun planOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig, preview: Boolean): OutputLayout {
     val validated = config.validated()
-    val grid = planGrid(targetWidth, targetHeight, validated)
+    val base = planGrid(targetWidth, targetHeight, validated)
+    val grid = resolvedGrid(targetWidth, targetHeight, validated)
     val custom = !preview && (validated.customOutputWidth > 0 || validated.customOutputHeight > 0)
     if (custom) return planCustomOutput(targetWidth, targetHeight, grid, validated)
     val pixels = if (preview) validated.previewCellPixels else validated.outputMode.cellPixels
+    val divisor = if (grid.columns > base.columns) 2 else 1
     val cellAspect = gridCellAspect(targetWidth, targetHeight, grid)
-    val cellHeight = pixels.coerceAtLeast(1)
-    val cellWidth = (pixels * cellAspect).roundToInt().coerceIn(1, MAX_CELL_PIXELS)
+    val cellHeight = (pixels / divisor).coerceAtLeast(1)
+    val cellWidth = ((pixels * cellAspect) / divisor).roundToInt().coerceIn(1, MAX_CELL_PIXELS)
     return OutputLayout(grid.columns, grid.rows, cellWidth, cellHeight, grid.staggered)
 }
+
+/** Smallest piece, in preview pixels, that still reads as a photo instead of speckle. */
+private const val READABLE_PIECE_PX = 28f
 
 private fun planCustomOutput(
     targetWidth: Int,

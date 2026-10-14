@@ -1,6 +1,9 @@
 package com.intrusivethots.mosaic.ui.components
 
-import android.graphics.BitmapFactory
+import com.intrusivethots.mosaic.core.decodeSampledFile
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.runtime.produceState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -74,9 +77,12 @@ fun ProjectLibraryScreen(projects: List<MosaicProject>, onDelete: (String) -> Un
         }
     }
     selected?.let { project ->
-        val bitmap = remember(project.fullImagePath) {
-            if (project.missingFiles) null else BitmapFactory.decodeFile(project.fullImagePath)
-        }
+        // The full mosaic can be 24 MP. Show it at screen size and decode it off the main thread.
+        val bitmap = produceState<android.graphics.Bitmap?>(null, project.fullImagePath) {
+            value = if (project.missingFiles) null else withContext(Dispatchers.IO) {
+                decodeSampledFile(project.fullImagePath, DIALOG_EDGE)
+            }
+        }.value
         AlertDialog(
             onDismissRequest = { selected = null },
             title = { Text(project.title, color = TextPrimary, fontWeight = FontWeight.Bold) },
@@ -111,3 +117,5 @@ fun ProjectLibraryScreen(projects: List<MosaicProject>, onDelete: (String) -> Un
         )
     }
 }
+
+private const val DIALOG_EDGE = 2048

@@ -1,7 +1,6 @@
 package com.intrusivethots.mosaic.core
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import java.io.File
 import java.io.FileOutputStream
 
@@ -11,7 +10,7 @@ class StampStore(private val directory: File) {
         if (!directory.isDirectory) return emptyList()
         return directory.listFiles { file -> file.extension == "png" }
             ?.sortedBy { it.name }
-            ?.mapNotNull { file -> BitmapFactory.decodeFile(file.absolutePath) }
+            ?.mapNotNull { file -> decodeSampledFile(file.absolutePath, STAMP_EDGE) }
             ?: emptyList()
     }
 
@@ -26,6 +25,9 @@ class StampStore(private val directory: File) {
         }
     }
 }
+
+/** Saved stamps were cut from photos decoded at 1024 px, so nothing is lost at this edge. */
+const val STAMP_EDGE = 1024
 
 fun eraseDisc(bitmap: Bitmap, centerX: Float, centerY: Float, radius: Float) {
     if (bitmap.isRecycled || !bitmap.isMutable) return

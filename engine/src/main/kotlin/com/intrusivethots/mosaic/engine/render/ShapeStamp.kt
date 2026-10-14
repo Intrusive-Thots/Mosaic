@@ -110,9 +110,10 @@ internal fun paintShapeRow(
     for (x in left..right) {
         val index = y * outputWidth + x
         if (locked != null && locked[index]) continue
+        val gradeScale = if (placement.scale >= BLOCKING_SCALE) BLOCK_GRADE else 1f
         val color = cutPixel(
             source, base, descriptor, frame, mask, config, field, tone,
-            x, y, outputWidth, outputHeight, turnCos, turnSin, lab, low, crossings
+            x, y, outputWidth, outputHeight, turnCos, turnSin, lab, low, crossings, gradeScale
         )
         if (color != 0) {
             stampCut(row, y, x, outputWidth, color, coverage, owners, owner)
@@ -154,7 +155,7 @@ private fun paperEdge(outline: PieceOutline, mask: PieceMask, ny: Float, outputW
         outlineCrossings(outline, ny + (slot - depth) / outputHeight.toFloat())
     }
     val shadow = outlineCrossings(outline, ny - depth / outputHeight.toFloat())
-    val alpha = if (depth <= 1) 150 else 200
+    val alpha = if (depth <= 1) 84 else 108
     return PaperEdge(near, shadow, alpha, depth)
 }
 
@@ -169,8 +170,8 @@ private fun fiberColor(edge: PaperEdge, outputWidth: Int, x: Int, y: Int): Int {
 
 /** Rim width follows the piece. A small piece stays near one pixel so the thumbnail is not a white mesh. */
 private fun rimDepth(outputWidth: Int, piecePx: Float): Int {
-    val cap = (outputWidth * 2.4f / RIM_REFERENCE).roundToInt().coerceIn(1, 3)
-    return (piecePx / 40f).roundToInt().coerceIn(1, cap)
+    val cap = (outputWidth * 1.1f / RIM_REFERENCE).roundToInt().coerceIn(1, 2)
+    return (piecePx / 80f).roundToInt().coerceIn(1, cap)
 }
 
 private fun inFace(placement: CutoutPlacement, nx: Float, ny: Float): Boolean {
@@ -222,7 +223,8 @@ private fun cutPixel(
     turnSin: Float,
     lab: FloatArray,
     low: FloatArray,
-    crossings: FloatArray?
+    crossings: FloatArray?,
+    gradeScale: Float
 ): Int {
     val nx = (x + 0.5f) / outputWidth
     val ny = (y + 0.5f) / outputHeight
@@ -233,10 +235,60 @@ private fun cutPixel(
     if (cover < 12) return 0
     val sampled = sourceColor(source, descriptor, frame, mask, nx, ny, outputWidth, outputHeight, turnCos, turnSin)
     if ((sampled ushr 24) < 128) return 0
+    cover = coverWithSource(cover, sampled)
+    if (cover < 12) return 0
     val basePx = sourceColor(base, descriptor, frame, mask, nx, ny, outputWidth, outputHeight, turnCos, turnSin)
-    val painted = harmonize(sampled, basePx, field, tone, config, x, y, outputWidth, outputHeight, lab, low)
+    val graded = harmonize(
+        sampled, basePx, field, tone, config, x, y, outputWidth, outputHeight, lab, low, gradeScale
+    )
+    val painted = rimBlend(graded, field, mask, nx, ny, x, y, outputWidth, outputHeight)
     return (painted and 0x00FFFFFF) or (cover shl 24)
 }
+
+/**
+ * Mild rim harmonization (a cheap stand-in for Poisson blending, Pérez 2003): within
+ * [RIM_BLEND_PX] output pixels of the cut edge, mix a capped share of the local target color
+ * into the piece so its rim does not read as a pale seam. The interior stays untouched.
+ */
+private fun rimBlend(
+    color: Int,
+    field: PixelImage?,
+    mask: PieceMask,
+    nx: Float,
+    ny: Float,
+    x: Int,
+    y: Int,
+    outputWidth: Int,
+    outputHeight: Int
+): Int {
+    val strength = RimTuning.strength
+    if (strength <= 0f || field == null) return color
+    val dx = RIM_BLEND_PX / outputWidth.toFloat()
+    val dy = RIM_BLEND_PX / outputHeight.toFloat()
+    val rim = maskCoverage(mask, nx + dx, ny) < 128 || maskCoverage(mask, nx - dx, ny) < 128 ||
+        maskCoverage(mask, nx, ny + dy) < 128 || maskCoverage(mask, nx, ny - dy) < 128
+    if (!rim) return color
+    val fx = (x + 0.5f) * field.width / outputWidth - 0.5f
+    val fy = (y + 0.5f) * field.height / outputHeight - 0.5f
+    val local = field.sampleBilinear(fx, fy)
+    return mixRgb(color, local, strength)
+}
+
+internal fun mixRgb(a: Int, b: Int, t: Float): Int {
+    val r = ((a shr 16 and 255) * (1f - t) + (b shr 16 and 255) * t).roundToInt()
+    val g = ((a shr 8 and 255) * (1f - t) + (b shr 8 and 255) * t).roundToInt()
+    val bl = ((a and 255) * (1f - t) + (b and 255) * t).roundToInt()
+    return (a and -0x1000000) or (r shl 16) or (g shl 8) or bl
+}
+
+/** Rim blend strength. A system property lets the tuning harness A/B it. */
+internal object RimTuning {
+    val strength: Float = (System.getProperty("mosaic.rimBlend")?.toFloatOrNull() ?: RIM_BLEND_DEFAULT).coerceIn(0f, RIM_BLEND_CAP)
+}
+
+private const val RIM_BLEND_PX = 2f
+private const val RIM_BLEND_DEFAULT = 0.2f
+internal const val RIM_BLEND_CAP = 0.35f
 
 private fun besideMask(mask: PieceMask, nx: Float, ny: Float, outputWidth: Int, outputHeight: Int): Boolean {
     val dx = 1f / outputWidth.toFloat()
@@ -286,7 +338,15 @@ private fun sourceColor(
         frame, descriptor, source.width, source.height, mask,
         outputWidth, outputHeight, nx * outputWidth, ny * outputHeight, turnCos, turnSin
     )
-    return source.sampleBilinear(sx, sy) or OPAQUE
+    val sampled = source.sampleBilinear(sx, sy)
+    return if ((sampled ushr 24) >= 250) sampled or OPAQUE else sampled
+}
+
+/** A sticker's own alpha is the mask. A filled photo stays at the cut's cover. */
+private fun coverWithSource(cover: Int, sampled: Int): Int {
+    val sourceAlpha = sampled ushr 24
+    if (sourceAlpha >= 250) return cover
+    return cover * sourceAlpha / 255
 }
 
 /**
@@ -361,9 +421,10 @@ private fun harmonize(
     outputWidth: Int,
     outputHeight: Int,
     lab: FloatArray,
-    low: FloatArray
+    low: FloatArray,
+    gradeScale: Float
 ): Int {
-    val strength = config.colorMatchWeight
+    val strength = (config.colorMatchWeight * gradeScale).coerceIn(0f, 1f)
     if (tone == null || config.renderMode == RenderMode.ORIGINAL || strength <= 0f) return sampled
     OkLab.writeLab(sampled, lab, 0)
     val sharpL = lab[0]
@@ -511,10 +572,11 @@ private const val OPAQUE = 0xFF shl 24
 private const val FIELD_EDGE = 64
 private const val TONE_STEPS = 7
 private const val BLOCKING_SCALE = 0.055f
+private const val BLOCK_GRADE = 1.4f
 private const val BLOCK_DETAIL = 1f
 private const val DETAIL_KEEP = 1f
-private const val RIM_PAD = 10
+private const val RIM_PAD = 4
 private const val RIM_REFERENCE = 1680f
 private const val GRADE_EDGE = 40
 private const val SOLID = 200
-private const val SHADOW = 72 shl 24
+private const val SHADOW = 36 shl 24

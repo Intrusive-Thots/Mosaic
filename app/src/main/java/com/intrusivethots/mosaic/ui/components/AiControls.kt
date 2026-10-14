@@ -35,7 +35,8 @@ fun AiControls(config: MosaicConfig, onToggle: (Boolean) -> Unit, onSettings: (I
                 valueText = "${seg.maxExtractedSubjects}",
                 value = seg.maxExtractedSubjects.toFloat(),
                 range = 1f..48f,
-                onChange = { onSettings(it.toInt(), seg.minSubjectSizePx, seg.allowedShapes) }
+                onChange = { onSettings(it.toInt(), seg.minSubjectSizePx, seg.allowedShapes) },
+                description = MAX_SUBJECTS_HELP
             )
             SettingSlider(
                 label = "Minimum subject size",
@@ -43,7 +44,7 @@ fun AiControls(config: MosaicConfig, onToggle: (Boolean) -> Unit, onSettings: (I
                 value = seg.minSubjectSizePx.toFloat(),
                 range = 16f..256f,
                 onChange = { onSettings(seg.maxExtractedSubjects, it.toInt(), seg.allowedShapes) },
-                description = "Smaller subjects are skipped."
+                description = MIN_SUBJECT_HELP
             )
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 GroupLabel("Shapes to keep")
@@ -62,7 +63,10 @@ fun AiControls(config: MosaicConfig, onToggle: (Boolean) -> Unit, onSettings: (I
                         )
                     }
                 }
-                HintText("At least one shape stays selected. The model finds shapes, not people or pets.")
+                HintText(
+                    "Tall is taller than wide, wide is the reverse, and compact is close to square. " +
+                        "At least one stays on. The model finds shapes, not people or pets."
+                )
             }
         }
     }
