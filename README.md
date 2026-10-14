@@ -367,9 +367,11 @@ GitHub Actions (`.github/workflows/ci.yml`) runs engine tests, detekt, benchmark
 
 If `KEYSTORE_BASE64` is empty, the workflow logs that and still builds unsigned artifacts. Upload the AAB to Play Console from a machine that has the real upload key. This repository does not contain one.
 
-A push of `cursor/collage-tuning-loop-fcee` publishes the debug APK only after the engine, Android, and instrumented jobs all succeed. The tag is `v` plus `versionName` plus `-dev`, so a version bump gets a new tag. The workflow force-updates that tag to the commit that was built. For 2.4.7 the file is `app-debug.apk` at `v2.4.7-dev`.
+A push of `cursor/collage-tuning-loop-fcee` publishes the debug APK only after the engine, Android, and instrumented jobs all succeed. The tag is `v` plus `versionName` plus `-dev`, so a version bump gets a new tag. The workflow force-updates that tag to the commit that was built. For 2.4.8 the file is `app-debug.apk` at `v2.4.8-dev`.
 
-https://github.com/Intrusive-Thots/Mosaic/releases/download/v2.4.7-dev/app-debug.apk
+https://github.com/Intrusive-Thots/Mosaic/releases/download/v2.4.8-dev/app-debug.apk
+
+Version 2.4.8 (versionCode 14). Adds an offline refinement prototype (`engine/refine/OfflineRefine.kt`). It is off by default and the app never runs it. The tuning harness turns it on with `-Dmosaic.offlineRefine=true`. It renders the plan, scores it against the target (ΔE plus a share of 1−SSIM), and nudges the crop and tone of the 24 largest pieces, keeping each move that lowers the score, for up to 60 s per image. Masks never change, so outlines and the no-touch rule are untouched. On the showcase themes it lowered the objective on every theme. Means: ΔE 0.0844 → 0.0832, SSIM 0.594 → 0.602, edge F1 0.867 → 0.872, contacts 0 → 0. It is meant for tuning the built-in heuristics against a measured objective, not for phones.
 
 Version 2.4.7 (versionCode 13). The contact check now sits behind a `ContactIndex` interface. Seed placement, pose refinement, copy separation, the hidden-face cull, and stage timing moved out of `TargetShapes.kt`, `ShapeFit.kt`, and `ResidualPass.kt` into their own files, with no change in behavior. A new test renders 4K and 8K collages with 520 stickers and 600 pieces. It found two copies touching at full size: a later cover only partly over a copy hid that copy on the contact grid. Now only cells a cover surely hides take a copy out of view; on a cover's rim both pieces count as visible. Every stage must finish inside its time limit (about 3 s per stage locally), and no copies may touch, checked pixel by pixel at 4K. A fixed-seed edge-F1 golden test fails if outlines get worse. Showcase means: ΔE 0.0852 → 0.0844, SSIM 0.586 → 0.594, edge F1 0.852 → 0.867, contacts 0 → 0.
 
