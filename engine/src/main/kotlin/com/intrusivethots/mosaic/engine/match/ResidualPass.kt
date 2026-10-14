@@ -10,7 +10,6 @@ import com.intrusivethots.mosaic.engine.index.ProbeCounter
 import com.intrusivethots.mosaic.engine.index.TileIndex
 import com.intrusivethots.mosaic.engine.index.TopK
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import java.util.ArrayDeque
@@ -89,7 +88,7 @@ internal suspend fun assembleCollage(
 
 internal class Assembled(val placements: List<CutoutPlacement>, val stats: MatchStats)
 
-private class PlacedPiece(
+internal class PlacedPiece(
     val cut: ShapeCut,
     var placement: CutoutPlacement,
     var l: Float,
@@ -607,149 +606,6 @@ private fun faceStep(plane: LabPlane): Int {
     return (longEdge * FACE_PX / REFERENCE_EDGE).toInt().coerceIn(4, 20)
 }
 
-/**
- * Dropping a piece can uncover two copies of one source that now share an edge.
- * Walk the finished stack and reseat or drop any copy that touches another.
- */
-private fun untouchCopies(fit: ShapeFit, pieces: MutableList<PlacedPiece>) {
-    fit.syncContact(emptyList())
-    val kept = ArrayList<PlacedPiece>(pieces.size)
-    for (piece in pieces) {
-        if (separateCopy(fit, piece, kept.size)) kept.add(piece)
-    }
-    pieces.clear()
-    pieces.addAll(kept)
-}
-
-private fun separateCopy(fit: ShapeFit, piece: PlacedPiece, ordinal: Int): Boolean {
-    val mask = piece.placement.mask
-    val tile = piece.placement.tileIndex
-    if (mask == null || !fit.clashes(tile, mask)) {
-        fit.occupy(piece.placement)
-        return true
-    }
-    return reseatCopy(fit, piece, ordinal, tile)
-}
-
-private fun reseatCopy(fit: ShapeFit, piece: PlacedPiece, ordinal: Int, tile: Int): Boolean {
-    val cutMask = piece.cut.mask
-    if (!fit.clashes(tile, cutMask)) {
-        piece.placement = withMask(piece.placement, cutMask)
-        fit.occupy(piece.placement)
-        return true
-    }
-    val alternate = fit.choose(piece.cut, ordinal, tile, commit = true) ?: return false
-    piece.placement = alternate
-    return true
-}
-
-private fun withMask(placement: CutoutPlacement, mask: PieceMask) = CutoutPlacement(
-    placement.tileIndex,
-    placement.x,
-    placement.y,
-    placement.angleDegrees,
-    placement.scale,
-    placement.targetL,
-    placement.targetA,
-    placement.targetB,
-    placement.pinned,
-    mask,
-    placement.cropU,
-    placement.cropV,
-    placement.cropSpan,
-    placement.faceLeft,
-    placement.faceTop,
-    placement.faceRight,
-    placement.faceBottom
-)
-
-/**
- * Drops pieces whose face is mostly hidden. Runs on the measure plane (at most
- * [HeapBudget.MEASURE_EDGE] on the long side), and only pixels inside some face box are painted,
- * because ownership is never read anywhere else. With no faces it returns at once.
- */
-private fun cullHiddenFaces(pieces: MutableList<PlacedPiece>, width: Int, height: Int) {
-    if (width <= 0 || height <= 0) return
-    val faces = pieces.map { faceOf(it.placement) }
-    if (faces.none { it.right > it.left && it.bottom > it.top }) return
-    val step = cullStep(width, height)
-    val w = (width + step - 1) / step
-    val h = (height + step - 1) / step
-    val needed = BooleanArray(w * h)
-    val region = intArrayOf(w, h, -1, -1)
-    for (face in faces) {
-        if (face.right <= face.left || face.bottom <= face.top) continue
-        val x0 = (face.left * w).toInt().coerceIn(0, w - 1)
-        val x1 = (face.right * w).toInt().coerceIn(x0, w - 1)
-        val y0 = (face.top * h).toInt().coerceIn(0, h - 1)
-        val y1 = (face.bottom * h).toInt().coerceIn(y0, h - 1)
-        for (y in y0..y1) for (x in x0..x1) needed[y * w + x] = true
-        region[0] = min(region[0], x0)
-        region[1] = min(region[1], y0)
-        region[2] = maxOf(region[2], x1)
-        region[3] = maxOf(region[3], y1)
-    }
-    val owners = IntArray(w * h) { -1 }
-    val locked = BooleanArray(owners.size)
-    for (index in pieces.indices) {
-        paintOwners(pieces[index].placement, index, owners, locked, needed, region, w, h)
-    }
-    val keep = pieces.filterIndexed { index, piece ->
-        val face = faces[index]
-        if (face.right <= face.left || face.bottom <= face.top) true
-        else ownedFaceFraction(owners, w, h, index, face) >= FACE_VISIBLE
-    }
-    if (keep.size != pieces.size) {
-        pieces.clear()
-        pieces.addAll(keep)
-    }
-}
-
-/** Plane step so the ownership pass never exceeds [CULL_MAX_PIXELS], whatever the caller passes. */
-internal fun cullStep(width: Int, height: Int): Int {
-    var step = 1
-    while ((width.toLong() / step) * (height.toLong() / step) > CULL_MAX_PIXELS) step++
-    return step
-}
-
-private fun paintOwners(
-    placement: CutoutPlacement,
-    owner: Int,
-    owners: IntArray,
-    locked: BooleanArray,
-    needed: BooleanArray,
-    region: IntArray,
-    width: Int,
-    height: Int
-) {
-    val mask = placement.mask ?: return
-    val face = faceOf(placement)
-    val x0 = maxOf((mask.left * width).toInt().coerceIn(0, width - 1), region[0])
-    val x1 = min((mask.right * width).toInt().coerceIn(0, width - 1), region[2])
-    val y0 = maxOf((mask.top * height).toInt().coerceIn(0, height - 1), region[1])
-    val y1 = min((mask.bottom * height).toInt().coerceIn(0, height - 1), region[3])
-    if (x1 < x0 || y1 < y0) return
-    for (y in y0..y1) {
-        val row = y * width
-        for (x in x0..x1) {
-            if (!needed[row + x] || locked[row + x]) continue
-            val nx = (x + 0.5f) / width
-            val ny = (y + 0.5f) / height
-            if (!mask.contains(nx, ny)) continue
-            owners[row + x] = owner
-            if (insideFace(face, nx, ny)) locked[row + x] = true
-        }
-    }
-}
-
-private fun faceOf(placement: CutoutPlacement) = FaceBox(
-    placement.faceLeft, placement.faceTop, placement.faceRight, placement.faceBottom
-)
-
-private fun insideFace(face: FaceBox, x: Float, y: Float): Boolean {
-    return face.right > face.left && x >= face.left && x <= face.right && y >= face.top && y <= face.bottom
-}
-
 private fun statsOf(fit: ShapeFit, probes: ProbeCounter, tiles: Int, pieces: List<PlacedPiece>): MatchStats {
     val stats = MatchStats()
     stats.comparisons = fit.comparisons
@@ -993,7 +849,6 @@ private fun meanOf(values: FloatArray): Float {
 
 private class Peak(val index: Int, val score: Float)
 
-private const val CULL_MAX_PIXELS = 512L * 512L
 private const val LARGE_START = 0.02f
 private const val LARGE_END = 0.4f
 private const val SETTLE_START = 0.8f
@@ -1004,28 +859,3 @@ private const val ACCEPT = 0.012f
 private const val PEAK = 0.035f
 private const val FACE_PX = 44f
 private const val REFERENCE_EDGE = 1680f
-private const val FACE_VISIBLE = 0.55f
-
-/** Wall-clock limits for the optional collage stages. A stage that runs out keeps what it has. */
-internal class StageBudgets(val largeMs: Long, val edgeMs: Long, val settleMs: Long) {
-    companion object {
-        val PHONE = StageBudgets(largeMs = 20_000L, edgeMs = 20_000L, settleMs = 10_000L)
-    }
-}
-
-/**
- * Deadline for one stage. [over] also throws when the build was cancelled, so loops that
- * are not suspend functions still stop on Cancel.
- */
-internal class StageClock(private val budgetMs: Long, private val job: Job?) {
-    private val start = System.nanoTime()
-
-    fun over(): Boolean {
-        if (job != null && !job.isActive) throw CancellationException("Collage build cancelled")
-        return (System.nanoTime() - start) / NANOS_PER_MS >= budgetMs
-    }
-
-    private companion object {
-        const val NANOS_PER_MS = 1_000_000L
-    }
-}
