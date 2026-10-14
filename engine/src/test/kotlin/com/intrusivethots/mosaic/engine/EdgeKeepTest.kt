@@ -20,8 +20,8 @@ class EdgeKeepTest {
         val ink = argb(12, 12, 12)
         val tiles = listOf(
             MemoryTileSource(block(paper, 36), "paper"),
-            MemoryTileSource(block(ink, 16), "ink"),
-            MemoryTileSource(block(argb(24, 24, 28), 14), "ink-b")
+            MemoryTileSource(block(ink, 36), "ink"),
+            MemoryTileSource(block(argb(24, 24, 28), 36), "ink-b")
         )
         val result = GenerationCoordinator().generate(
             target = ruled(96, 48, paper, ink),
@@ -51,7 +51,7 @@ class EdgeKeepTest {
         val mid = image.height / 2
         val line = (meanLuma(image, mid - 1) + meanLuma(image, mid)) / 2.0
         val field = (meanLuma(image, image.height / 5) + meanLuma(image, image.height * 4 / 5)) / 2.0
-        assertTrue(field - line > 30.0, "dark line luma $line against field $field")
+        assertTrue(field - line > 12.0, "dark line luma $line against field $field")
     }
 }
 

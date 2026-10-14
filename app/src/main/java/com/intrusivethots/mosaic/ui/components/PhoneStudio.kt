@@ -256,6 +256,11 @@ private fun ResultPanel(state: MosaicUiState, shapeEditor: ShapeEditor) {
         ) {
             Image(bitmap.asImageBitmap(), contentDescription = "Mosaic result", contentScale = ContentScale.FillBounds, modifier = Modifier.fillMaxSize())
         }
+        Button(
+            onClick = shapeEditor.onInspect,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentPurple)
+        ) { Text("Inspect") }
         if (state.editPoint != null) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 EditChip("Regenerate") { shapeEditor.onEdit(CollageEdit.Regenerate) }

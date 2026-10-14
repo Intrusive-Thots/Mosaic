@@ -22,27 +22,40 @@ internal fun minimumSpan(face: FaceBox, piecePx: Float, sourceEdge: Int): Float 
     return max(face.longEdge * FACE_MARGIN, floor).coerceAtMost(1f)
 }
 
-internal fun clampToFace(u: Float, v: Float, span: Float, face: FaceBox): Pair<Float, Float>? {
-    val half = span * 0.5f
-    val cu = contain(u, face.left, face.right, half) ?: return null
-    val cv = contain(v, face.top, face.bottom, half) ?: return null
+internal fun clampToFace(u: Float, v: Float, spanU: Float, spanV: Float, face: FaceBox): Pair<Float, Float>? {
+    val cu = contain(u, face.left, face.right, spanU * 0.5f) ?: return null
+    val cv = contain(v, face.top, face.bottom, spanV * 0.5f) ?: return null
     return cu to cv
 }
 
 /** Where the source face lands on the output after an upright crop. */
-internal fun outputFace(mask: PieceMask, face: FaceBox, anchorU: Float, anchorV: Float, span: Float): FaceBox {
+internal fun outputFace(
+    mask: PieceMask,
+    face: FaceBox,
+    anchorU: Float,
+    anchorV: Float,
+    spanU: Float,
+    spanV: Float
+): FaceBox {
     val raw = FaceBox(
-        mapAxis(mask.left, mask.right, face.left, anchorU, span),
-        mapAxis(mask.top, mask.bottom, face.top, anchorV, span),
-        mapAxis(mask.left, mask.right, face.right, anchorU, span),
-        mapAxis(mask.top, mask.bottom, face.bottom, anchorV, span)
+        mapAxis(mask.left, mask.right, face.left, anchorU, spanU),
+        mapAxis(mask.top, mask.bottom, face.top, anchorV, spanV),
+        mapAxis(mask.left, mask.right, face.right, anchorU, spanU),
+        mapAxis(mask.top, mask.bottom, face.bottom, anchorV, spanV)
     )
     val dx = raw.width * FACE_CORE
     val dy = raw.height * FACE_CORE
     return FaceBox(raw.left + dx, raw.top + dy, raw.right - dx, raw.bottom - dy)
 }
 
-internal fun maskCoversFace(mask: PieceMask, face: FaceBox, anchorU: Float, anchorV: Float, span: Float): Boolean {
+internal fun maskCoversFace(
+    mask: PieceMask,
+    face: FaceBox,
+    anchorU: Float,
+    anchorV: Float,
+    spanU: Float,
+    spanV: Float
+): Boolean {
     var hit = 0
     var count = 0
     val insetX = face.width * 0.12f
@@ -51,12 +64,14 @@ internal fun maskCoversFace(mask: PieceMask, face: FaceBox, anchorU: Float, anch
     val top = face.top + insetY
     val width = (face.width - insetX * 2f).coerceAtLeast(face.width * 0.5f)
     val height = (face.height - insetY * 2f).coerceAtLeast(face.height * 0.5f)
+    val safeU = spanU.coerceAtLeast(1e-4f)
+    val safeV = spanV.coerceAtLeast(1e-4f)
     for (y in 0 until FACE_SAMPLES) {
         val fv = top + (y + 0.5f) / FACE_SAMPLES * height
         for (x in 0 until FACE_SAMPLES) {
             val fu = left + (x + 0.5f) / FACE_SAMPLES * width
-            val localX = (fu - anchorU) / span
-            val localY = (fv - anchorV) / span
+            val localX = (fu - anchorU) / safeU
+            val localY = (fv - anchorV) / safeV
             val nx = mask.left + (0.5f + localX) * (mask.right - mask.left)
             val ny = mask.top + (0.5f + localY) * (mask.bottom - mask.top)
             count++

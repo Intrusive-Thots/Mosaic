@@ -267,7 +267,210 @@ class TileMatcher(
         scratch.stats.probes = scratch.probes.probes
         scratch.stats.usage = IntArray(tileCount) { tile -> scratch.tracker.usageCount(tile) }
     }
+
+    /**
+     * Re-picks tiles for [cells] only. Every other assignment stays so a later full render
+     * still matches the previous image outside those cells.
+     */
+    suspend fun rematchCells(
+        plan: MosaicPlan,
+        target: PixelImage,
+        descriptors: List<TileDescriptor>,
+        index: TileIndex,
+        config: MosaicConfig,
+        cells: BooleanArray,
+        excluded: BooleanArray = BooleanArray(0)
+    ): MosaicPlan {
+        if (cells.size != plan.cellCount || cells.none()) return plan
+        val validated = config.validated()
+        val scratch = MatchScratch(
+            validated,
+            GridLayout(plan.columns, plan.rows, plan.staggered),
+            descriptors.size,
+            target,
+            emptyList()
+        )
+        rememberKept(plan, cells, scratch)
+        return if (plan.anchors.isNotEmpty()) {
+            rematchAnchored(plan, descriptors, index, scratch, cells, excluded)
+        } else {
+            rematchUniform(plan, descriptors, index, scratch, cells, excluded)
+        }
+    }
+
+    private fun rememberKept(plan: MosaicPlan, cells: BooleanArray, scratch: MatchScratch) {
+        for (index in cells.indices) {
+            if (cells[index]) continue
+            val tile = plan.assignments[index]
+            if (tile == MosaicPlan.SOLID) continue
+            scratch.tracker.record(tile, index % plan.columns, index / plan.columns)
+        }
+    }
+
+    private suspend fun rematchUniform(
+        plan: MosaicPlan,
+        descriptors: List<TileDescriptor>,
+        index: TileIndex,
+        scratch: MatchScratch,
+        cells: BooleanArray,
+        excluded: BooleanArray
+    ): MosaicPlan {
+        val assignments = plan.assignments.copyOf()
+        val cellRgb = plan.cellRgb.copyOf()
+        val cellLab = plan.cellLab.copyOf()
+        val orientations = if (plan.orientations.size == plan.cellCount) plan.orientations.copyOf() else ByteArray(0)
+        val aspect = gridCellAspect(scratch.target.width, scratch.target.height, scratch.layout)
+        val columns = plan.columns
+        for (row in 0 until plan.rows) {
+            coroutineContext.ensureActive()
+            for (column in 0 until columns) {
+                val cell = row * columns + column
+                if (!cells[cell]) continue
+                val rect = cellRect(scratch.layout, scratch.target.width, scratch.target.height, column, row)
+                analyzer.sample(scratch.target, rect.x, rect.y, rect.width, rect.height, rect.wrapX, scratch.features)
+                writeCell(cellRgb, cellLab, cell, scratch.features)
+                fill(index, scratch, column, row)
+                val chosen = pickAvoiding(scratch, descriptors, column, row, aspect, scratch.config.rotationMode, excluded)
+                recordChoice(scratch, chosen, column, row)
+                assignments[cell] = chosen.tile
+                if (orientations.isNotEmpty()) orientations[cell] = chosen.orientation.toByte()
+            }
+        }
+        return copiedPlan(plan, assignments, cellRgb, cellLab, orientations)
+    }
+
+    private suspend fun rematchAnchored(
+        plan: MosaicPlan,
+        descriptors: List<TileDescriptor>,
+        index: TileIndex,
+        scratch: MatchScratch,
+        cells: BooleanArray,
+        excluded: BooleanArray
+    ): MosaicPlan {
+        val assignments = plan.assignments.copyOf()
+        val cellRgb = plan.cellRgb.copyOf()
+        val cellLab = plan.cellLab.copyOf()
+        val orientations = if (plan.orientations.size == plan.cellCount) plan.orientations.copyOf() else ByteArray(0)
+        val seen = HashSet<Int>()
+        for (cell in cells.indices) {
+            if (!cells[cell]) continue
+            val anchor = plan.anchors[cell]
+            if (!seen.add(anchor)) continue
+            coroutineContext.ensureActive()
+            val column = anchor % plan.columns
+            val row = anchor / plan.columns
+            val spanX = if (anchor in plan.spanX.indices) plan.spanX[anchor].toInt().coerceAtLeast(1) else 1
+            val spanY = if (anchor in plan.spanY.indices) plan.spanY[anchor].toInt().coerceAtLeast(1) else 1
+            val rect = spanRect(
+                plan.columns, plan.rows, scratch.target.width, scratch.target.height, column, row, spanX, spanY
+            )
+            analyzer.sample(scratch.target, rect.x, rect.y, rect.width, rect.height, false, scratch.features)
+            writeCell(cellRgb, cellLab, anchor, scratch.features)
+            val aspect = (rect.width.toFloat() / rect.height.toFloat()).coerceAtLeast(1e-4f)
+            fill(index, scratch, column, row)
+            val chosen = pickAvoiding(scratch, descriptors, column, row, aspect, scratch.config.rotationMode, excluded)
+            recordChoice(scratch, chosen, column, row)
+            assignments[anchor] = chosen.tile
+            if (orientations.isNotEmpty()) orientations[anchor] = chosen.orientation.toByte()
+        }
+        return copiedPlan(plan, assignments, cellRgb, cellLab, orientations)
+    }
+
+    private fun pickAvoiding(
+        scratch: MatchScratch,
+        descriptors: List<TileDescriptor>,
+        column: Int,
+        row: Int,
+        cellAspect: Float,
+        mode: RotationMode,
+        excluded: BooleanArray
+    ): Chosen {
+        val chosen = pickTile(scratch, descriptors, column, row, cellAspect, mode)
+        if (!isExcluded(chosen.tile, excluded)) return chosen
+        return replacement(scratch, descriptors, column, row, cellAspect, mode, excluded) ?: chosen
+    }
+
+    private fun replacement(
+        scratch: MatchScratch,
+        descriptors: List<TileDescriptor>,
+        column: Int,
+        row: Int,
+        cellAspect: Float,
+        mode: RotationMode,
+        excluded: BooleanArray
+    ): Chosen? {
+        var bestTile = -1
+        var bestCode = 0
+        var bestScore = Float.POSITIVE_INFINITY
+        val weights = scratch.config.scoreWeights
+        for (candidate in 0 until scratch.top.size) {
+            val tile = scratch.top.ids[candidate]
+            if (isExcluded(tile, excluded)) continue
+            val scored = scoreReplacement(scratch, descriptors, column, row, cellAspect, mode, tile, weights)
+            if (scored.second < bestScore) {
+                bestScore = scored.second
+                bestTile = tile
+                bestCode = scored.first
+            }
+        }
+        if (bestTile < 0) return null
+        return Chosen(bestTile, bestCode)
+    }
+
+    private fun scoreReplacement(
+        scratch: MatchScratch,
+        descriptors: List<TileDescriptor>,
+        column: Int,
+        row: Int,
+        cellAspect: Float,
+        mode: RotationMode,
+        tile: Int,
+        weights: com.intrusivethots.mosaic.engine.config.ScoreWeights
+    ): Pair<Int, Float> {
+        val penalty = scratch.tracker.penalty(tile)
+        if (mode == RotationMode.OFF) {
+            val score = scoreTile(scratch.features, descriptors[tile], weights) + penalty +
+                tieBreak(scratch.config.randomSeed, column, row, tile)
+            return 0 to score
+        }
+        var bestCode = 0
+        var bestScore = Float.POSITIVE_INFINITY
+        val descriptor = descriptors[tile]
+        for (code in orientationCodes(mode, descriptor.aspectRatio, cellAspect)) {
+            val score = scoreOriented(scratch.features, descriptor, weights, code and 3, code >= 4) + penalty +
+                tieBreak(scratch.config.randomSeed, column, row, tile, code)
+            if (score < bestScore) {
+                bestScore = score
+                bestCode = code
+            }
+        }
+        return bestCode to bestScore
+    }
 }
+
+private fun isExcluded(tile: Int, excluded: BooleanArray): Boolean = tile in excluded.indices && excluded[tile]
+
+private fun copiedPlan(
+    plan: MosaicPlan,
+    assignments: IntArray,
+    cellRgb: IntArray,
+    cellLab: FloatArray,
+    orientations: ByteArray
+) = MosaicPlan(
+    columns = plan.columns,
+    rows = plan.rows,
+    assignments = assignments,
+    cellRgb = cellRgb,
+    cellLab = cellLab,
+    staggered = plan.staggered,
+    fingerprint = plan.fingerprint,
+    orientations = orientations,
+    anchors = plan.anchors,
+    spanX = plan.spanX,
+    spanY = plan.spanY,
+    placements = plan.placements,
+    coverage = plan.coverage
+)
 
 private class Chosen(val tile: Int, val orientation: Int)
 
