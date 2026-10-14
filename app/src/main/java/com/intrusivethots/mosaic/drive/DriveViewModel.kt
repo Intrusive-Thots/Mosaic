@@ -1,9 +1,9 @@
 package com.intrusivethots.mosaic.drive
 
+import com.intrusivethots.mosaic.core.decodeSampledBytes
 import android.app.Application
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
@@ -304,7 +304,7 @@ internal class DriveViewModel(application: Application) : AndroidViewModel(appli
         for (entry in images) {
             coroutineContext.ensureActive()
             val bytes = quiet { library.thumbnail(entry.thumbnailLink) } ?: continue
-            val bitmap = withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) } ?: continue
+            val bitmap = withContext(Dispatchers.Default) { decodeSampledBytes(bytes, DRIVE_THUMB_EDGE) } ?: continue
             next[entry.id] = bitmap
         }
         _thumbs.value = next
@@ -439,3 +439,6 @@ internal class DriveViewModel(application: Application) : AndroidViewModel(appli
         const val DRIVE_FOLDER_NAME = "driveFolderName"
     }
 }
+
+/** Drive list thumbnails never need more than this. */
+private const val DRIVE_THUMB_EDGE = 320
