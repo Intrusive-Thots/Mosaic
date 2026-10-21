@@ -43,6 +43,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -53,7 +54,6 @@ import com.intrusivethots.mosaic.engine.config.QualityPreset
 import com.intrusivethots.mosaic.ui.state.CollageEdit
 import com.intrusivethots.mosaic.ui.state.GenerationUiState
 import com.intrusivethots.mosaic.ui.state.MosaicUiState
-import com.intrusivethots.mosaic.ui.theme.AccentAmber
 import com.intrusivethots.mosaic.ui.theme.AccentPurple
 import com.intrusivethots.mosaic.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
@@ -95,7 +95,8 @@ fun PhoneStudioBody(
                 Column(Modifier.weight(1f)) {
                     StudioControls(
                         state, shapeEditor, title, onTitle, onPickTiles, onPreset, onPreview, onRender, onCancel, onExport, busy, advanced,
-                        Modifier.verticalScroll(rememberScrollState())
+                        Modifier.verticalScroll(rememberScrollState()),
+                        showPrimary = true
                     )
                 }
             }
@@ -110,7 +111,8 @@ fun PhoneStudioBody(
                     ResultPanel(state, shapeEditor)
                     StudioControls(
                         state, shapeEditor, title, onTitle, onPickTiles, onPreset, onPreview, onRender, onCancel, onExport, busy, advanced,
-                        Modifier
+                        Modifier,
+                        showPrimary = false
                     )
                 }
                 GenerateBar(
@@ -140,11 +142,12 @@ private fun StudioControls(
     onExport: () -> Unit,
     busy: Boolean,
     advanced: @Composable () -> Unit,
-    modifier: Modifier
+    modifier: Modifier,
+    showPrimary: Boolean
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (state.config.mosaicKind == MosaicKind.COLLAGE || state.config.collage.stack != HybridStack.GRID) {
-            Text("Style", fontSize = 13.sp, color = TextSecondary)
+            SectionLabel("Style")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 CollageStyle.entries.forEach { style ->
                     FilterChip(
@@ -155,7 +158,7 @@ private fun StudioControls(
                     )
                 }
             }
-            Text("Stack", fontSize = 13.sp, color = TextSecondary)
+            SectionLabel("Stack")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 HybridStack.entries.forEach { stack ->
                     FilterChip(
@@ -168,7 +171,7 @@ private fun StudioControls(
                 }
             }
         }
-        Text("Quality", fontSize = 13.sp, color = TextSecondary)
+        SectionLabel("Quality")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             QualityPreset.entries.forEach { preset ->
                 FilterChip(
@@ -199,21 +202,25 @@ private fun StudioControls(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-        ShareRow(state, onExport)
+        if (state.outputBitmap != null || state.fullImagePath != null) ShareRow(state, onExport)
         if (busy) {
+            if (showPrimary) {
             Button(onClick = onCancel, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                 Icon(Icons.Default.Close, contentDescription = null)
                 Text("Cancel")
             }
+            }
         } else {
-            Button(
-                onClick = onRender,
-                enabled = state.targetBitmap != null && state.hasTiles,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = AccentPurple)
-            ) {
-                Icon(Icons.Default.DoneAll, contentDescription = null)
-                Text("Generate")
+            if (showPrimary) {
+                Button(
+                    onClick = onRender,
+                    enabled = state.targetBitmap != null && state.hasTiles,
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentPurple)
+                ) {
+                    Icon(Icons.Default.DoneAll, contentDescription = null)
+                    Text("Generate", modifier = Modifier.padding(start = 8.dp), fontWeight = FontWeight.SemiBold)
+                }
             }
             OutlinedButton(onClick = onPreview, enabled = state.targetBitmap != null && state.hasTiles, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                 Text("Quick preview")
@@ -284,6 +291,18 @@ private fun ResultPanel(state: MosaicUiState, shapeEditor: ShapeEditor) {
 }
 
 @Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text.uppercase(),
+        fontSize = 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = 1.sp,
+        color = TextSecondary,
+        modifier = Modifier.padding(top = 4.dp)
+    )
+}
+
+@Composable
 private fun EditChip(label: String, onClick: () -> Unit) {
     FilterChip(selected = false, onClick = onClick, label = { Text(label) }, modifier = Modifier.heightIn(min = 48.dp))
 }
@@ -306,9 +325,10 @@ private fun GenerateBar(
             enabled = enabled,
             modifier = modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = AccentAmber)
+            colors = ButtonDefaults.buttonColors(containerColor = AccentPurple)
         ) {
-            Text("Generate")
+            Icon(Icons.Default.DoneAll, contentDescription = null)
+            Text("Generate", modifier = Modifier.padding(start = 8.dp), fontWeight = FontWeight.SemiBold)
         }
     }
 }
