@@ -34,7 +34,7 @@ internal fun hillClimb(
         for (direction in HILL_DIRECTIONS) {
             val u = (best.u + direction[0] * step).coerceIn(0.05f, 0.95f)
             val v = (best.v + direction[1] * step).coerceIn(0.05f, 0.95f)
-            val score = anchorScore(swatch, cut, turnCos, turnSin, u, v, span, penalty, solve, shape)
+            val score = AnchorObjective.score(swatch, cut, turnCos, turnSin, u, v, span, penalty, solve, shape)
             if (score < best.score) {
                 best = Scored(score, best.angle, u, v)
                 moved = true

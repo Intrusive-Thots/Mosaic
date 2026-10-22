@@ -17,7 +17,7 @@ internal fun untouchCopies(fit: ShapeFit, pieces: MutableList<PlacedPiece>) {
     pieces.addAll(kept)
 }
 
-internal fun separateCopy(fit: ShapeFit, piece: PlacedPiece, ordinal: Int): Boolean {
+internal fun separateCopy(fit: Placer, piece: PlacedPiece, ordinal: Int): Boolean {
     val mask = piece.placement.mask
     val tile = piece.placement.tileIndex
     if (mask == null || !fit.clashes(tile, mask)) {
@@ -27,7 +27,7 @@ internal fun separateCopy(fit: ShapeFit, piece: PlacedPiece, ordinal: Int): Bool
     return reseatCopy(fit, piece, ordinal, tile)
 }
 
-internal fun reseatCopy(fit: ShapeFit, piece: PlacedPiece, ordinal: Int, tile: Int): Boolean {
+internal fun reseatCopy(fit: Placer, piece: PlacedPiece, ordinal: Int, tile: Int): Boolean {
     val cutMask = piece.cut.mask
     if (!fit.clashes(tile, cutMask)) {
         piece.placement = withMask(piece.placement, cutMask)

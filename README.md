@@ -367,9 +367,11 @@ GitHub Actions (`.github/workflows/ci.yml`) runs engine tests, detekt, benchmark
 
 If `KEYSTORE_BASE64` is empty, the workflow logs that and still builds unsigned artifacts. Upload the AAB to Play Console from a machine that has the real upload key. This repository does not contain one.
 
-A push of `cursor/collage-tuning-loop-fcee` publishes the debug APK only after the engine, Android, and instrumented jobs all succeed. The tag is `v` plus `versionName` plus `-dev`, so a version bump gets a new tag. The workflow force-updates that tag to the commit that was built. For 2.4.8 the file is `app-debug.apk` at `v2.4.8-dev`.
+A push of `cursor/collage-tuning-loop-fcee` publishes the debug APK only after the engine, Android, and instrumented jobs all succeed. The tag is `v` plus `versionName` plus `-dev`, so a version bump gets a new tag. The workflow force-updates that tag to the commit that was built. For 2.4.9 the file is `app-debug.apk` at `v2.4.9-dev`.
 
-https://github.com/Intrusive-Thots/Mosaic/releases/download/v2.4.8-dev/app-debug.apk
+https://github.com/Intrusive-Thots/Mosaic/releases/download/v2.4.9-dev/app-debug.apk
+
+Version 2.4.9 (versionCode 15). Cleanup only; output is unchanged and the goldens did not move. The plain settings edits moved out of `MainViewModel` into `ui/screens/ConfigActions.kt`, an interface of pure config transforms with its own unit test. The engine gains `PlacementObjective` (how a pose is scored; `AnchorObjective` is the shipped one) and `Placer` (choose, keep, release, restore, occupy, clashes), which `ShapeFit` implements and the copy-separation pass now takes. New tests: `LoaderRobustnessTest` on the device checks that corrupt files decode to nothing, that one unreadable photo is skipped instead of failing Generate, and that cancelling stops the library load part way; `FailureMessageTest` covers the out-of-memory, permission and skipped-photo messages.
 
 Version 2.4.8 (versionCode 14). Adds an offline refinement prototype (`engine/refine/OfflineRefine.kt`). It is off by default and the app never runs it. The tuning harness turns it on with `-Dmosaic.offlineRefine=true`. It renders the plan, scores it against the target (ΔE plus a share of 1−SSIM), and nudges the crop and tone of the 24 largest pieces, keeping each move that lowers the score, for up to 60 s per image. Masks never change, so outlines and the no-touch rule are untouched. On the showcase themes it lowered the objective on every theme. Means: ΔE 0.0844 → 0.0832, SSIM 0.594 → 0.602, edge F1 0.867 → 0.872, contacts 0 → 0. It is meant for tuning the built-in heuristics against a measured objective, not for phones.
 
