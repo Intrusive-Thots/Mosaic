@@ -1,53 +1,40 @@
 package com.intrusivethots.mosaic.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.ColorLens
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.PhotoSizeSelectLarge
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.intrusivethots.mosaic.engine.config.AspectRatioPreset
 import com.intrusivethots.mosaic.engine.config.CellAspect
 import com.intrusivethots.mosaic.engine.config.CollageSettings
 import com.intrusivethots.mosaic.engine.config.LayoutMode
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
-import com.intrusivethots.mosaic.engine.config.MosaicKind
-import com.intrusivethots.mosaic.engine.config.RotationMode
 import com.intrusivethots.mosaic.engine.config.MosaicStyle
 import com.intrusivethots.mosaic.engine.config.OutputMode
 import com.intrusivethots.mosaic.engine.config.QualityPreset
 import com.intrusivethots.mosaic.engine.config.RenderMode
+import com.intrusivethots.mosaic.engine.config.RotationMode
 import com.intrusivethots.mosaic.engine.config.SubjectShape
 import com.intrusivethots.mosaic.engine.config.TileFit
-import com.intrusivethots.mosaic.ui.theme.AccentPink
-import com.intrusivethots.mosaic.ui.theme.AccentPurple
-import com.intrusivethots.mosaic.ui.theme.SurfaceDark
-import com.intrusivethots.mosaic.ui.theme.SurfaceVariantDark
-import com.intrusivethots.mosaic.ui.theme.TextPrimary
-import com.intrusivethots.mosaic.ui.theme.TextSecondary
+import com.intrusivethots.mosaic.engine.config.effectiveStack
+import com.intrusivethots.mosaic.ui.design.SettingsSection
 
-@OptIn(ExperimentalLayoutApi::class)
+/**
+ * Fine-tuning controls, grouped by what they change. Only groups that affect the current mode are shown, and each
+ * group header summarizes its current values so nothing has to be opened to be checked.
+ */
 @Composable
 fun MosaicControlsCard(
     config: MosaicConfig,
-    onPreset: (QualityPreset) -> Unit,
     onAspect: (AspectRatioPreset) -> Unit,
     onStyle: (MosaicStyle) -> Unit,
     onColumns: (Int) -> Unit,
@@ -67,77 +54,54 @@ fun MosaicControlsCard(
     onRotation: (RotationMode) -> Unit,
     onScale: (Float) -> Unit,
     onOutput: (Int, Int, Boolean) -> Unit,
-    onKind: (MosaicKind) -> Unit,
     onCollage: (CollageSettings) -> Unit
 ) {
-    Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("3. Quality and layout", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = TextPrimary)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QualityPreset.entries.filter { it != QualityPreset.CUSTOM }.forEach { preset ->
-                    FilterChip(
-                        selected = config.qualityPreset == preset,
-                        onClick = { onPreset(preset) },
-                        label = { Text(preset.label, fontSize = 12.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = AccentPurple,
-                            selectedLabelColor = Color.White,
-                            containerColor = SurfaceVariantDark,
-                            labelColor = TextSecondary
-                        )
-                    )
-                }
+    val stack = config.effectiveStack()
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            if (config.qualityPreset == QualityPreset.CUSTOM) "Fine-tune · custom settings" else "Fine-tune · ${config.qualityPreset.label} preset",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        SettingsSection(
+            title = "Canvas and output",
+            summary = "${config.aspectRatio.label} · ${config.outputMode.label} · ${(config.targetScale * 100).toInt()}% source",
+            icon = Icons.Default.PhotoSizeSelectLarge
+        ) {
+            ShapeControls(config, targetWidth, targetHeight, onAspect, onOutputMode, onScale, onOutput)
+        }
+        if (stack.usesGrid()) {
+            SettingsSection(
+                title = "Grid",
+                summary = "${config.gridColumns} columns · ${config.cellAspect.label} cells · ${config.layoutMode.label}",
+                icon = Icons.Default.GridView
+            ) {
+                GridControls(config, onColumns, onRows, onLink, onStyle, onCellAspect, onLayout, onRotation, onFit)
             }
-            if (config.qualityPreset == QualityPreset.CUSTOM) {
-                Text("Custom adjustments are active.", fontSize = 12.sp, color = TextSecondary)
+        }
+        if (stack.usesCollage()) {
+            val c = config.collage
+            SettingsSection(
+                title = "Collage",
+                summary = "${c.pieceCount} pieces · ${(c.minScale * 100).toInt()}–${(c.maxScale * 100).toInt()}% · ±${c.rotationRangeDegrees.toInt()}°",
+                icon = Icons.Default.ContentCut
+            ) {
+                CollageControls(c, onCollage)
             }
-            Text("Aspect ratio", fontSize = 13.sp, color = TextSecondary)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(AspectRatioPreset.entries) { preset ->
-                    FilterChip(
-                        selected = config.aspectRatio == preset,
-                        onClick = { onAspect(preset) },
-                        label = { Text(preset.label, fontSize = 12.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = AccentPurple,
-                            selectedLabelColor = Color.White,
-                            containerColor = SurfaceVariantDark,
-                            labelColor = TextSecondary
-                        )
-                    )
-                }
-            }
-            Text("Pattern", fontSize = 13.sp, color = TextSecondary)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MosaicStyle.entries.forEach { style ->
-                    FilterChip(
-                        selected = config.mosaicStyle == style,
-                        onClick = { onStyle(style) },
-                        label = { Text(style.label, fontSize = 12.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = AccentPink,
-                            selectedLabelColor = Color.White,
-                            containerColor = SurfaceVariantDark,
-                            labelColor = TextSecondary
-                        )
-                    )
-                }
-            }
-            HorizontalDivider(color = SurfaceVariantDark)
-            CollageControls(config, onKind, onCollage)
-            HorizontalDivider(color = SurfaceVariantDark)
-            GridControls(config, onColumns, onRows, onLink, onRepetition)
-            HorizontalDivider(color = SurfaceVariantDark)
-            ShapeControls(config, targetWidth, targetHeight, onCellAspect, onLayout, onRotation, onScale, onOutput)
-            HorizontalDivider(color = SurfaceVariantDark)
-            ColorControls(config, onBlend, onRenderMode, onOutputMode, onFit)
-            HorizontalDivider(color = SurfaceVariantDark)
+        }
+        SettingsSection(
+            title = "Color and repetition",
+            summary = "${config.renderMode.label} · ${if (config.allowTileRepetition) "repeats allowed" else "no repeats"}",
+            icon = Icons.Default.ColorLens
+        ) {
+            ColorControls(config, onBlend, onRenderMode, onRepetition)
+        }
+        SettingsSection(
+            title = "AI cutouts",
+            summary = if (config.extractSubjectsWithAi) "On · up to ${config.segmentation.maxExtractedSubjects} subjects" else "Off",
+            icon = Icons.Default.AutoAwesome
+        ) {
             AiControls(config, onAi, onSegmentation)
-            Spacer(modifier = Modifier.height(2.dp))
         }
     }
 }
