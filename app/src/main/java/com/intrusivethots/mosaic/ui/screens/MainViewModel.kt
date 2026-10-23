@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.intrusivethots.mosaic.cache.BitmapLruCache
 import com.intrusivethots.mosaic.core.GenerationLoader
+import com.intrusivethots.mosaic.core.PixelHistory
 import com.intrusivethots.mosaic.core.SubjectSegmenterHelper
 import com.intrusivethots.mosaic.core.generationFailureMessage
 import com.intrusivethots.mosaic.core.skippedImageMessage
@@ -41,6 +42,7 @@ import com.intrusivethots.mosaic.engine.coord.GenerationResult
 import com.intrusivethots.mosaic.engine.match.CollageSession
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
 import com.intrusivethots.mosaic.engine.match.PlanHistory
+import com.intrusivethots.mosaic.engine.match.RegionRequest
 import com.intrusivethots.mosaic.engine.progress.GenerationStage
 import com.intrusivethots.mosaic.engine.render.StreamingPngWriter
 import com.intrusivethots.mosaic.engine.tile.FileDescriptorCache
@@ -74,6 +76,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val preferences = application.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
     private val stampStore = com.intrusivethots.mosaic.core.StampStore(File(application.filesDir, "stamps"))
     private val sessionStore = com.intrusivethots.mosaic.core.CollageSessionStore(File(application.filesDir, "collage-session.bin"))
+    private val pixelHistory = PixelHistory(File(application.filesDir, "region-history"))
+    private val inspectDir = File(application.cacheDir, "inspect")
 
     private val _state = MutableStateFlow(MosaicUiState())
     val state = _state.asStateFlow()
@@ -93,6 +97,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var strictRestore = false
     private var planEdit: com.intrusivethots.mosaic.engine.coord.PlanEdit? = null
     private var tileCount: Int = 0
+    private val inspector = MosaicInspector(
+        repository = repository,
+        loader = libraryLoader,
+        pixelHistory = pixelHistory,
+        history = history,
+        inspectDir = inspectDir,
+        state = _state,
+        events = _events,
+        scope = viewModelScope,
+        plan = { lastPlan },
+        adopt = { next, count ->
+            lastPlan = next
+            tileCount = count
+        },
+        tiles = { tileCount },
+        persist = { persistSession() },
+        publishHistory = { publishHistory() },
+        preview = { generatePreview() },
+        arm = { previous ->
+            pendingUndo = previous
+            pendingEpoch += 1
+            pendingEpoch
+        },
+        disarm = { epoch -> if (epoch == pendingEpoch) pendingUndo = null },
+        beginRun = {
+            generationJob?.cancel()
+            ++runSerial
+        },
+        bindJob = { generationJob = it },
+        isCurrent = { run -> run == runSerial }
+    )
 
     init {
         _state.update { it.copy(config = readMosaicConfig(preferences)) }
@@ -332,23 +367,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         history.push(plan)
+        pixelHistory.pushSkip()
         lastPlan = change(plan, index)
         publishHistory()
         persistSession()
         generatePreview()
     }
 
-    private fun undoEdit() = stepHistory { current -> history.undo(current) }
+    private fun undoEdit() = inspector.step(undo = true)
 
-    private fun redoEdit() = stepHistory { current -> history.redo(current) }
+    private fun redoEdit() = inspector.step(undo = false)
 
-    private fun stepHistory(move: (MosaicPlan) -> MosaicPlan?) {
-        val plan = lastPlan ?: return
-        lastPlan = move(plan) ?: return
-        publishHistory()
-        persistSession()
-        generatePreview()
-    }
+    fun openInspector() = inspector.open()
+
+    fun closeInspector() = inspector.close()
+
+    fun regenerateRegion(request: RegionRequest) = inspector.regenerate(request)
+
+    fun sourceLabel(x: Float, y: Float): String? = inspector.source(x, y)
 
     private fun regenerateEdit() {
         val point = _state.value.editPoint ?: return
@@ -584,7 +620,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun acceptFinishedPlan(run: Int, epoch: Int, result: GenerationResult): Boolean {
         if (run != runSerial) return false
         if (epoch == pendingEpoch) {
-            pendingUndo?.let { history.push(it) }
+            pendingUndo?.let {
+                history.push(it)
+                pixelHistory.pushSkip()
+            }
             pendingUndo = null
         }
         lastPlan = result.plan
@@ -677,6 +716,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             tileCount = session.tileCount
             history.restore(session.undo, session.redo)
         }
+        pixelHistory.load()
+        if (pixelHistory.undoCount != history.undoSteps) pixelHistory.clear()
         _state.update {
             it.copy(
                 apiKey = key,
@@ -707,8 +748,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun dropPlan() {
         lastPlan = null
         history.clear()
+        pixelHistory.clear()
         pendingUndo = null
-        _state.update { it.copy(editPoint = null, canUndoEdit = false, canRedoEdit = false) }
+        _state.update { it.copy(editPoint = null, canUndoEdit = false, canRedoEdit = false, inspectOpen = false) }
         clearSession()
     }
 

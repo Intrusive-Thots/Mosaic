@@ -122,7 +122,11 @@ class CollageRenderer {
             } else {
                 pieceDraw(placement, descriptor, source.width, source.height, width, height)
             }
-            val tone = if (placement.mask != null) regionTone(source, descriptor, placement, target) else null
+            val tone = if (placement.mask != null) {
+                regionTone(source, descriptor, placement, target, width, height)
+            } else {
+                null
+            }
             val outline = if (placement.mask != null) traceOutline(placement.mask) else null
             sprites.add(Sprite(descriptor, source, base, draw, placement, tone, outline))
         }

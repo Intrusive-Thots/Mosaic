@@ -23,5 +23,6 @@ class ShapeEditor(
     val onRemoveStamp: (Int) -> Unit,
     val onCollageStyle: (CollageStyle) -> Unit,
     val onStack: (HybridStack) -> Unit,
-    val onEdit: (CollageEdit) -> Unit
+    val onEdit: (CollageEdit) -> Unit,
+    val onInspect: () -> Unit
 )

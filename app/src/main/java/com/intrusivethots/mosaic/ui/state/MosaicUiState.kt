@@ -28,7 +28,10 @@ data class MosaicUiState(
     val editPoint: Pair<Float, Float>? = null,
     val canUndoEdit: Boolean = false,
     val canRedoEdit: Boolean = false,
-    val libraryMessage: String = ""
+    val libraryMessage: String = "",
+    val inspectOpen: Boolean = false,
+    val inspectPath: String? = null,
+    val inspectToken: Int = 0
 ) {
     val hasTiles: Boolean get() = tileUris.isNotEmpty() || customStamps.isNotEmpty()
     val outputBitmap: Bitmap? get() = displayBitmap ?: previewBitmap

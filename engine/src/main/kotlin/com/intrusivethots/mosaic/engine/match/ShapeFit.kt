@@ -19,7 +19,8 @@ internal class TileSwatch(
     val spread: FloatArray,
     val salientU: Float,
     val salientV: Float,
-    val harmonics: FloatArray
+    val harmonics: FloatArray,
+    val contentAspect: Float
 )
 
 internal fun buildSwatches(thumbnails: List<PixelImage>, descriptors: List<TileDescriptor>): List<TileSwatch> {
@@ -140,7 +141,8 @@ internal class ShapeFit(
                 FaceBox(-1f, -1f, -1f, -1f)
             )
         }
-        val seated = seatOnFace(cut, scored, span, library, stackFaces) ?: return null
+        val (spanU, spanV) = placedSpans(cut, tile, span)
+        val seated = seatOnFace(cut, scored, spanU, spanV, library, stackFaces) ?: return null
         return Offer(
             scored.score + seated.drift * DRIFT + handful.cost(tile, cut.centerX, cut.centerY, seated.u, seated.v),
             seated.u,
@@ -150,18 +152,44 @@ internal class ShapeFit(
         )
     }
 
+    private fun placedSpans(cut: ShapeCut, tile: Int, span: Float): Pair<Float, Float> {
+        return uniformSpans(span, slotPixelAspect(cut.mask, outputWidth, outputHeight), swatches[tile].contentAspect)
+    }
+
     private fun seatOnFace(
         cut: ShapeCut,
         scored: Scored,
-        span: Float,
+        spanU: Float,
+        spanV: Float,
         library: List<FaceBox>,
         stackFaces: Boolean
     ): Seated? {
         var best: Seated? = null
         for (face in library) {
-            val clamped = clampToFace(scored.u, scored.v, span, face) ?: continue
-            if (!maskCoversFace(cut.mask, face, clamped.first, clamped.second, span)) continue
-            val placed = outputFace(cut.mask, face, clamped.first, clamped.second, span)
+            val seated = seatFace(cut, scored, spanU, spanV, face, stackFaces) ?: continue
+            if (best == null || seated.drift < best.drift) best = seated
+        }
+        return best
+    }
+
+    /**
+     * The color anchor can shove a wide crop's face onto the edge of the mask.
+     * A face-centered anchor is the other legal seat, and the closer one wins.
+     */
+    private fun seatFace(
+        cut: ShapeCut,
+        scored: Scored,
+        spanU: Float,
+        spanV: Float,
+        face: FaceBox,
+        stackFaces: Boolean
+    ): Seated? {
+        var best: Seated? = null
+        val anchors = arrayOf(scored.u to scored.v, face.centerX to face.centerY)
+        for (anchor in anchors) {
+            val clamped = clampToFace(anchor.first, anchor.second, spanU, spanV, face) ?: continue
+            if (!maskCoversFace(cut.mask, face, clamped.first, clamped.second, spanU, spanV)) continue
+            val placed = outputFace(cut.mask, face, clamped.first, clamped.second, spanU, spanV)
             if (!stackFaces && crowded(placed)) continue
             val du = clamped.first - scored.u
             val dv = clamped.second - scored.v
@@ -579,7 +607,8 @@ private fun swatchOf(image: PixelImage, descriptor: TileDescriptor): TileSwatch 
     val focus = focusCell(spread, l, a, b)
     val salientU = (focus % grid).toFloat() / (grid - 1).toFloat()
     val salientV = (focus / grid).toFloat() / (grid - 1).toFloat()
-    return TileSwatch(grid, l, a, b, spread, salientU, salientV, blobHarmonics(spread, l, a, b, grid, focus))
+    val aspect = contentPixelAspect(descriptor, image.width, image.height)
+    return TileSwatch(grid, l, a, b, spread, salientU, salientV, blobHarmonics(spread, l, a, b, grid, focus), aspect)
 }
 
 private fun fillSwatch(

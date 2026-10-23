@@ -404,7 +404,7 @@ class ResidualField(target: PixelImage, analysisEdge: Int = ANALYSIS_EDGE) {
         val longEdge = (scale * short).coerceAtLeast(2f)
         val contentW = (descriptor.contentRight - descriptor.contentLeft).coerceIn(0.05f, 1f)
         val contentH = (descriptor.contentBottom - descriptor.contentTop).coerceIn(0.05f, 1f)
-        val aspect = contentW / contentH
+        val aspect = contentW * descriptor.aspectRatio.coerceAtLeast(1e-3f) / contentH
         val drawWidth = if (aspect >= 1f) longEdge else longEdge * aspect
         val drawHeight = if (aspect >= 1f) longEdge / aspect else longEdge
         val center = if (anchorX.isNaN()) centerOf(cell) else anchorX to anchorY

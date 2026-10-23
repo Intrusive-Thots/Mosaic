@@ -7,8 +7,11 @@ import com.intrusivethots.mosaic.engine.config.RenderMode
 import com.intrusivethots.mosaic.engine.image.PixelImage
 import com.intrusivethots.mosaic.engine.image.resizeAreaAverage
 import com.intrusivethots.mosaic.engine.image.sampleBilinear
+import com.intrusivethots.mosaic.engine.match.CropFrame
 import com.intrusivethots.mosaic.engine.match.CutoutPlacement
 import com.intrusivethots.mosaic.engine.match.PieceMask
+import com.intrusivethots.mosaic.engine.match.cropFrame
+import com.intrusivethots.mosaic.engine.match.sourceSample
 import com.intrusivethots.mosaic.engine.match.TONE_LIMIT_C
 import com.intrusivethots.mosaic.engine.match.TONE_LIMIT_L
 import com.intrusivethots.mosaic.engine.match.boundedDelta
@@ -56,14 +59,18 @@ internal fun regionTone(
     source: PixelImage,
     descriptor: TileDescriptor,
     placement: CutoutPlacement,
-    target: PixelImage?
+    target: PixelImage?,
+    outputWidth: Int,
+    outputHeight: Int
 ): RegionTone? {
     val mask = placement.mask ?: return null
     if (target == null) return null
     val radians = Math.toRadians(placement.angleDegrees.toDouble())
     val turnCos = cos(radians).toFloat()
     val turnSin = sin(radians).toFloat()
-    return toneFromSamples(source, descriptor, placement, mask, target, turnCos, turnSin)
+    return toneFromSamples(
+        source, descriptor, placement, mask, target, outputWidth, outputHeight, turnCos, turnSin
+    )
 }
 
 internal fun paintShapeRow(
@@ -96,6 +103,7 @@ internal fun paintShapeRow(
     val radians = Math.toRadians(placement.angleDegrees.toDouble())
     val turnCos = cos(radians).toFloat()
     val turnSin = sin(radians).toFloat()
+    val frame = cropFrame(placement, descriptor, source.width, source.height, outputWidth, outputHeight)
     val lab = FloatArray(3)
     val low = FloatArray(3)
     val crossings = if (outline == null) null else outlineCrossings(outline, ny)
@@ -103,7 +111,7 @@ internal fun paintShapeRow(
         val index = y * outputWidth + x
         if (locked != null && locked[index]) continue
         val color = cutPixel(
-            source, base, descriptor, placement, mask, config, field, tone,
+            source, base, descriptor, frame, mask, config, field, tone,
             x, y, outputWidth, outputHeight, turnCos, turnSin, lab, low, crossings
         )
         if (color != 0) {
@@ -201,7 +209,7 @@ private fun cutPixel(
     source: PixelImage,
     base: PixelImage,
     descriptor: TileDescriptor,
-    placement: CutoutPlacement,
+    frame: CropFrame,
     mask: PieceMask,
     config: MosaicConfig,
     field: PixelImage?,
@@ -223,9 +231,9 @@ private fun cutPixel(
     var cover = if (maskCover >= 128) 255 else if (traced >= 12) traced else maskCover
     if (cover < 12 && besideMask(mask, nx, ny, outputWidth, outputHeight)) cover = 180
     if (cover < 12) return 0
-    val sampled = sourceColor(source, descriptor, placement, mask, nx, ny, turnCos, turnSin)
+    val sampled = sourceColor(source, descriptor, frame, mask, nx, ny, outputWidth, outputHeight, turnCos, turnSin)
     if ((sampled ushr 24) < 128) return 0
-    val basePx = sourceColor(base, descriptor, placement, mask, nx, ny, turnCos, turnSin)
+    val basePx = sourceColor(base, descriptor, frame, mask, nx, ny, outputWidth, outputHeight, turnCos, turnSin)
     val painted = harmonize(sampled, basePx, field, tone, config, x, y, outputWidth, outputHeight, lab, low)
     return (painted and 0x00FFFFFF) or (cover shl 24)
 }
@@ -265,27 +273,19 @@ private fun alphaAt(mask: PieceMask, x: Int, y: Int): Float =
 private fun sourceColor(
     source: PixelImage,
     descriptor: TileDescriptor,
-    placement: CutoutPlacement,
+    frame: CropFrame,
     mask: PieceMask,
     nx: Float,
     ny: Float,
+    outputWidth: Int,
+    outputHeight: Int,
     turnCos: Float,
     turnSin: Float
 ): Int {
-    val u = (nx - mask.left) / (mask.right - mask.left).coerceAtLeast(1e-5f)
-    val v = (ny - mask.top) / (mask.bottom - mask.top).coerceAtLeast(1e-5f)
-    val localX = u - 0.5f
-    val localY = v - 0.5f
-    val rotatedX = localX * turnCos - localY * turnSin
-    val rotatedY = localX * turnSin + localY * turnCos
-    val su = (placement.cropU + rotatedX * placement.cropSpan).coerceIn(0f, 1f)
-    val sv = (placement.cropV + rotatedY * placement.cropSpan).coerceIn(0f, 1f)
-    val spanX = (descriptor.contentRight - descriptor.contentLeft).coerceAtLeast(0.01f)
-    val spanY = (descriptor.contentBottom - descriptor.contentTop).coerceAtLeast(0.01f)
-    val px = descriptor.contentLeft + su * spanX
-    val py = descriptor.contentTop + sv * spanY
-    val sx = px * (source.width - 1).coerceAtLeast(1)
-    val sy = py * (source.height - 1).coerceAtLeast(1)
+    val (sx, sy) = sourceSample(
+        frame, descriptor, source.width, source.height, mask,
+        outputWidth, outputHeight, nx * outputWidth, ny * outputHeight, turnCos, turnSin
+    )
     return source.sampleBilinear(sx, sy) or OPAQUE
 }
 
@@ -417,9 +417,12 @@ private fun toneFromSamples(
     placement: CutoutPlacement,
     mask: PieceMask,
     target: PixelImage,
+    outputWidth: Int,
+    outputHeight: Int,
     turnCos: Float,
     turnSin: Float
 ): RegionTone {
+    val frame = cropFrame(placement, descriptor, source.width, source.height, outputWidth, outputHeight)
     var srcL = 0.0
     var srcA = 0.0
     var srcB = 0.0
@@ -441,7 +444,9 @@ private fun toneFromSamples(
         for (stepX in 1 until TONE_STEPS) {
             val nx = mask.left + (mask.right - mask.left) * stepX / TONE_STEPS.toFloat()
             if (maskCoverage(mask, nx, ny) < 128) continue
-            val sampled = sourceColor(source, descriptor, placement, mask, nx, ny, turnCos, turnSin)
+            val sampled = sourceColor(
+                source, descriptor, frame, mask, nx, ny, outputWidth, outputHeight, turnCos, turnSin
+            )
             if ((sampled ushr 24) < 128) continue
             OkLab.writeLab(sampled, lab, 0)
             srcL += lab[0]
