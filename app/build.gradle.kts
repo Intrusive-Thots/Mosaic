@@ -30,6 +30,17 @@ val keystoreProps = Properties().apply {
     if (f.exists()) f.inputStream().use { load(it) }
 }
 
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+val driveClientId = (
+    localProps.getProperty("GOOGLE_DRIVE_CLIENT_ID")
+        ?: providers.gradleProperty("GOOGLE_DRIVE_CLIENT_ID").orNull
+        ?: ""
+    ).trim().replace("\\", "\\\\").replace("\"", "\\\"")
+
 android {
     namespace = "com.intrusivethots.mosaic"
     compileSdk = 36
@@ -41,9 +52,17 @@ android {
         versionCode = 2
         versionName = "2.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "GOOGLE_DRIVE_CLIENT_ID", "\"$driveClientId\"")
     }
 
     signingConfigs {
+        // One committed debug key so CI and a phone share a SHA-1 and updates install in place.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "mosaicdebug"
+            keyPassword = "android"
+        }
         create("release") {
             if (keystoreProps.isNotEmpty()) {
                 storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
@@ -68,7 +87,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
@@ -98,6 +120,8 @@ dependencies {
     implementation("androidx.room:room-ktx:2.7.2")
     ksp("androidx.room:room-compiler:2.7.2")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("com.google.android.gms:play-services-auth:21.4.0")
+    implementation("androidx.documentfile:documentfile:1.1.0")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation(bom)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

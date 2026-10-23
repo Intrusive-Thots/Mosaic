@@ -115,6 +115,7 @@ fun SettingsDialog(apiKey: String, keystoreAvailable: Boolean, onSaveKey: (Strin
                 }
             }
         }
+        LocalDriveCard.current()
         Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = SurfaceDark), modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text("About Mosaic", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = TextPrimary)
