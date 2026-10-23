@@ -20,10 +20,11 @@ class CollagePlacer {
         tileTokens: List<String>,
         thumbnails: List<PixelImage> = emptyList(),
         onSnapshot: suspend (List<CutoutPlacement>, String) -> Unit = { _, _ -> },
-        onProgress: (Float, String) -> Unit = { _, _ -> }
+        onProgress: (Float, String) -> Unit = { _, _ -> },
+        knownFaces: List<List<FaceBox>>? = null
     ): Pair<MosaicPlan, MatchStats> {
         val sources = if (thumbnails.size == descriptors.size) thumbnails else descriptors.map { flatThumb(it) }
-        return shapes.place(target, descriptors, sources, index, config, onSnapshot, onProgress).also {
+        return shapes.place(target, descriptors, sources, index, config, onSnapshot, onProgress, knownFaces).also {
             it.second.solidCells = 0
             if (tileTokens.isEmpty()) return@also
         }

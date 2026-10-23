@@ -3,6 +3,8 @@
 
     python3 scripts/regenerate-showcase.py
     python3 scripts/regenerate-showcase.py rick
+    python3 scripts/regenerate-showcase.py koth
+    python3 scripts/regenerate-showcase.py pokemon
 
 Source pictures are copyrighted. They are written only to showcase-sources/,
 which is gitignored. The committed pictures are the generated mosaics.
@@ -20,7 +22,12 @@ USER_AGENT = "MosaicShowcase/1.0 (non-commercial demonstration; local regenerati
 THEMES = {
     "naruto": (ROOT / "docs" / "showcase" / "sources.tsv", ROOT / "showcase-sources"),
     "rick": (ROOT / "docs" / "showcase" / "rick-sources.tsv", ROOT / "showcase-sources" / "rick"),
+    "koth": (ROOT / "docs" / "showcase" / "koth-sources.tsv", ROOT / "showcase-sources" / "koth"),
+    "pokemon": (ROOT / "docs" / "showcase" / "pokemon-sources.tsv", ROOT / "showcase-sources" / "pokemon"),
 }
+# Each crossover render needs the other franchise on disk: King of the Hill is rebuilt
+# from Pokemon pieces, and Pokemon is rebuilt from King of the Hill pieces.
+PARTNERS = {"koth": "pokemon", "pokemon": "koth"}
 TARGET_EDGE = 1920
 TILE_EDGE = 512
 
@@ -126,14 +133,21 @@ def fetch_all(rows: list[tuple[str, str, str]]) -> None:
     )
 
 
-def main() -> None:
+def fetch_theme(theme: str) -> None:
     global SOURCES, OUTPUT
+    SOURCES, OUTPUT = THEMES[theme]
+    print(f"fetch {theme}")
+    fetch_all(read_sources())
+
+
+def main() -> None:
     theme = sys.argv[1] if len(sys.argv) > 1 else "naruto"
     if theme not in THEMES:
-        raise SystemExit(f"Unknown showcase theme {theme!r}. Use naruto or rick.")
-    SOURCES, OUTPUT = THEMES[theme]
-    rows = read_sources()
-    fetch_all(rows)
+        raise SystemExit(f"Unknown showcase theme {theme!r}. Use naruto, rick, koth, or pokemon.")
+    fetch_theme(theme)
+    partner = PARTNERS.get(theme)
+    if partner is not None:
+        fetch_theme(partner)
     gradle = ROOT / "gradlew"
     command = [str(gradle), ":engine:showcase", "--offline", "--no-daemon", f"-PshowcaseTheme={theme}"]
     completed = subprocess.run(

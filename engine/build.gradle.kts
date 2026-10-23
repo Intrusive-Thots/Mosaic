@@ -39,11 +39,13 @@ tasks.test {
 
 tasks.register<JavaExec>("showcase") {
     group = "verification"
-    description = "Rebuild showcase docs images. Pass -PshowcaseTheme=rick or naruto."
+    description = "Rebuild showcase docs images. Pass -PshowcaseTheme=naruto, rick, koth, or pokemon."
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("com.intrusivethots.mosaic.engine.showcase.ShowcaseMainKt")
     workingDir = rootProject.projectDir
-    args((project.findProperty("showcaseTheme") as String?) ?: "naruto")
+    val theme = (project.findProperty("showcaseTheme") as String?) ?: "naruto"
+    val probeDir = project.findProperty("showcaseDir") as String?
+    args(if (probeDir == null) listOf(theme) else listOf(theme, probeDir))
     dependsOn(tasks.named("testClasses"))
 }
 

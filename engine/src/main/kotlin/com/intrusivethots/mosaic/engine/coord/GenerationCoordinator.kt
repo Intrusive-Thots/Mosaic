@@ -14,6 +14,7 @@ import com.intrusivethots.mosaic.engine.config.validated
 import com.intrusivethots.mosaic.engine.match.CollagePlacer
 import com.intrusivethots.mosaic.engine.match.CutoutPlacement
 import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.match.FaceBox
 import com.intrusivethots.mosaic.engine.image.centerAspectRect
 import com.intrusivethots.mosaic.engine.image.crop
 import com.intrusivethots.mosaic.engine.image.downscaleLongEdge
@@ -76,7 +77,8 @@ class GenerationCoordinator(
         sinkFactory: ((width: Int, height: Int) -> RowSink)? = null,
         progressIntervalMs: Long = 100,
         onProgress: (com.intrusivethots.mosaic.engine.progress.GenerationProgress) -> Unit = {},
-        requireCurrentPlan: Boolean = false
+        requireCurrentPlan: Boolean = false,
+        knownFaces: List<List<FaceBox>>? = null
     ): GenerationResult {
         if (target.width <= 0 || target.height <= 0) throw InvalidTargetException()
         val validated = config.validated()
@@ -101,7 +103,7 @@ class GenerationCoordinator(
         }
         val matched = resolvePlan(
             reusePlan, fingerprint, cropped, descriptors, prepared.map { it.thumbnail },
-            index, validated, tokens, progress
+            index, validated, tokens, progress, knownFaces
         )
         val plan = placementEdit?.invoke(
             matched.first, descriptors, cropped, index, prepared.map { it.thumbnail }
@@ -145,7 +147,8 @@ class GenerationCoordinator(
         index: TileIndex,
         config: MosaicConfig,
         tokens: List<String>,
-        progress: ThrottledProgress
+        progress: ThrottledProgress,
+        knownFaces: List<List<FaceBox>>?
     ): Pair<MosaicPlan, MatchStats> {
         if (reusePlan != null && reusePlan.fingerprint == fingerprint) {
             progress.report(GenerationStage.MATCHING, 1f, "Reusing tile selection", force = true)
@@ -160,7 +163,7 @@ class GenerationCoordinator(
             progress.report(GenerationStage.MATCHING, fraction, "Matching cells")
         }
         val collage = if (!stack.usesCollage()) null else placeCutouts(
-            cropped, descriptors, thumbnails, index, config, tokens, fingerprint, progress
+            cropped, descriptors, thumbnails, index, config, tokens, fingerprint, progress, knownFaces
         )
         progress.report(GenerationStage.MATCHING, 1f, label, force = true)
         return combinePlans(grid?.first, collage?.first) to combineStats(grid?.second, collage?.second)
@@ -211,7 +214,8 @@ class GenerationCoordinator(
         config: MosaicConfig,
         tokens: List<String>,
         fingerprint: String,
-        progress: ThrottledProgress
+        progress: ThrottledProgress,
+        knownFaces: List<List<FaceBox>>?
     ) = collagePlacer.place(
         target,
         descriptors,
@@ -224,7 +228,8 @@ class GenerationCoordinator(
         },
         onProgress = { fraction, label ->
             progress.report(GenerationStage.MATCHING, fraction, label)
-        }
+        },
+        knownFaces = knownFaces
     )
 
     private suspend fun emitLanding(

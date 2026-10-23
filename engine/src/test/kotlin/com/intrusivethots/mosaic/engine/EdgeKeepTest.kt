@@ -70,6 +70,7 @@ private fun block(color: Int, size: Int): PixelImage {
     for (y in inset until size - inset) {
         for (x in inset until size - inset) pixels[y * size + x] = color
     }
+    stampCartoonFace(pixels, size, size)
     return PixelImage(size, size, pixels)
 }
 
