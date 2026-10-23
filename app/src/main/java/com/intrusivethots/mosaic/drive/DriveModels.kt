@@ -49,6 +49,18 @@ internal fun mosaicExportName(title: String): String {
     return "$clean.png"
 }
 
+internal fun driveSelection(selected: Set<String>, imageIds: Set<String>, id: String?, single: Boolean): Set<String> {
+    if (id == null) {
+        return if (imageIds.isNotEmpty() && selected.containsAll(imageIds)) emptySet() else imageIds
+    }
+    return when {
+        single && id in selected -> emptySet()
+        single -> setOf(id)
+        id in selected -> selected - id
+        else -> selected + id
+    }
+}
+
 internal fun isLibraryImage(mime: String?, name: String): Boolean {
     val type = mime?.lowercase().orEmpty()
     if (type == "image/svg+xml") return false

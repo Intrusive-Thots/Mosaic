@@ -1,13 +1,13 @@
 package com.intrusivethots.mosaic.ui.inspect
 
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.util.VelocityTracker
@@ -28,11 +28,10 @@ internal suspend fun PointerInputScope.detectInspectorGestures(
     onSelectEnd: () -> Unit
 ) {
     awaitEachGesture {
-        val down = awaitPointerEvent(PointerEventPass.Initial)
-        val start = down.changes.firstOrNull()?.position ?: return@awaitEachGesture
+        val down = awaitFirstDown(requireUnconsumed = false)
         trackGesture(
-            start,
-            down.changes.first().uptimeMillis,
+            down.position,
+            down.uptimeMillis,
             selecting,
             onPanZoom,
             onFling,
@@ -85,7 +84,43 @@ private suspend fun AwaitPointerEventScope.trackGesture(
         }
         event = awaitPointerEvent()
     }
+    selectingNow = finishSelection(
+        event,
+        start,
+        selecting,
+        pastSlop,
+        selectingNow,
+        viewConfiguration.touchSlop,
+        onSelectStart,
+        onSelectMove
+    )
     if (selectingNow) onSelectEnd() else if (!pastSlop) noteTap(start, onDoubleTap) else onFling(trackerVelocity(tracker))
+}
+
+internal fun releaseClearsSlop(start: Offset, end: Offset, slop: Float): Boolean {
+    return hypot((end.x - start.x).toDouble(), (end.y - start.y).toDouble()) > slop
+}
+
+private fun finishSelection(
+    event: androidx.compose.ui.input.pointer.PointerEvent,
+    start: Offset,
+    selecting: Boolean,
+    pastSlop: Boolean,
+    selectingNow: Boolean,
+    slop: Float,
+    onSelectStart: (Offset) -> Unit,
+    onSelectMove: (Offset) -> Unit
+): Boolean {
+    val release = event.changes.firstOrNull()?.position ?: return selectingNow
+    if (!release.isSpecified) return selectingNow
+    if (selectingNow) {
+        onSelectMove(release)
+        return true
+    }
+    if (!selecting || pastSlop || !releaseClearsSlop(start, release, slop)) return selectingNow
+    onSelectStart(start)
+    onSelectMove(release)
+    return true
 }
 
 private fun applyMove(

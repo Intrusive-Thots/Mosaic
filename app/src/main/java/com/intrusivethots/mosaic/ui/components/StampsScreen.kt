@@ -129,6 +129,7 @@ fun StampsScreen(
                 )
             }
         }
+        Text(stampFilterHelp(filter), color = TextSecondary, fontSize = 13.sp)
         CutoutPool(stamps, visible, onPick, onRemove) { refining = it }
     }
     val refineIndex = refining
@@ -203,6 +204,13 @@ private fun ColumnScope.CutoutPool(
             }
         }
     }
+}
+
+private fun stampFilterHelp(filter: StampFilter): String = when (filter) {
+    StampFilter.ALL -> "Shows every cutout."
+    StampFilter.TALL -> "Shows cutouts that are taller than they are wide."
+    StampFilter.WIDE -> "Shows cutouts that are wider than they are tall."
+    StampFilter.COMPACT -> "Shows cutouts whose width and height are close."
 }
 
 private enum class StampFilter(val label: String) {

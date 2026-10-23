@@ -11,6 +11,7 @@ import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import com.intrusivethots.mosaic.engine.color.argb
 import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.image.alphaSticker
 import com.intrusivethots.mosaic.engine.image.cleanupCutout
 import com.intrusivethots.mosaic.engine.image.downscaleLongEdge
 import com.intrusivethots.mosaic.engine.tile.TileIdentity
@@ -247,6 +248,18 @@ fun rotateBitmap(source: Bitmap, quarterTurns: Int): Bitmap {
     return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
 }
 
+/**
+ * A transparent PNG is already a cutout. Returns a copy the caller owns, or null when the
+ * bitmap is an ordinary photo that still needs segmentation.
+ */
+fun readyMadeSticker(bitmap: Bitmap, maxEdge: Int): Bitmap? {
+    if (bitmap.isRecycled || !alphaSticker(bitmap.toPixelImage())) return null
+    val fitted = scaleToLongEdge(bitmap, maxEdge)
+    if (fitted !== bitmap) return fitted
+    val config = bitmap.config ?: Bitmap.Config.ARGB_8888
+    return bitmap.copy(config, false)
+}
+
 fun scaleToLongEdge(bitmap: Bitmap, maxEdge: Int): Bitmap {
     val longEdge = max(bitmap.width, bitmap.height)
     if (longEdge <= maxEdge || maxEdge <= 0) return bitmap
@@ -330,7 +343,26 @@ private fun readCapped(stream: InputStream): ByteArray? {
     return buffer.toByteArray()
 }
 
-private fun sampleSize(width: Int, height: Int, maxEdge: Int): Int {
+/** Decodes encoded image bytes at most [maxEdge] on the long side, keeping alpha. */
+fun decodeSampledBytes(bytes: ByteArray, maxEdge: Int): Bitmap? {
+    return try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxEdge)
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
+        fitLongEdge(decoded, maxEdge)
+    } catch (oom: OutOfMemoryError) {
+        null
+    } catch (failure: Exception) {
+        null
+    }
+}
+
+internal fun sampleSize(width: Int, height: Int, maxEdge: Int): Int {
     var sample = 1
     val longEdge = max(width, height)
     while (longEdge / (sample * 2) >= maxEdge) sample *= 2

@@ -3,8 +3,11 @@
 
     python3 scripts/regenerate-showcase.py
     python3 scripts/regenerate-showcase.py rick
+    python3 scripts/regenerate-showcase.py tmnt
     python3 scripts/regenerate-showcase.py koth
     python3 scripts/regenerate-showcase.py pokemon
+    python3 scripts/regenerate-showcase.py gen1
+    python3 scripts/regenerate-showcase.py all
 
 Source pictures are copyrighted. They are written only to showcase-sources/,
 which is gitignored. The committed pictures are the generated mosaics.
@@ -24,15 +27,25 @@ THEMES = {
     "rick": (ROOT / "docs" / "showcase" / "rick-sources.tsv", ROOT / "showcase-sources" / "rick"),
     "koth": (ROOT / "docs" / "showcase" / "koth-sources.tsv", ROOT / "showcase-sources" / "koth"),
     "pokemon": (ROOT / "docs" / "showcase" / "pokemon-sources.tsv", ROOT / "showcase-sources" / "pokemon"),
+    "tmnt": (ROOT / "docs" / "showcase" / "tmnt-sources.tsv", ROOT / "showcase-sources" / "tmnt"),
+    "gen1": (ROOT / "docs" / "showcase" / "gen1-sources.tsv", ROOT / "showcase-sources" / "gen1"),
 }
-# Each crossover render needs the other franchise on disk: King of the Hill is rebuilt
-# from Pokemon pieces, and Pokemon is rebuilt from King of the Hill pieces.
-PARTNERS = {"koth": "pokemon", "pokemon": "koth"}
+# Each render uses another franchise as the piece library.
+# Naruto ← Rick, Rick ← TMNT, TMNT ← Naruto, King of the Hill ← Pokemon, Pokemon ← King of the Hill.
+PARTNERS = {
+    "naruto": "rick",
+    "rick": "tmnt",
+    "tmnt": "naruto",
+    "koth": "pokemon",
+    "pokemon": "koth",
+}
 TARGET_EDGE = 1920
 TILE_EDGE = 512
 
 
 def scaled(url: str, edge: int) -> str:
+    if "raw.githubusercontent.com" in url:
+        return url
     base, _, query = url.partition("?")
     if "/scale-to-width-down/" not in base:
         base = f"{base}/scale-to-width-down/{edge}"
@@ -142,19 +155,25 @@ def fetch_theme(theme: str) -> None:
 
 def main() -> None:
     theme = sys.argv[1] if len(sys.argv) > 1 else "naruto"
+    if theme == "all":
+        for name in THEMES:
+            fetch_theme(name)
+        for name in THEMES:
+            render_theme(name)
+        return
     if theme not in THEMES:
-        raise SystemExit(f"Unknown showcase theme {theme!r}. Use naruto, rick, koth, or pokemon.")
+        raise SystemExit(f"Unknown showcase theme {theme!r}. Use naruto, rick, tmnt, koth, pokemon, gen1, or all.")
     fetch_theme(theme)
     partner = PARTNERS.get(theme)
     if partner is not None:
         fetch_theme(partner)
+    render_theme(theme)
+
+
+def render_theme(theme: str) -> None:
     gradle = ROOT / "gradlew"
     command = [str(gradle), ":engine:showcase", "--offline", "--no-daemon", f"-PshowcaseTheme={theme}"]
-    completed = subprocess.run(
-        command,
-        cwd=ROOT,
-        check=False,
-    )
+    completed = subprocess.run(command, cwd=ROOT, check=False)
     if completed.returncode != 0:
         raise SystemExit(completed.returncode)
 

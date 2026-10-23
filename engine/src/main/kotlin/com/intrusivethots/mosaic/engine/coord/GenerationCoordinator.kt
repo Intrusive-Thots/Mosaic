@@ -55,7 +55,8 @@ data class GenerationResult(
     val outputHeight: Int,
     val comparisons: Long,
     val probes: Long,
-    val solidCells: Int
+    val solidCells: Int,
+    val budgetNote: String? = null
 )
 
 class GenerationCoordinator(
@@ -78,7 +79,44 @@ class GenerationCoordinator(
         progressIntervalMs: Long = 100,
         onProgress: (com.intrusivethots.mosaic.engine.progress.GenerationProgress) -> Unit = {},
         requireCurrentPlan: Boolean = false,
-        knownFaces: List<List<FaceBox>>? = null
+        knownFaces: List<List<FaceBox>>? = null,
+        heapBytes: Long = Runtime.getRuntime().maxMemory()
+    ): GenerationResult {
+        val cap = HeapBudget.outputLongEdge(heapBytes)
+        return try {
+            renderMosaic(
+                target, tiles, config, preview, reusePlan, placementEdit, sink, sinkFactory,
+                progressIntervalMs, onProgress, requireCurrentPlan, knownFaces, heapBytes, cap, null
+            )
+        } catch (_: OutOfMemoryError) {
+            System.gc()
+            val simpler = config.copy(
+                collage = config.collage.copy(pieceCount = (config.collage.pieceCount / 2).coerceAtLeast(4))
+            )
+            renderMosaic(
+                target, tiles, simpler, preview, reusePlan, placementEdit, sink, sinkFactory,
+                progressIntervalMs, onProgress, requireCurrentPlan, knownFaces, heapBytes / 2,
+                (cap / 2).coerceAtLeast(640), SIMPLIFIED_NOTE
+            )
+        }
+    }
+
+    private suspend fun renderMosaic(
+        target: PixelImage,
+        tiles: List<TileSource>,
+        config: MosaicConfig,
+        preview: Boolean,
+        reusePlan: MosaicPlan?,
+        placementEdit: PlanEdit?,
+        sink: RowSink?,
+        sinkFactory: ((width: Int, height: Int) -> RowSink)?,
+        progressIntervalMs: Long,
+        onProgress: (com.intrusivethots.mosaic.engine.progress.GenerationProgress) -> Unit,
+        requireCurrentPlan: Boolean,
+        knownFaces: List<List<FaceBox>>?,
+        heapBytes: Long,
+        outputCap: Int,
+        forcedNote: String?
     ): GenerationResult {
         if (target.width <= 0 || target.height <= 0) throw InvalidTargetException()
         val validated = config.validated()
@@ -88,7 +126,7 @@ class GenerationCoordinator(
         coroutineContext.ensureActive()
 
         val cropped = prepareTarget(target, validated)
-        val prepared = analyzeTiles(tiles, validated, progress)
+        val prepared = analyzeTiles(tiles, validated, progress, heapBytes)
         if (prepared.isEmpty()) throw EmptyLibraryException()
 
         progress.report(GenerationStage.INDEXING, 0f, "Indexing library", force = true)
@@ -121,7 +159,8 @@ class GenerationCoordinator(
             preview,
             sink,
             sinkFactory,
-            progress
+            progress,
+            outputCap
         )
         cache.retain(descriptors.map { it.key }.toSet())
         cache.flush()
@@ -134,7 +173,8 @@ class GenerationCoordinator(
             outputHeight = rendered.layout.height,
             comparisons = comparisons,
             probes = probes,
-            solidCells = solidCells
+            solidCells = solidCells,
+            budgetNote = forcedNote ?: rendered.note
         )
     }
 
@@ -178,16 +218,23 @@ class GenerationCoordinator(
         preview: Boolean,
         sink: RowSink?,
         sinkFactory: ((width: Int, height: Int) -> RowSink)?,
-        progress: ThrottledProgress
+        progress: ThrottledProgress,
+        outputCap: Int
     ): RenderedOutput {
-        val layout = planStackedOutput(target.width, target.height, config, preview)
+        val natural = planStackedOutput(target.width, target.height, config, preview)
         if (!preview) {
             val checkingGrid = config.effectiveStack().usesGrid()
-            val cellWidth = if (checkingGrid) layout.cellWidth else 1
-            val cellHeight = if (checkingGrid) layout.cellHeight else 1
-            outputLimitError(layout.width, layout.height, cellWidth, cellHeight)?.let {
+            val cellWidth = if (checkingGrid) natural.cellWidth else 1
+            val cellHeight = if (checkingGrid) natural.cellHeight else 1
+            outputLimitError(natural.width, natural.height, cellWidth, cellHeight)?.let {
                 throw IllegalArgumentException(it)
             }
+        }
+        val layout = capOutputLayout(natural, outputCap)
+        val note = if (!preview && (layout.width != natural.width || layout.height != natural.height)) {
+            "Rendered at ${layout.width}×${layout.height} so it fits in memory."
+        } else {
+            null
         }
         val memory = if (sink == null && sinkFactory == null) {
             require(layout.pixels <= MAX_IN_MEMORY_PIXELS) {
@@ -203,7 +250,7 @@ class GenerationCoordinator(
             progress.report(GenerationStage.RENDERING, fraction, "Rendering mosaic")
         }
         progress.report(GenerationStage.RENDERING, 1f, "Rendering mosaic", force = true)
-        return RenderedOutput(memory?.toImage(), layout)
+        return RenderedOutput(memory?.toImage(), layout, note)
     }
 
     private suspend fun placeCutouts(
@@ -216,7 +263,9 @@ class GenerationCoordinator(
         fingerprint: String,
         progress: ThrottledProgress,
         knownFaces: List<List<FaceBox>>?
-    ) = collagePlacer.place(
+    ): Pair<MosaicPlan, MatchStats> {
+        var shownLabel = ""
+        return collagePlacer.place(
         target,
         descriptors,
         index,
@@ -227,10 +276,14 @@ class GenerationCoordinator(
             emitLanding(target, descriptors, thumbnails, config, fingerprint, placements, label, progress)
         },
         onProgress = { fraction, label ->
-            progress.report(GenerationStage.MATCHING, fraction, label)
+            // A new stage label always reaches the screen. The throttle only drops repeats of the same label.
+            val changed = label != shownLabel
+            shownLabel = label
+            progress.report(GenerationStage.MATCHING, fraction, label, force = changed)
         },
         knownFaces = knownFaces
     )
+    }
 
     private suspend fun emitLanding(
         target: PixelImage,
@@ -264,26 +317,31 @@ class GenerationCoordinator(
     private suspend fun analyzeTiles(
         tiles: List<TileSource>,
         config: MosaicConfig,
-        progress: ThrottledProgress
+        progress: ThrottledProgress,
+        heapBytes: Long
     ): List<PreparedTile> {
         if (tiles.isEmpty()) return emptyList()
         progress.report(GenerationStage.ANALYZING, 0f, "Analyzing tiles", force = true)
         val prepared = ArrayList<PreparedTile>(tiles.size)
+        val collage = config.effectiveStack().usesCollage()
+        val renderEdge = HeapBudget.thumbnailEdge(collage, config.descriptorMaxEdge, tiles.size, heapBytes)
         tiles.forEachIndexed { index, source ->
             coroutineContext.ensureActive()
             val key = source.identity.toKey(analyzer.algorithmVersion)
-            val collage = config.effectiveStack().usesCollage()
-            val renderEdge = if (collage) maxOf(config.descriptorMaxEdge, COLLAGE_RENDER_EDGE) else config.descriptorMaxEdge
             val loaded = source.loadThumbnail(renderEdge)
-            val analyzed = if (collage) loaded.downscaleLongEdge(config.descriptorMaxEdge) else loaded
-            val cached = cache.get(key)
-            val descriptor = cached ?: analyzer.describe(
-                key = key,
-                sourceWidth = source.identity.width,
-                sourceHeight = source.identity.height,
-                image = analyzed
-            ).also { cache.put(key, it) }
-            prepared.add(PreparedTile(descriptor, if (collage) loaded else analyzed))
+            try {
+                val analyzed = if (collage) loaded.downscaleLongEdge(config.descriptorMaxEdge) else loaded
+                val cached = cache.get(key)
+                val descriptor = cached ?: analyzer.describe(
+                    key = key,
+                    sourceWidth = source.identity.width,
+                    sourceHeight = source.identity.height,
+                    image = analyzed
+                ).also { cache.put(key, it) }
+                prepared.add(PreparedTile(descriptor, if (collage) loaded else analyzed))
+            } finally {
+                source.release()
+            }
             progress.report(
                 GenerationStage.ANALYZING,
                 (index + 1).toFloat() / tiles.size.toFloat(),
@@ -318,7 +376,8 @@ class GenerationCoordinator(
 
     private class RenderedOutput(
         val image: PixelImage?,
-        val layout: com.intrusivethots.mosaic.engine.config.OutputLayout
+        val layout: com.intrusivethots.mosaic.engine.config.OutputLayout,
+        val note: String?
     )
 
     private fun combinePlans(grid: MosaicPlan?, collage: MosaicPlan?): MosaicPlan {
@@ -353,5 +412,6 @@ class GenerationCoordinator(
     companion object {
         const val MAX_IN_MEMORY_PIXELS = 2_500_000L
         const val COLLAGE_RENDER_EDGE = 768
+        const val SIMPLIFIED_NOTE = "Simplified the collage so it could finish."
     }
 }

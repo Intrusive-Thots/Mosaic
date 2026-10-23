@@ -83,7 +83,7 @@ fun MosaicControlsCard(
             val c = config.collage
             SettingsSection(
                 title = "Collage",
-                summary = "${c.pieceCount} pieces · ${(c.minScale * 100).toInt()}–${(c.maxScale * 100).toInt()}% · ±${c.rotationRangeDegrees.toInt()}°",
+                summary = "${c.pieceCount} pieces · min ${(c.minPiece * 100).toInt()}% · ${c.background.label}",
                 icon = Icons.Default.ContentCut
             ) {
                 CollageControls(c, onCollage)

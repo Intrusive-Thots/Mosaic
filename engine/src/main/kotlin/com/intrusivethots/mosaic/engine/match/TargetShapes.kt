@@ -42,7 +42,7 @@ internal fun cutTargetShapes(target: PixelImage, settings: CollageSettings): Lis
     val floorPx = (short * sanitizedMinPiece(settings.minPiece)).toInt().coerceAtLeast(4)
     val detailSize = maxOf(detailStep(plane, budgets.fine), floorPx)
     val detail = if (detailSize < flatStep) {
-        coveredCuts(slic(plane, detailSize, FINE_COMPACT), plane, budgets.fine, DETAIL_GROW, emptyList())
+        coveredCuts(slic(plane, detailSize, FINE_COMPACT, SeedTuning.lloyd), plane, budgets.fine, DETAIL_GROW, emptyList())
     } else {
         emptyList()
     }
@@ -229,12 +229,10 @@ internal fun labPlane(image: PixelImage): LabPlane {
     return LabPlane(image.width, image.height, l, a, b)
 }
 
-private class Seed(var x: Int, var y: Int, var l: Float, var a: Float, var b: Float)
-
-private fun slic(plane: LabPlane, step: Int, compactness: Float): IntArray {
+private fun slic(plane: LabPlane, step: Int, compactness: Float, weighted: Boolean = false): IntArray {
     val width = plane.width
     val height = plane.height
-    val seeds = gridSeeds(plane, step)
+    val seeds = if (weighted) detailSeeds(plane, step) else gridSeeds(plane, step)
     val labels = IntArray(width * height) { -1 }
     val best = FloatArray(width * height)
     repeat(SLIC_PASSES) {
@@ -244,44 +242,6 @@ private fun slic(plane: LabPlane, step: Int, compactness: Float): IntArray {
     }
     fillUnlabeled(labels, width, height)
     return labels
-}
-
-private fun gridSeeds(plane: LabPlane, step: Int): MutableList<Seed> {
-    val seeds = ArrayList<Seed>()
-    var y = step / 2
-    while (y < plane.height) {
-        var x = step / 2
-        while (x < plane.width) {
-            val placed = lowestGradient(plane, x, y)
-            val index = placed.second * plane.width + placed.first
-            seeds.add(Seed(placed.first, placed.second, plane.l[index], plane.a[index], plane.b[index]))
-            x += step
-        }
-        y += step
-    }
-    if (seeds.isEmpty()) {
-        seeds.add(Seed(plane.width / 2, plane.height / 2, plane.l[0], plane.a[0], plane.b[0]))
-    }
-    return seeds
-}
-
-private fun lowestGradient(plane: LabPlane, x: Int, y: Int): Pair<Int, Int> {
-    var bestX = x
-    var bestY = y
-    var best = Float.POSITIVE_INFINITY
-    for (dy in -1..1) {
-        val py = (y + dy).coerceIn(0, plane.height - 1)
-        for (dx in -1..1) {
-            val px = (x + dx).coerceIn(0, plane.width - 1)
-            val gradient = gradientAt(plane.l, plane.width, plane.height, px, py)
-            if (gradient < best) {
-                best = gradient
-                bestX = px
-                bestY = py
-            }
-        }
-    }
-    return bestX to bestY
 }
 
 private fun assignSeeds(
@@ -924,7 +884,7 @@ private fun gradientMap(l: FloatArray, width: Int, height: Int): FloatArray {
     return gradient
 }
 
-private fun gradientAt(l: FloatArray, width: Int, height: Int, x: Int, y: Int): Float {
+internal fun gradientAt(l: FloatArray, width: Int, height: Int, x: Int, y: Int): Float {
     val index = y * width + x
     val right = if (x + 1 < width) kotlin.math.abs(l[index] - l[index + 1]) else 0f
     val down = if (y + 1 < height) kotlin.math.abs(l[index] - l[index + width]) else 0f

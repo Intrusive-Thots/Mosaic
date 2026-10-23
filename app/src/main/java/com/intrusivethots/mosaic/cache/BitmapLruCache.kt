@@ -12,24 +12,41 @@ class BitmapLruCache(private val maxBytes: Int) {
     private var bytes: Int = 0
 
     @Synchronized
-    fun get(key: String): Bitmap? = entries[key]
+    fun get(key: String): Bitmap? {
+        val bitmap = entries[key] ?: return null
+        if (!bitmap.isRecycled) return bitmap
+        entries.remove(key)
+        recount()
+        return null
+    }
+
+    @Synchronized
+    private fun recount() {
+        val iterator = entries.entries.iterator()
+        var total = 0
+        while (iterator.hasNext()) {
+            val bitmap = iterator.next().value
+            if (bitmap.isRecycled) iterator.remove() else total += bitmap.byteCount
+        }
+        bytes = total
+    }
 
     @Synchronized
     fun put(key: String, bitmap: Bitmap) {
         val previous = entries.put(key, bitmap)
-        if (previous != null && previous !== bitmap) bytes -= previous.byteCount
-        bytes += bitmap.byteCount
+        if (previous != null && previous !== bitmap && !previous.isRecycled) bytes -= previous.byteCount
+        if (!bitmap.isRecycled) bytes += bitmap.byteCount
         while (bytes > maxBytes && entries.isNotEmpty()) {
             val eldest = entries.entries.iterator().next()
             entries.remove(eldest.key)
-            bytes -= eldest.value.byteCount
+            if (!eldest.value.isRecycled) bytes -= eldest.value.byteCount
         }
     }
 
     @Synchronized
     fun remove(key: String) {
         val removed = entries.remove(key) ?: return
-        bytes -= removed.byteCount
+        if (!removed.isRecycled) bytes -= removed.byteCount
     }
 
     @Synchronized

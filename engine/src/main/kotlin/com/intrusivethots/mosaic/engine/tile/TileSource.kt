@@ -6,6 +6,9 @@ import com.intrusivethots.mosaic.engine.image.downscaleLongEdge
 interface TileSource {
     val identity: TileIdentity
     fun loadThumbnail(maxEdge: Int): PixelImage
+
+    /** Drops pixels this source owns after the engine has copied the thumbnail. */
+    fun release() {}
 }
 
 class MemoryTileSource(

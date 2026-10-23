@@ -39,11 +39,17 @@ data class MosaicUiState(
 
 sealed interface GenerationUiState {
     data object Idle : GenerationUiState
-    data class Running(val stage: GenerationStage, val fraction: Float, val label: String) : GenerationUiState
+    data class Running(
+        val stage: GenerationStage,
+        val fraction: Float,
+        val label: String,
+        val eta: String = ""
+    ) : GenerationUiState
     data object Complete : GenerationUiState
     data class Failed(val message: String) : GenerationUiState
 }
 
 sealed interface UiEvent {
     data class Message(val text: String) : UiEvent
+    data class Saved(val text: String, val uri: Uri, val mime: String) : UiEvent
 }

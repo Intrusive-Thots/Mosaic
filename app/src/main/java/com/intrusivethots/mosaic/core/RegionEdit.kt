@@ -33,6 +33,7 @@ internal class RegionEdit(
     private val loader: GenerationLoader,
     private val repository: ProjectRepository,
     private val scratch: File,
+    private val heapBytes: Long = Runtime.getRuntime().maxMemory(),
     private val regenerator: RegionRegenerator = RegionRegenerator()
 ) {
     suspend fun run(
@@ -70,7 +71,7 @@ internal class RegionEdit(
         val size = pngSize(image) ?: error("The mosaic file could not be read.")
         val pass = regenerator.beginEdit(
             plan, target, tiles, snapshot.config, request, preview = !fullFile,
-            outputWidth = size.first, outputHeight = size.second, onProgress = onProgress
+            outputWidth = size.first, outputHeight = size.second, onProgress = onProgress, heapBytes = heapBytes
         )
         val window = request.shape.pixelWindow(size.first, size.second, REGION_BLEND_MARGIN)
         scratch.mkdirs()

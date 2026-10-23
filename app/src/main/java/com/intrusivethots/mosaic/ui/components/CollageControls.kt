@@ -25,15 +25,16 @@ fun CollageControls(settings: CollageSettings, onCollage: (CollageSettings) -> U
             value = settings.pieceCount.toFloat(),
             range = 8f..4000f,
             onChange = { onCollage(settings.copy(pieceCount = it.roundToInt())) },
-            description = "More pieces rebuild more detail and take longer."
+            description = PIECES_HELP
         )
-        GroupLabel("Size and rotation")
+        GroupLabel("Piece size")
         SettingSlider(
             label = "Smallest piece",
             valueText = "${(settings.minScale * 100).roundToInt()}%",
             value = settings.minScale,
             range = 0.015f..0.4f,
-            onChange = { onCollage(settings.copy(minScale = it.coerceAtMost(settings.maxScale))) }
+            onChange = { onCollage(settings.copy(minScale = it.coerceAtMost(settings.maxScale))) },
+            description = SMALLEST_PIECE_HELP
         )
         SettingSlider(
             label = "Largest piece",
@@ -41,7 +42,7 @@ fun CollageControls(settings: CollageSettings, onCollage: (CollageSettings) -> U
             value = settings.maxScale,
             range = 0.12f..0.7f,
             onChange = { onCollage(settings.copy(maxScale = it.coerceAtLeast(settings.minScale))) },
-            description = "Relative to the short side of the image."
+            description = LARGEST_PIECE_HELP
         )
         SettingSlider(
             label = "Minimum piece",
@@ -49,21 +50,23 @@ fun CollageControls(settings: CollageSettings, onCollage: (CollageSettings) -> U
             value = settings.minPiece,
             range = CollageSettings.MIN_PIECE_LOW..CollageSettings.MIN_PIECE_HIGH,
             onChange = { onCollage(settings.copy(minPiece = it)) },
-            description = "Smaller cuts are merged or covered instead of stamped."
+            description = MINIMUM_PIECE_HELP
         )
         SettingSlider(
             label = "Rotation range",
             valueText = "±${settings.rotationRangeDegrees.roundToInt()}°",
             value = settings.rotationRangeDegrees,
             range = 0f..180f,
-            onChange = { onCollage(settings.copy(rotationRangeDegrees = it)) }
+            onChange = { onCollage(settings.copy(rotationRangeDegrees = it)) },
+            description = ROTATION_RANGE_HELP
         )
         SettingSlider(
             label = "Overlap",
             valueText = "${(settings.overlap * 100).roundToInt()}%",
             value = settings.overlap,
             range = 0f..1f,
-            onChange = { onCollage(settings.copy(overlap = it)) }
+            onChange = { onCollage(settings.copy(overlap = it)) },
+            description = OVERLAP_HELP
         )
         GroupLabel("Background and sources")
         ChoiceGroup(
@@ -72,23 +75,19 @@ fun CollageControls(settings: CollageSettings, onCollage: (CollageSettings) -> U
             selected = settings.background,
             label = { it.label },
             onSelect = { onCollage(settings.copy(background = it)) },
-            description = if (settings.background == CollageBackground.MEAN_COLOR) {
-                "A flat color, so the pieces rebuild the picture themselves."
-            } else {
-                "The target photo shows through the gaps."
-            }
+            description = backgroundHelp(settings.background)
         )
         SettingSwitch(
             title = "Also use full photos",
             checked = settings.includeSourcePhotos,
             onChange = { onCollage(settings.copy(includeSourcePhotos = it)) },
-            description = "Adds uncut photos to the cutout pool."
+            description = FULL_PHOTOS_HELP
         )
         SettingSwitch(
             title = "Separate pieces",
             checked = settings.separatePieces,
             onChange = { onCollage(settings.copy(separatePieces = it)) },
-            description = "Draws a thin shadow under each piece."
+            description = SEPARATE_PIECES_HELP
         )
     }
 }

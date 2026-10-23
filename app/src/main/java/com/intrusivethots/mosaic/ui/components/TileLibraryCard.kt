@@ -95,6 +95,7 @@ fun TileLibraryCard(
                     }
                 }
             }
+            HintText("Rotate turns that photo a quarter turn. It still counts as the same photo.")
             if (thumbs.size > 24) HintText("Showing 24 of ${thumbs.size} photos.")
         }
         if (stamps.isNotEmpty()) {

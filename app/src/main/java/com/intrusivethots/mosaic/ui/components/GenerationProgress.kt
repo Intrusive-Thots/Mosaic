@@ -46,6 +46,15 @@ fun GenerationProgress(state: GenerationUiState, onCancel: () -> Unit) {
                                 maxLines = 1
                             )
                         }
+                        if (state.eta.isNotBlank()) {
+                            Text(
+                                state.eta,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                modifier = Modifier.semantics { contentDescription = "Time remaining" }
+                            )
+                        }
                     }
                     OutlinedButton(onClick = onCancel, modifier = Modifier.height(44.dp)) {
                         Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
