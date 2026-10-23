@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """Download the showcase sources and rebuild the docs/images comparisons.
 
+    python3 scripts/regenerate-showcase.py
+    python3 scripts/regenerate-showcase.py rick
+    python3 scripts/regenerate-showcase.py tmnt
+    python3 scripts/regenerate-showcase.py koth
+    python3 scripts/regenerate-showcase.py pokemon
+    python3 scripts/regenerate-showcase.py gen1
+    python3 scripts/regenerate-showcase.py all
+
 Source pictures are copyrighted. They are written only to showcase-sources/,
 which is gitignored. The committed pictures are the generated mosaics.
 """
@@ -14,11 +22,30 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ROOT / "docs" / "showcase" / "sources.tsv"
 OUTPUT = ROOT / "showcase-sources"
 USER_AGENT = "MosaicShowcase/1.0 (non-commercial demonstration; local regeneration)"
+THEMES = {
+    "naruto": (ROOT / "docs" / "showcase" / "sources.tsv", ROOT / "showcase-sources"),
+    "rick": (ROOT / "docs" / "showcase" / "rick-sources.tsv", ROOT / "showcase-sources" / "rick"),
+    "koth": (ROOT / "docs" / "showcase" / "koth-sources.tsv", ROOT / "showcase-sources" / "koth"),
+    "pokemon": (ROOT / "docs" / "showcase" / "pokemon-sources.tsv", ROOT / "showcase-sources" / "pokemon"),
+    "tmnt": (ROOT / "docs" / "showcase" / "tmnt-sources.tsv", ROOT / "showcase-sources" / "tmnt"),
+    "gen1": (ROOT / "docs" / "showcase" / "gen1-sources.tsv", ROOT / "showcase-sources" / "gen1"),
+}
+# Each render uses another franchise as the piece library.
+# Naruto ← Rick, Rick ← TMNT, TMNT ← Naruto, King of the Hill ← Pokemon, Pokemon ← King of the Hill.
+PARTNERS = {
+    "naruto": "rick",
+    "rick": "tmnt",
+    "tmnt": "naruto",
+    "koth": "pokemon",
+    "pokemon": "koth",
+}
 TARGET_EDGE = 1920
 TILE_EDGE = 512
 
 
 def scaled(url: str, edge: int) -> str:
+    if "raw.githubusercontent.com" in url:
+        return url
     base, _, query = url.partition("?")
     if "/scale-to-width-down/" not in base:
         base = f"{base}/scale-to-width-down/{edge}"
@@ -119,15 +146,34 @@ def fetch_all(rows: list[tuple[str, str, str]]) -> None:
     )
 
 
+def fetch_theme(theme: str) -> None:
+    global SOURCES, OUTPUT
+    SOURCES, OUTPUT = THEMES[theme]
+    print(f"fetch {theme}")
+    fetch_all(read_sources())
+
+
 def main() -> None:
-    rows = read_sources()
-    fetch_all(rows)
+    theme = sys.argv[1] if len(sys.argv) > 1 else "naruto"
+    if theme == "all":
+        for name in THEMES:
+            fetch_theme(name)
+        for name in THEMES:
+            render_theme(name)
+        return
+    if theme not in THEMES:
+        raise SystemExit(f"Unknown showcase theme {theme!r}. Use naruto, rick, tmnt, koth, pokemon, gen1, or all.")
+    fetch_theme(theme)
+    partner = PARTNERS.get(theme)
+    if partner is not None:
+        fetch_theme(partner)
+    render_theme(theme)
+
+
+def render_theme(theme: str) -> None:
     gradle = ROOT / "gradlew"
-    completed = subprocess.run(
-        [str(gradle), ":engine:showcase", "--offline", "--no-daemon"],
-        cwd=ROOT,
-        check=False,
-    )
+    command = [str(gradle), ":engine:showcase", "--offline", "--no-daemon", f"-PshowcaseTheme={theme}"]
+    completed = subprocess.run(command, cwd=ROOT, check=False)
     if completed.returncode != 0:
         raise SystemExit(completed.returncode)
 

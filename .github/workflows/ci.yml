@@ -15,7 +15,7 @@ jobs:
           distribution: temurin
           java-version: 17
       - name: Test and benchmark
-        run: ./gradlew :engine:test :engine:detekt :engine:benchmark --no-daemon
+        run: ./gradlew :engine:test :engine:detekt :engine:benchmark :engine:collageMemory --no-daemon
       - name: Upload benchmark report
         if: always()
         uses: actions/upload-artifact@v4
@@ -89,3 +89,51 @@ jobs:
           arch: x86_64
           disable-animations: true
           script: ./gradlew :app:connectedDebugAndroidTest --no-daemon
+
+  publish-debug-apk:
+    name: Publish debug APK
+    needs: [engine, android, instrumented]
+    if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/cursor/collage-tuning-loop-fcee' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prerelease tag for this version
+        run: |
+          version=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)
+          echo "version=$version" >> "$GITHUB_ENV"
+          tag="v${version}-dev"
+          echo "tag=$tag" >> "$GITHUB_ENV"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "publish_release=false" >> "$GITHUB_ENV"
+            echo "Release $tag already exists. Leaving its tag and files alone."
+          else
+            echo "publish_release=true" >> "$GITHUB_ENV"
+            echo "No release named $tag yet. This push will publish it."
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Point the prerelease tag at this commit
+        if: env.publish_release == 'true'
+        run: git push --force origin "$GITHUB_SHA:refs/tags/${tag}"
+      - uses: actions/download-artifact@v4
+        if: env.publish_release == 'true'
+        with:
+          name: android-packages
+          path: packages
+      - name: Attach the debug APK to the prerelease
+        if: env.publish_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Mosaic ${{ env.version }}-dev
+          prerelease: true
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+          body: |
+            Debug build of ${{ github.sha }}. Same-source copies may be flipped, rotated, and resized, and they must not touch. Target outlines are kept with edge subdivision and a light ink pass.
+          files: packages/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

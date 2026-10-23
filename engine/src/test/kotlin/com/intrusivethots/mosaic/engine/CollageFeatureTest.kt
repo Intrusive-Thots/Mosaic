@@ -97,8 +97,8 @@ class CollageFeatureTest {
         val coordinator = GenerationCoordinator()
         val target = scene(64, 40)
         val original = coordinator.generate(target, tiles, config, preview = true)
-        val edit: com.intrusivethots.mosaic.engine.coord.PlanEdit = { plan, descriptors, image, index ->
-            CollageEditor().regenerate(image, descriptors, index, config, plan, 0.5f, 0.4f, 0.18f)
+        val edit: com.intrusivethots.mosaic.engine.coord.PlanEdit = { plan, descriptors, image, index, thumbs ->
+            CollageEditor().regenerate(image, descriptors, index, config, plan, 0.5f, 0.4f, 0.18f, thumbs)
         }
         val first = coordinator.generate(target, tiles, config, preview = true, reusePlan = original.plan, placementEdit = edit)
         val second = coordinator.generate(target, tiles, config, preview = true, reusePlan = original.plan, placementEdit = edit)

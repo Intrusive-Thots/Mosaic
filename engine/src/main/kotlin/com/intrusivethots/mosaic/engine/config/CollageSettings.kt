@@ -2,7 +2,7 @@ package com.intrusivethots.mosaic.engine.config
 
 enum class MosaicKind(val label: String) {
     GRID("Grid mosaic"),
-    COLLAGE("Cutout collage")
+    COLLAGE("Shaped collage")
 }
 
 enum class CollageBackground(val label: String) {
@@ -11,12 +11,19 @@ enum class CollageBackground(val label: String) {
 }
 
 /**
- * Freeform collage. Scales are the cutout's long side as a fraction of the target's short side.
- * Rotation is any angle inside ±[rotationRangeDegrees], chosen per placement.
+ * Freeform collage. [minScale] is the fill-in piece's long side as a fraction of the short side,
+ * and it cannot go below [minPiece]. [maxScale], [rotationRangeDegrees], and [overlap] are stored
+ * with the project. Placement leaves every piece upright, and the closer color wins where pieces
+ * cover the same spot. Those three fields do not change that.
  */
 data class CollageSettings(
     val pieceCount: Int = 480,
     val minScale: Float = 0.03f,
+    /**
+     * Smallest visible piece, as a fraction of the output short side.
+     * Area must also cover most of a square of that side, after the mask and later overlaps.
+     */
+    val minPiece: Float = MIN_PIECE_DEFAULT,
     val maxScale: Float = 0.16f,
     val rotationRangeDegrees: Float = 20f,
     val overlap: Float = 0.4f,
@@ -34,9 +41,11 @@ data class CollageSettings(
     fun sanitized(): CollageSettings {
         val safeMin = if (minScale.isNaN()) 0.03f else minScale.coerceIn(0.015f, 0.8f)
         val safeMax = if (maxScale.isNaN()) 0.16f else maxScale.coerceIn(safeMin, 0.9f)
+        val safePiece = if (minPiece.isNaN()) MIN_PIECE_DEFAULT else minPiece.coerceIn(MIN_PIECE_LOW, MIN_PIECE_HIGH)
         return copy(
             pieceCount = pieceCount.coerceIn(4, 4000),
             minScale = safeMin,
+            minPiece = safePiece,
             maxScale = safeMax,
             rotationRangeDegrees = if (rotationRangeDegrees.isNaN()) 0f else rotationRangeDegrees.coerceIn(0f, 180f),
             overlap = if (overlap.isNaN()) 0.4f else overlap.coerceIn(0f, 1f),
@@ -45,5 +54,12 @@ data class CollageSettings(
             refineSteps = refineSteps.coerceIn(0, 24),
             feather = if (feather.isNaN()) 0f else feather.coerceIn(0f, 1f)
         )
+    }
+
+    companion object {
+        /** About 62 px on a 1380 px short side. Large enough to read as a source frame. */
+        const val MIN_PIECE_DEFAULT = 0.045f
+        const val MIN_PIECE_LOW = 0.025f
+        const val MIN_PIECE_HIGH = 0.12f
     }
 }

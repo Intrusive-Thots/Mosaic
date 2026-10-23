@@ -1,15 +1,16 @@
 package com.intrusivethots.mosaic.engine.config
 
 /**
- * A collage look. Presets still set the piece budget. A style sets overlap, edge softness,
- * shadows, outlines, coverage, and how hard shape matching pulls.
+ * A collage look. Presets still set the piece budget. A style sets edge softness, shadows,
+ * outlines, coloring, and how hard shape matching pulls. Overlap and rotation are stored
+ * and left unused by placement.
  */
 enum class CollageStyle(val label: String) {
-    PAPER("Paper collage"),
-    STAMP("Stamp collage"),
-    PAINTERLY("Painterly overlap"),
-    SPARSE("Sparse artistic"),
-    DENSE("Dense coverage")
+    PAPER("Torn paper"),
+    STAMP("Hard cuts"),
+    PAINTERLY("Soft overlap"),
+    SPARSE("Fewer shapes"),
+    DENSE("Shaped coverage")
 }
 
 enum class HybridStack(val label: String) {

@@ -31,21 +31,22 @@ class MosaicRenderer(
         sink: RowSink,
         target: PixelImage? = null,
         coverage: BooleanArray? = null,
+        owners: IntArray? = null,
         onProgress: (Float) -> Unit = {}
     ) {
         val stack = config.validated().effectiveStack()
         if (stack == HybridStack.GRID_UNDER || stack == HybridStack.COLLAGE_UNDER) {
-            renderHybrid(plan, descriptors, thumbnails, layout, config, sink, target, stack, coverage, onProgress)
+            renderHybrid(plan, descriptors, thumbnails, layout, config, sink, target, stack, coverage, owners, onProgress)
             return
         }
         if (plan.placements.isNotEmpty() && stack.usesCollage()) {
             collageRenderer.render(
-                plan, descriptors, thumbnails, layout, config, target, sink, coverage, onProgress
+                plan, descriptors, thumbnails, layout, config, target, sink, coverage, owners, onProgress
             )
             return
         }
         if (plan.anchors.isNotEmpty()) {
-            renderPlaced(plan, descriptors, thumbnails, layout, config, sink, onProgress)
+            renderPlaced(plan, descriptors, thumbnails, layout, config, sink, target, onProgress)
             return
         }
         val validated = config.validated()
@@ -54,6 +55,7 @@ class MosaicRenderer(
         val cellHeight = layout.cellHeight
         val strength = validated.colorMatchWeight
         val centerCrop = validated.tileFit == TileFit.CENTER_CROP
+        val outlines = outlineField(target, validated, layout.width, layout.height)
         var lastReported = -1
         for (y in 0 until layout.height) {
             if (y % cellHeight == 0) coroutineContext.ensureActive()
@@ -83,6 +85,7 @@ class MosaicRenderer(
                     mirror = code >= 4
                 )
             }
+            darkenOutline(row, y, outlines)
             sink.writeRow(y, row)
             val percent = ((y + 1) * 100) / layout.height
             if (percent != lastReported) {
@@ -99,11 +102,13 @@ class MosaicRenderer(
         layout: OutputLayout,
         config: MosaicConfig,
         sink: RowSink,
+        target: PixelImage?,
         onProgress: (Float) -> Unit
     ) {
         val validated = config.validated()
         val row = IntArray(layout.width)
         val centerCrop = validated.tileFit == TileFit.CENTER_CROP
+        val outlines = outlineField(target, validated, layout.width, layout.height)
         var lastReported = -1
         for (y in 0 until layout.height) {
             if (y % layout.cellHeight == 0) coroutineContext.ensureActive()
@@ -133,6 +138,7 @@ class MosaicRenderer(
                     mirror = code >= 4
                 )
             }
+            darkenOutline(row, y, outlines)
             sink.writeRow(y, row)
             val percent = ((y + 1) * 100) / layout.height
             if (percent != lastReported) {
@@ -142,7 +148,7 @@ class MosaicRenderer(
         }
     }
 
-    private fun pixelAt(
+    internal fun pixelAt(
         plan: MosaicPlan,
         descriptors: List<TileDescriptor>,
         thumbnails: List<PixelImage>,
@@ -228,27 +234,32 @@ class MosaicRenderer(
         target: PixelImage?,
         stack: HybridStack,
         coverage: BooleanArray?,
+        owners: IntArray?,
         onProgress: (Float) -> Unit
     ) {
         val collageOnTop = stack == HybridStack.GRID_UNDER
-        val sprites = collageRenderer.sprites(plan, descriptors, thumbnails, layout.width, layout.height)
+        val sprites = collageRenderer.sprites(plan, descriptors, thumbnails, layout.width, layout.height, target)
+        val field = lowFrequencyField(target)
         val mean = if (target == null) 0xFF18181C.toInt() else meanOf(target)
         val useTarget = config.collage.background == CollageBackground.TARGET && target != null
         val row = IntArray(layout.width)
         val gridRow = IntArray(layout.width)
+        val locked = BooleanArray(layout.width * layout.height)
         val grout = (minOf(layout.cellWidth, layout.cellHeight) / 10).coerceAtLeast(1)
+        val outlines = outlineField(target, config, layout.width, layout.height)
         var lastReported = -1
         for (y in 0 until layout.height) {
             if (y % 8 == 0) coroutineContext.ensureActive()
             if (collageOnTop) {
                 fillUniformRow(plan, descriptors, thumbnails, layout, config, y, row)
-                paintCutouts(row, y, sprites, config, layout.width, coverage)
+                paintCutouts(row, y, sprites, config, layout, coverage, owners, field, locked)
             } else {
                 collageRenderer.paintBackground(row, y, layout.width, layout.height, target, useTarget, mean)
-                paintCutouts(row, y, sprites, config, layout.width, coverage)
+                paintCutouts(row, y, sprites, config, layout, coverage, owners, field, locked)
                 fillUniformRow(plan, descriptors, thumbnails, layout, config, y, gridRow)
                 overlayGrid(row, gridRow, y, layout, grout, coverage)
             }
+            darkenOutline(row, y, outlines)
             sink.writeRow(y, row)
             val percent = ((y + 1) * 100) / layout.height
             if (percent != lastReported) {
@@ -263,13 +274,25 @@ class MosaicRenderer(
         y: Int,
         sprites: List<CollageRenderer.Sprite>,
         config: MosaicConfig,
-        width: Int,
-        coverage: BooleanArray?
+        layout: OutputLayout,
+        coverage: BooleanArray?,
+        owners: IntArray?,
+        field: PixelImage?,
+        locked: BooleanArray
     ) {
-        for (sprite in sprites) {
+        val width = layout.width
+        for (index in sprites.indices) {
+            val sprite = sprites[index]
+            if (sprite.placement.mask != null) {
+                paintShapeRow(
+                    row, y, width, layout.height, sprite.source, sprite.base, sprite.descriptor, sprite.placement,
+                    config, coverage, owners, index, sprite.tone, field, sprite.outline, locked
+                )
+                continue
+            }
             if (config.collage.separatePieces) collageRenderer.paintShadow(row, y, sprite, width)
             if (y < sprite.draw.top || y > sprite.draw.bottom) continue
-            collageRenderer.paintSprite(row, y, sprite, config, coverage, width)
+            collageRenderer.paintSprite(row, y, sprite, config, coverage, width, owners = owners, owner = index)
         }
     }
 
@@ -338,7 +361,7 @@ class MosaicRenderer(
         return ((red / n).toInt() shl 16) or ((green / n).toInt() shl 8) or (blue / n).toInt() or OPAQUE
     }
 
-    private fun orientationCode(plan: MosaicPlan, cell: Int): Int {
+    internal fun orientationCode(plan: MosaicPlan, cell: Int): Int {
         if (plan.orientations.isEmpty() || cell !in plan.orientations.indices) return 0
         return plan.orientations[cell].toInt() and 0xFF
     }

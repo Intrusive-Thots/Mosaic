@@ -14,19 +14,132 @@ internal class ShowcaseLibrary(
     val photos: List<PixelImage>
 )
 
+/**
+ * Each demo rebuilds one franchise from another's stills.
+ * Naruto uses Rick and Morty, Rick and Morty uses TMNT, TMNT uses Naruto,
+ * King of the Hill uses Pokemon, and Pokemon uses King of the Hill.
+ */
+internal data class ShowcaseTheme(
+    val name: String,
+    val prefix: String,
+    val targetDir: String,
+    val tileDir: String,
+    val message: String,
+    val stickers: Boolean = false
+)
+
+internal val SHOWCASE_THEMES = listOf(
+    ShowcaseTheme(
+        "naruto",
+        "",
+        "showcase-sources",
+        "showcase-sources/rick",
+        "Wrote Team 7 rebuilt from Rick and Morty pieces into docs/images"
+    ),
+    ShowcaseTheme(
+        "rick",
+        "rick-",
+        "showcase-sources/rick",
+        "showcase-sources/tmnt",
+        "Wrote the Smiths rebuilt from TMNT pieces into docs/images"
+    ),
+    ShowcaseTheme(
+        "tmnt",
+        "tmnt-",
+        "showcase-sources/tmnt",
+        "showcase-sources",
+        "Wrote the turtles rebuilt from Naruto pieces into docs/images"
+    ),
+    ShowcaseTheme(
+        "koth",
+        "koth-",
+        "showcase-sources/koth",
+        "showcase-sources/pokemon",
+        "Wrote King of the Hill rebuilt from Pokemon pieces into docs/images"
+    ),
+    ShowcaseTheme(
+        "pokemon",
+        "pokemon-",
+        "showcase-sources/pokemon",
+        "showcase-sources/koth",
+        "Wrote Ash and Pikachu rebuilt from King of the Hill pieces into docs/images"
+    ),
+    ShowcaseTheme(
+        "gen1",
+        "gen1-",
+        "showcase-sources/gen1",
+        "showcase-sources/gen1",
+        "Wrote Pikachu rebuilt from the other Gen 1 stickers into docs/images",
+        stickers = true
+    )
+)
+
+internal fun showcaseTheme(name: String): ShowcaseTheme =
+    SHOWCASE_THEMES.firstOrNull { it.name == name } ?: error("Unknown showcase theme $name")
+
+internal fun loadThemedLibrary(theme: String, tileEdge: Int): ShowcaseLibrary {
+    val request = showcaseTheme(theme)
+    if (request.stickers) return loadStickerLibrary(File(request.tileDir), tileEdge)
+    return loadCrossover(File(request.targetDir), File(request.tileDir), tileEdge)
+}
+
+/** Official-art stickers keep their alpha. The target is composited on white for matching. */
+internal fun loadStickerLibrary(directory: File, tileEdge: Int): ShowcaseLibrary {
+    val targetFile = directory.listFiles { file -> file.isFile && file.name.startsWith("000-") }?.firstOrNull()
+        ?: error("No target in ${directory.path}. Run scripts/regenerate-showcase.py.")
+    val tileFiles = directory.listFiles { file ->
+        file.isFile && file.name[0].isDigit() && !file.name.startsWith("000-")
+    }?.sortedBy { it.name }.orEmpty()
+    require(tileFiles.size >= 8) { "No sticker images in ${directory.path}. Run scripts/regenerate-showcase.py." }
+    val target = onWhite(readImage(targetFile).downscaleLongEdge(4096))
+    val stickers = tileFiles.map { file -> readImage(file).downscaleLongEdge(tileEdge) }
+    return ShowcaseLibrary(target, stickers, stickers.map { onWhite(it) })
+}
+
 internal fun loadShowcase(directory: File, tileEdge: Int): ShowcaseLibrary {
     val files = directory.listFiles { file -> file.isFile && file.name[0].isDigit() }
         ?.sortedBy { it.name }
         .orEmpty()
     require(files.size >= 2) { "No showcase images in ${directory.path}. Run scripts/regenerate-showcase.py." }
     val decoded = files.map { file -> readImage(file).downscaleLongEdge(if (file.name.startsWith("000-")) 4096 else tileEdge) }
-    val target = decoded.first()
-    val sources = decoded.drop(1)
+    return libraryOf(onWhite(decoded.first()), decoded.drop(1))
+}
+
+/** Target still from one franchise, piece library from the other. */
+internal fun loadCrossover(targetDirectory: File, tileDirectory: File, tileEdge: Int): ShowcaseLibrary {
+    val targetFile = targetDirectory.listFiles { file -> file.isFile && file.name.startsWith("000-") }?.firstOrNull()
+        ?: error("No target in ${targetDirectory.path}. Run scripts/regenerate-showcase.py.")
+    val tileFiles = tileDirectory.listFiles { file ->
+        file.isFile && file.name[0].isDigit() && !file.name.startsWith("000-")
+    }?.sortedBy { it.name }.orEmpty()
+    require(tileFiles.size >= 8) { "No tile images in ${tileDirectory.path}. Run scripts/regenerate-showcase.py." }
+    val target = onWhite(readImage(targetFile).downscaleLongEdge(4096))
+    val sources = tileFiles.map { file -> readImage(file).downscaleLongEdge(tileEdge) }
+    return libraryOf(target, sources)
+}
+
+private fun libraryOf(target: PixelImage, sources: List<PixelImage>): ShowcaseLibrary {
     val photos = sources.mapNotNull { brightPhoto(it) }
     val cutouts = sources.mapNotNull { asCutout(it) }
     require(photos.size >= 8) { "Only ${photos.size} well-lit photos. The library is too dark to rebuild a face." }
     require(cutouts.size >= 8) { "Only ${cutouts.size} subject cutouts. Dark frames were rejected." }
     return ShowcaseLibrary(target, cutouts, photos)
+}
+
+/** A transparent character render is a picture on white, not a picture on black. */
+internal fun onWhite(image: PixelImage): PixelImage {
+    if (clearFraction(image) < 0.02f) return image
+    val pixels = IntArray(image.pixels.size)
+    for (index in pixels.indices) {
+        val pixel = image.pixels[index]
+        val alpha = (pixel ushr 24) and 255
+        val cover = alpha / 255f
+        val red = ((pixel ushr 16) and 255) * cover + 255f * (1f - cover)
+        val green = ((pixel ushr 8) and 255) * cover + 255f * (1f - cover)
+        val blue = (pixel and 255) * cover + 255f * (1f - cover)
+        pixels[index] = argb(red.toInt(), green.toInt(), blue.toInt())
+    }
+    return PixelImage(image.width, image.height, pixels)
 }
 
 internal fun readImage(file: File): PixelImage {
@@ -120,7 +233,9 @@ private fun isSubject(image: PixelImage): Boolean {
     val bounds = opaqueBounds(image) ?: return false
     val spanX = bounds.width.toFloat() / image.width
     val spanY = bounds.height.toFloat() / image.height
-    if (spanX > 0.94f && spanY > 0.94f) return false
+    // A character that touches the frame still counts when a real background is clear.
+    // A solid photo that fills the frame does not.
+    if (spanX > 0.94f && spanY > 0.94f && clearFraction(image) < 0.15f) return false
     if (spanY < 0.22f && spanX > 0.72f) return false
     if (spanX < 0.16f && spanY > 0.72f) return false
     return opaqueHasColor(image)
@@ -183,6 +298,10 @@ private fun isWellLit(image: PixelImage): Boolean {
         var x = 0
         while (x < image.width) {
             val pixel = image.pixel(x, y)
+            if ((pixel ushr 24) < 40) {
+                x += step
+                continue
+            }
             val red = (pixel ushr 16) and 255
             val green = (pixel ushr 8) and 255
             val blue = pixel and 255

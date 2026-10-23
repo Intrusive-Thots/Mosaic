@@ -1,6 +1,9 @@
 package com.intrusivethots.mosaic.ui.components
 
-import android.graphics.BitmapFactory
+import com.intrusivethots.mosaic.core.decodeSampledFile
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.runtime.produceState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,7 +27,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,9 +45,12 @@ import com.intrusivethots.mosaic.ui.theme.TextSecondary
 
 @Composable
 fun ProjectCard(project: MosaicProject, onClick: () -> Unit, onDelete: () -> Unit, onExport: () -> Unit) {
-    val bitmap = remember(project.previewImagePath, project.missingFiles) {
-        if (project.missingFiles) null else BitmapFactory.decodeFile(project.previewImagePath)
-    }
+    // Decoded off the main thread, at card size.
+    val bitmap = produceState<android.graphics.Bitmap?>(null, project.previewImagePath, project.missingFiles) {
+        value = if (project.missingFiles) null else withContext(Dispatchers.IO) {
+            decodeSampledFile(project.previewImagePath, CARD_EDGE)
+        }
+    }.value
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = SurfaceDark),
@@ -89,3 +94,5 @@ fun ProjectCard(project: MosaicProject, onClick: () -> Unit, onDelete: () -> Uni
         }
     }
 }
+
+private const val CARD_EDGE = 512

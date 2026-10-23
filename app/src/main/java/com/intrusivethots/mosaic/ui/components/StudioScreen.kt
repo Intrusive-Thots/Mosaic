@@ -2,30 +2,18 @@ package com.intrusivethots.mosaic.ui.components
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,7 +22,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
@@ -45,11 +32,7 @@ import com.intrusivethots.mosaic.engine.config.QualityPreset
 import com.intrusivethots.mosaic.engine.config.RenderMode
 import com.intrusivethots.mosaic.engine.config.SubjectShape
 import com.intrusivethots.mosaic.engine.config.TileFit
-import com.intrusivethots.mosaic.ui.state.GenerationUiState
 import com.intrusivethots.mosaic.ui.state.MosaicUiState
-import com.intrusivethots.mosaic.ui.theme.AccentAmber
-import com.intrusivethots.mosaic.ui.theme.AccentPurple
-import com.intrusivethots.mosaic.ui.theme.SurfaceDark
 
 @Composable
 fun StudioScreen(
@@ -82,7 +65,6 @@ fun StudioScreen(
     var showCrop by rememberSaveable { mutableStateOf(false) }
     var showExport by rememberSaveable { mutableStateOf(false) }
     var showEnlarge by rememberSaveable { mutableStateOf(false) }
-    var advanced by rememberSaveable { mutableStateOf(false) }
     val cropSource = rememberRotatedBitmap(state.rawTargetBitmap ?: state.targetBitmap, state.config.targetQuarterTurns)
     PhoneStudioBody(
         state = state,
@@ -99,40 +81,31 @@ fun StudioScreen(
         onExport = { showExport = true },
         onCrop = { showCrop = true },
         onResetCrop = onResetCrop,
+        onEnlarge = { showEnlarge = true },
         advanced = {
-            TextButton(onClick = { advanced = !advanced }, modifier = Modifier.height(48.dp)) {
-                Text(if (advanced) "Hide advanced controls" else "Advanced controls")
-            }
-            if (advanced) {
-                MosaicControlsCard(
-                    config = state.config,
-                    onPreset = onPreset,
-                    onAspect = onAspect,
-                    onStyle = onStyle,
-                    onColumns = onColumns,
-                    onRows = onRows,
-                    onLink = onLink,
-                    onRepetition = onRepetition,
-                    onBlend = onBlend,
-                    onRenderMode = onRenderMode,
-                    onOutputMode = onOutputMode,
-                    onFit = onFit,
-                    onAi = onAi,
-                    onSegmentation = onSegmentation,
-                    targetWidth = state.targetBitmap?.width ?: 0,
-                    targetHeight = state.targetBitmap?.height ?: 0,
-                    onCellAspect = shapeEditor.onCellAspect,
-                    onLayout = shapeEditor.onLayout,
-                    onRotation = shapeEditor.onRotation,
-                    onScale = shapeEditor.onScale,
-                    onOutput = shapeEditor.onOutput,
-                    onKind = shapeEditor.onKind,
-                    onCollage = shapeEditor.onCollage
-                )
-            }
-            state.outputBitmap?.let {
-                TextButton(onClick = { showEnlarge = true }, modifier = Modifier.height(48.dp)) { Text("Enlarge") }
-            }
+            MosaicControlsCard(
+                config = state.config,
+                onAspect = onAspect,
+                onStyle = onStyle,
+                onColumns = onColumns,
+                onRows = onRows,
+                onLink = onLink,
+                onRepetition = onRepetition,
+                onBlend = onBlend,
+                onRenderMode = onRenderMode,
+                onOutputMode = onOutputMode,
+                onFit = onFit,
+                onAi = onAi,
+                onSegmentation = onSegmentation,
+                targetWidth = state.targetBitmap?.width ?: 0,
+                targetHeight = state.targetBitmap?.height ?: 0,
+                onCellAspect = shapeEditor.onCellAspect,
+                onLayout = shapeEditor.onLayout,
+                onRotation = shapeEditor.onRotation,
+                onScale = shapeEditor.onScale,
+                onOutput = shapeEditor.onOutput,
+                onCollage = shapeEditor.onCollage
+            )
         }
     )
     if (showCrop) {
@@ -161,16 +134,13 @@ private fun EnlargeDialog(bitmap: Bitmap, onDismiss: () -> Unit, onExport: () ->
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            Row {
-                Button(onClick = onExport, colors = ButtonDefaults.buttonColors(containerColor = AccentAmber)) {
-                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Black)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Download", color = Color.Black)
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                TextButton(onClick = onDismiss) { Text("Close", color = AccentPurple) }
+            Button(onClick = onExport) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Save")
             }
         },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
         text = {
             Box(modifier = Modifier.fillMaxWidth().height(420.dp)) {
                 Image(
@@ -180,7 +150,6 @@ private fun EnlargeDialog(bitmap: Bitmap, onDismiss: () -> Unit, onExport: () ->
                     modifier = Modifier.fillMaxSize()
                 )
             }
-        },
-        containerColor = SurfaceDark
+        }
     )
 }

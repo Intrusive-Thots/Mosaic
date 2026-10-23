@@ -1,0 +1,276 @@
+package com.intrusivethots.mosaic.ui.components
+
+import android.app.Activity
+import android.graphics.Bitmap
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.intrusivethots.mosaic.drive.CreatePersistableDocument
+import com.intrusivethots.mosaic.drive.DriveImageCache
+import com.intrusivethots.mosaic.drive.DriveViewModel
+import com.intrusivethots.mosaic.drive.OpenPersistableImages
+import com.intrusivethots.mosaic.drive.OpenPersistableTree
+import com.intrusivethots.mosaic.drive.FolderListing
+import com.intrusivethots.mosaic.drive.OpenPersistableDocument
+import com.intrusivethots.mosaic.drive.listTreeImages
+import com.intrusivethots.mosaic.drive.rememberFolder
+import com.intrusivethots.mosaic.drive.savedFolder
+import com.intrusivethots.mosaic.drive.copyFileToUri
+import com.intrusivethots.mosaic.drive.keepReadPermission
+import com.intrusivethots.mosaic.drive.keepWritePermission
+import com.intrusivethots.mosaic.drive.mosaicExportName
+import com.intrusivethots.mosaic.drive.prepareExport
+import com.intrusivethots.mosaic.ui.screens.MainViewModel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+private enum class LibraryTarget { TILES, STAMPS, PICTURE }
+
+@Composable
+fun LibraryHost(main: MainViewModel, content: @Composable (LibrarySources) -> Unit) {
+    val drive: DriveViewModel = viewModel()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val driveState by drive.state.collectAsState()
+    val snackbar = remember { SnackbarHostState() }
+    var sheet by remember { mutableStateOf(false) }
+    var target by remember { mutableStateOf(LibraryTarget.TILES) }
+    var folder by remember { mutableStateOf<FolderListing?>(null) }
+    val targetState = rememberUpdatedState(target)
+    var saveTitle by remember { mutableStateOf("Mosaic") }
+    var savePath by remember { mutableStateOf<String?>(null) }
+    var saveBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    val save = rememberDriveSavers(snackbar, saveTitle, savePath, saveBitmap)
+    val picked = rememberUpdatedState<(List<Uri>) -> Unit> { uris ->
+        when (targetState.value) {
+            LibraryTarget.TILES -> if (uris.isNotEmpty()) main.addTileImages(uris.take(400))
+            LibraryTarget.STAMPS -> if (uris.isNotEmpty()) main.extractStampBatch(uris.take(40))
+            LibraryTarget.PICTURE -> uris.firstOrNull()?.let(main::setTargetImage)
+        }
+    }
+    val launchers = rememberLibraryLaunchers(snackbar, picked.value) { folder = it }
+    ConsentEffect(drive)
+    LaunchedEffect(drive) { drive.messages.collect { snackbar.showSnackbar(it) } }
+    val export = LibraryExport(
+        driveConnected = driveState.connected,
+        onCopyToDrive = { title ->
+            val snapshot = main.state.value
+            drive.copyToAppFolder(title, snapshot.fullImagePath, snapshot.outputBitmap)
+        },
+        onSaveToFolder = { title ->
+            val snapshot = main.state.value
+            saveTitle = title
+            savePath = snapshot.fullImagePath
+            saveBitmap = snapshot.outputBitmap
+            save.launch(mosaicExportName(title))
+        },
+        onBrowseDrive = { title ->
+            val snapshot = main.state.value
+            drive.browseToSave(title, snapshot.fullImagePath, snapshot.outputBitmap)
+        }
+    )
+    CompositionLocalProvider(LocalLibraryExport provides export, LocalDriveCard provides { DriveSettingsCard(drive) }) {
+        Box(Modifier.fillMaxSize()) {
+            content(LibrarySources(
+                pickTiles = { target = LibraryTarget.TILES; sheet = true },
+                pickStamps = { target = LibraryTarget.STAMPS; sheet = true },
+                pickTarget = { target = LibraryTarget.PICTURE; sheet = true }
+            ))
+            SnackbarHost(snackbar, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+            if (sheet) {
+                SourceSheet(
+                    drive = driveState,
+                    hasLastFolder = savedFolder(context) != null,
+                    onDismiss = { sheet = false },
+                    onPhotos = {
+                        sheet = false
+                        val request = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        when (target) {
+                            LibraryTarget.TILES -> launchers.tiles.launch(request)
+                            LibraryTarget.STAMPS -> launchers.stamps.launch(request)
+                            LibraryTarget.PICTURE -> launchers.picture.launch(request)
+                        }
+                    },
+                    onImages = {
+                        sheet = false
+                        if (target == LibraryTarget.PICTURE) launchers.document.launch(arrayOf("image/*"))
+                        else launchers.files.launch(arrayOf("image/*"))
+                    },
+                    onFolder = {
+                        sheet = false
+                        val saved = savedFolder(context)
+                        if (saved != null) readFolder(context, scope, snackbar, saved) { folder = it }
+                        else launchers.folder.launch(null)
+                    },
+                    onDrive = { sheet = false; drive.openLibrary() }
+                )
+            }
+            if (driveState.browsing) {
+                DriveBrowser(
+                    drive = drive,
+                    stampCap = target == LibraryTarget.STAMPS,
+                    single = target == LibraryTarget.PICTURE,
+                    pinned = { main.state.value.tileUris.mapNotNull { DriveImageCache.ownedName(it) }.toSet() },
+                    onAdded = picked.value
+                )
+            }
+            val listing = folder
+            if (listing != null) {
+                FolderGrid(
+                    images = listing.images,
+                    single = target == LibraryTarget.PICTURE,
+                    onDismiss = { folder = null },
+                    onChangeFolder = {
+                        folder = null
+                        launchers.folder.launch(savedFolder(context))
+                    },
+                    onConfirm = { uris ->
+                        folder = null
+                        picked.value(uris)
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConsentEffect(drive: DriveViewModel) {
+    val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        val data = result.data
+        if (result.resultCode == Activity.RESULT_OK && data != null) drive.completeConsent(data) else drive.consentCancelled()
+    }
+    LaunchedEffect(drive) {
+        drive.consents.collect { pending ->
+            try {
+                consent.launch(IntentSenderRequest.Builder(pending).build())
+            } catch (failure: Exception) {
+                drive.consentCancelled()
+            }
+        }
+    }
+}
+
+private class LibraryLaunchers(
+    val tiles: androidx.activity.result.ActivityResultLauncher<PickVisualMediaRequest>,
+    val stamps: androidx.activity.result.ActivityResultLauncher<PickVisualMediaRequest>,
+    val picture: androidx.activity.result.ActivityResultLauncher<PickVisualMediaRequest>,
+    val files: androidx.activity.result.ActivityResultLauncher<Array<String>>,
+    val document: androidx.activity.result.ActivityResultLauncher<Array<String>>,
+    val folder: androidx.activity.result.ActivityResultLauncher<Uri?>
+)
+
+@Composable
+private fun rememberLibraryLaunchers(
+    snackbar: SnackbarHostState,
+    onPicked: (List<Uri>) -> Unit,
+    onFolder: (FolderListing) -> Unit
+): LibraryLaunchers {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val latest = rememberUpdatedState(onPicked)
+    val folderReady = rememberUpdatedState(onFolder)
+    val imageContract = remember { OpenPersistableImages() }
+    val documentContract = remember { OpenPersistableDocument() }
+    val treeContract = remember { OpenPersistableTree() }
+    val tiles = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(maxItems = 100)) { uris ->
+        if (uris.isNotEmpty()) latest.value(uris)
+    }
+    val stamps = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(maxItems = 40)) { uris ->
+        if (uris.isNotEmpty()) latest.value(uris)
+    }
+    val picture = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) latest.value(listOf(uri))
+    }
+    val files = rememberLauncherForActivityResult(imageContract) { uris ->
+        uris.forEach { keepReadPermission(context, it) }
+        latest.value(uris)
+    }
+    val document = rememberLauncherForActivityResult(documentContract) { uri ->
+        if (uri != null) {
+            keepReadPermission(context, uri)
+            latest.value(listOf(uri))
+        }
+    }
+    val folder = rememberLauncherForActivityResult(treeContract) { uri ->
+        if (uri != null) readFolder(context, scope, snackbar, uri, folderReady.value)
+    }
+    return LibraryLaunchers(tiles, stamps, picture, files, document, folder)
+}
+
+@Composable
+private fun rememberDriveSavers(
+    snackbar: SnackbarHostState,
+    title: String,
+    path: String?,
+    bitmap: Bitmap?
+): androidx.activity.result.ActivityResultLauncher<String> {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val titleState = rememberUpdatedState(title)
+    val pathState = rememberUpdatedState(path)
+    val bitmapState = rememberUpdatedState(bitmap)
+    val contract = remember { CreatePersistableDocument("image/png") }
+    return rememberLauncherForActivityResult(contract) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        keepWritePermission(context, uri)
+        scope.launch {
+            val prepared = withContext(Dispatchers.IO) {
+                prepareExport(context.cacheDir, titleState.value, pathState.value, bitmapState.value)
+            }
+            if (prepared == null) {
+                snackbar.showSnackbar("Render a mosaic before saving it.")
+                return@launch
+            }
+            val saved = withContext(Dispatchers.IO) { copyFileToUri(context, prepared.file, uri) }
+            if (prepared.temporary) prepared.file.delete()
+            snackbar.showSnackbar(if (saved) "Saved to the folder you chose." else "Could not save to that folder.")
+        }
+    }
+}
+
+private fun readFolder(
+    context: android.content.Context,
+    scope: CoroutineScope,
+    snackbar: SnackbarHostState,
+    uri: Uri,
+    onReady: (FolderListing) -> Unit
+) {
+    keepReadPermission(context, uri)
+    scope.launch {
+        val listing = withContext(Dispatchers.IO) { listTreeImages(context, uri) }
+        listing.images.forEach { keepReadPermission(context, it.uri) }
+        if (listing.images.isEmpty()) snackbar.showSnackbar("No photos were found in that folder.")
+        else {
+            rememberFolder(context, uri)
+            if (listing.truncated) {
+                snackbar.showSnackbar("That folder has more photos than this list. Open a smaller folder for the rest.")
+            }
+            onReady(listing)
+        }
+    }
+}

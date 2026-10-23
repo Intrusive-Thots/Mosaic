@@ -167,7 +167,15 @@ class MatchingPipelineTest {
             preview = true
         )
         val counts = IntArray(8)
-        result.plan.assignments.filter { it >= 0 }.forEach { counts[it]++ }
+        val seen = HashSet<Int>()
+        val plan = result.plan
+        for (index in plan.assignments.indices) {
+            val tile = plan.assignments[index]
+            if (tile < 0) continue
+            val anchor = if (plan.anchors.size == plan.cellCount) plan.anchors[index] else index
+            if (!seen.add(anchor)) continue
+            counts[tile]++
+        }
         assertTrue(counts.max() - counts.min() <= 2, "counts=${counts.toList()}")
     }
 
@@ -253,13 +261,22 @@ class MatchingPipelineTest {
             preview = true
         )
         val image = result.image!!
-        val cellWidth = result.outputWidth / result.plan.columns
-        val cellHeight = result.outputHeight / result.plan.rows
-        val center = image.pixel(cellWidth / 2, cellHeight / 2)
+        val plan = result.plan
+        val cellWidth = result.outputWidth / plan.columns
+        val cellHeight = result.outputHeight / plan.rows
+        val anchor = if (plan.anchors.size == plan.cellCount) plan.anchors[0] else 0
+        val spanX = if (anchor in plan.spanX.indices) plan.spanX[anchor].toInt().coerceAtLeast(1) else 1
+        val spanY = if (anchor in plan.spanY.indices) plan.spanY[anchor].toInt().coerceAtLeast(1) else 1
+        val column = anchor % plan.columns
+        val row = anchor / plan.columns
+        val center = image.pixel(
+            column * cellWidth + spanX * cellWidth / 2,
+            row * cellHeight + spanY * cellHeight / 2
+        )
         val red = (center shr 16) and 255
         val green = (center shr 8) and 255
         assertTrue(green > red, "Center of a wide tile should keep the middle band")
-        val letterbox = image.pixel(cellWidth / 2, 0)
+        val letterbox = image.pixel(column * cellWidth + spanX * cellWidth / 2, row * cellHeight)
         assertTrue((letterbox and 255) < 30, "Fit-inside should letterbox instead of stretching")
     }
 
@@ -461,17 +478,34 @@ class MatchingPipelineTest {
         keys.count { cache.get(it) == null }
 
     private fun assertNoRadiusViolation(plan: MosaicPlan, radius: Int) {
-        val seen = HashMap<Int, MutableList<Pair<Int, Int>>>()
-        for (row in 0 until plan.rows) {
-            for (column in 0 until plan.columns) {
-                val tile = plan.assignments[row * plan.columns + column]
-                if (tile == MosaicPlan.SOLID) continue
-                val previous = seen[tile].orEmpty()
-                previous.forEach { (previousColumn, previousRow) ->
-                    val distance = chebyshev(column, row, previousColumn, previousRow)
-                    assertTrue(distance > radius, "Tile $tile reused at distance $distance")
+        val copies = ArrayList<Pair<Int, List<Pair<Int, Int>>>>()
+        val seen = HashSet<Int>()
+        for (index in plan.assignments.indices) {
+            val tile = plan.assignments[index]
+            if (tile < 0) continue
+            val anchor = if (plan.anchors.size == plan.cellCount) plan.anchors[index] else index
+            if (!seen.add(anchor)) continue
+            val spanX = if (anchor in plan.spanX.indices) plan.spanX[anchor].toInt().coerceAtLeast(1) else 1
+            val spanY = if (anchor in plan.spanY.indices) plan.spanY[anchor].toInt().coerceAtLeast(1) else 1
+            val column = anchor % plan.columns
+            val row = anchor / plan.columns
+            val cells = ArrayList<Pair<Int, Int>>(spanX * spanY)
+            for (dy in 0 until spanY) {
+                for (dx in 0 until spanX) cells.add((column + dx) to (row + dy))
+            }
+            copies.add(tile to cells)
+        }
+        for (left in copies.indices) {
+            for (right in left + 1 until copies.size) {
+                if (copies[left].first != copies[right].first) continue
+                var nearest = Int.MAX_VALUE
+                for (a in copies[left].second) {
+                    for (b in copies[right].second) {
+                        val distance = chebyshev(a.first, a.second, b.first, b.second)
+                        if (distance < nearest) nearest = distance
+                    }
                 }
-                seen.getOrPut(tile) { mutableListOf() }.add(column to row)
+                assertTrue(nearest > radius, "Tile ${copies[left].first} reused at distance $nearest")
             }
         }
     }

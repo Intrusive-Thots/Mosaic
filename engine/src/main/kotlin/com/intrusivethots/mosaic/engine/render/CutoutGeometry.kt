@@ -80,7 +80,22 @@ fun sampleCutout(source: PixelImage, descriptor: TileDescriptor, draw: PieceDraw
     if (u < 0f || v < 0f || u > 1f || v > 1f) return 0
     val sx = (descriptor.contentLeft + u * (descriptor.contentRight - descriptor.contentLeft)) * source.width - 0.5f
     val sy = (descriptor.contentTop + v * (descriptor.contentBottom - descriptor.contentTop)) * source.height - 0.5f
-    return sampleTransparent(source, sx, sy)
+    val sampled = sampleTransparent(source, sx, sy)
+    return solidifySmallPiece(sampled, draw)
+}
+
+/**
+ * A piece only a few pixels wide minifies the cutout onto its transparent margin, so bilinear
+ * filtering turns a solid color into a faint tint. Boost that coverage back toward opaque.
+ */
+private fun solidifySmallPiece(sampled: Int, draw: PieceDraw): Int {
+    if (sampled == 0) return 0
+    val short = min(draw.drawWidth, draw.drawHeight)
+    if (short >= SMALL_PIECE_EDGE) return sampled
+    val alpha = (sampled ushr 24) and 255
+    val boosted = (alpha * SMALL_PIECE_EDGE / short).toInt().coerceIn(0, 255)
+    if (boosted <= SMALL_PIECE_FLOOR) return 0
+    return (sampled and 0x00FFFFFF) or (boosted shl 24)
 }
 
 fun sampleTransparent(image: PixelImage, x: Float, y: Float): Int {
@@ -142,3 +157,5 @@ fun srcOver(destination: Int, source: Int): Int {
 }
 
 private const val OPAQUE = 0xFF shl 24
+private const val SMALL_PIECE_EDGE = 8f
+private const val SMALL_PIECE_FLOOR = 16

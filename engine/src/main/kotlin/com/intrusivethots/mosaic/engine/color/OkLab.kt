@@ -38,10 +38,28 @@ object OkLab {
         blue = argb and 255
     )
 
-    fun toArgb(lab: Lab, alpha: Int = 255): Int {
-        val lRoot = lab.l + 0.3963377774f * lab.a + 0.2158037573f * lab.b
-        val mRoot = lab.l - 0.1055613458f * lab.a - 0.0638541728f * lab.b
-        val sRoot = lab.l - 0.0894841775f * lab.a - 1.2914855480f * lab.b
+    /** Writes L, a, b at [offset] without allocating a [Lab]. */
+    fun writeLab(argb: Int, dest: FloatArray, offset: Int) {
+        val red = srgbToLinear[(argb shr 16) and 255]
+        val green = srgbToLinear[(argb shr 8) and 255]
+        val blue = srgbToLinear[argb and 255]
+        val l = 0.4122214708f * red + 0.5363325363f * green + 0.0514459929f * blue
+        val m = 0.2119034982f * red + 0.6806995451f * green + 0.1073969566f * blue
+        val s = 0.0883024619f * red + 0.2817188376f * green + 0.6299787005f * blue
+        val lRoot = cbrt(l)
+        val mRoot = cbrt(m)
+        val sRoot = cbrt(s)
+        dest[offset] = 0.2104542553f * lRoot + 0.7936177850f * mRoot - 0.0040720468f * sRoot
+        dest[offset + 1] = 1.9779984951f * lRoot - 2.4285922050f * mRoot + 0.4505937099f * sRoot
+        dest[offset + 2] = 0.0259040371f * lRoot + 0.7827717662f * mRoot - 0.8086757660f * sRoot
+    }
+
+    fun toArgb(lab: Lab, alpha: Int = 255): Int = toArgb(lab.l, lab.a, lab.b, alpha)
+
+    fun toArgb(l: Float, a: Float, b: Float, alpha: Int = 255): Int {
+        val lRoot = l + 0.3963377774f * a + 0.2158037573f * b
+        val mRoot = l - 0.1055613458f * a - 0.0638541728f * b
+        val sRoot = l - 0.0894841775f * a - 1.2914855480f * b
         val l = lRoot * lRoot * lRoot
         val m = mRoot * mRoot * mRoot
         val s = sRoot * sRoot * sRoot

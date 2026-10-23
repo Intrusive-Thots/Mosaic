@@ -6,9 +6,14 @@ import com.intrusivethots.mosaic.engine.config.CollageBackground
 import com.intrusivethots.mosaic.engine.config.MosaicConfig
 import com.intrusivethots.mosaic.engine.config.OutputLayout
 import com.intrusivethots.mosaic.engine.config.RenderMode
+import com.intrusivethots.mosaic.engine.coord.HeapBudget
+import com.intrusivethots.mosaic.engine.coord.fitToEdge
 import com.intrusivethots.mosaic.engine.image.PixelImage
+import com.intrusivethots.mosaic.engine.image.WHOLE_STICKER_SPAN
+import com.intrusivethots.mosaic.engine.image.alphaSticker
 import com.intrusivethots.mosaic.engine.image.sampleBilinear
 import com.intrusivethots.mosaic.engine.match.MosaicPlan
+import com.intrusivethots.mosaic.engine.match.ResidualField
 import com.intrusivethots.mosaic.engine.tile.TileAnalyzer
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
 import kotlinx.coroutines.ensureActive
@@ -24,23 +29,39 @@ class CollageRenderer {
         target: PixelImage?,
         sink: RowSink,
         coverage: BooleanArray? = null,
+        owners: IntArray? = null,
         onProgress: (Float) -> Unit = {}
     ) {
         val width = layout.width
         val height = layout.height
-        val sprites = sprites(plan, descriptors, thumbnails, width, height)
+        val sprites = sprites(plan, descriptors, thumbnails, width, height, target)
+        val field = lowFrequencyField(target)
         val mean = if (target == null) argb(24, 24, 28) else meanColor(target)
         val useTarget = config.collage.background == CollageBackground.TARGET && target != null
         val row = IntArray(width)
+        val locked = BooleanArray(width * height)
+        val gate = CloserGate(width, height)
+        val outlines = outlineField(target, config, width, height)
+        gate.bind(target, width, height)
         var lastReported = -1
         for (y in 0 until height) {
             if (y % 8 == 0) coroutineContext.ensureActive()
             paintBackground(row, y, width, height, target, useTarget, mean)
-            for (sprite in sprites) {
+            gate.prepare(y, width)
+            for (index in sprites.indices) {
+                val sprite = sprites[index]
+                if (sprite.placement.mask != null) {
+                    paintShapeRow(
+                        row, y, width, height, sprite.source, sprite.base, sprite.descriptor, sprite.placement,
+                        config, coverage, owners, index, sprite.tone, field, sprite.outline, locked
+                    )
+                    continue
+                }
                 if (config.collage.separatePieces) paintShadow(row, y, sprite, width)
                 if (y < sprite.draw.top || y > sprite.draw.bottom) continue
-                paintSprite(row, y, sprite, config, coverage, width)
+                paintSprite(row, y, sprite, config, coverage, width, gate, owners, index)
             }
+            darkenOutline(row, y, outlines)
             sink.writeRow(y, row)
             val percent = ((y + 1) * 100) / height
             if (percent != lastReported) {
@@ -56,7 +77,10 @@ class CollageRenderer {
         sprite: Sprite,
         config: MosaicConfig,
         coverage: BooleanArray?,
-        width: Int
+        width: Int,
+        gate: CloserGate? = null,
+        owners: IntArray? = null,
+        owner: Int = -1
     ) {
         val start = sprite.draw.left
         val end = sprite.draw.right
@@ -64,9 +88,36 @@ class CollageRenderer {
             val sampled = sampleCutout(sprite.source, sprite.descriptor, sprite.draw, x, y)
             val styled = stylePixel(sampled, sprite, config)
             if (styled == 0) continue
+            val blended = srcOver(row[x], styled)
+            if (gate != null && !gate.allows(x, blended)) continue
             if (coverage != null) coverage[y * width + x] = true
-            row[x] = srcOver(row[x], styled)
+            if (owners != null) owners[y * width + x] = owner
+            row[x] = blended
         }
+    }
+
+    private fun sourceFor(
+        placement: com.intrusivethots.mosaic.engine.match.CutoutPlacement,
+        tile: Int,
+        thumbnails: List<PixelImage>,
+        paper: HashMap<Int, PixelImage>,
+        stickers: HashMap<Int, Boolean>
+    ): PixelImage {
+        if (placement.mask == null || tile !in thumbnails.indices) return thumbnails[tile]
+        val image = thumbnails[tile]
+        if (wholeSticker(placement, image, stickers, tile)) return image
+        return paper.getOrPut(tile) { solidPaper(image) }
+    }
+
+    private fun wholeSticker(
+        placement: com.intrusivethots.mosaic.engine.match.CutoutPlacement,
+        image: PixelImage,
+        stickers: HashMap<Int, Boolean>,
+        tile: Int
+    ): Boolean {
+        if (placement.cropSpan < WHOLE_STICKER_SPAN) return false
+        if (placement.faceRight > placement.faceLeft) return false
+        return stickers.getOrPut(tile) { alphaSticker(image) }
     }
 
     internal fun sprites(
@@ -74,16 +125,31 @@ class CollageRenderer {
         descriptors: List<TileDescriptor>,
         thumbnails: List<PixelImage>,
         width: Int,
-        height: Int
+        height: Int,
+        target: PixelImage? = null
     ): List<Sprite> {
         val sprites = ArrayList<Sprite>(plan.placements.size)
+        val paper = HashMap<Int, PixelImage>()
+        val stickers = HashMap<Int, Boolean>()
+        val bases = HashMap<Int, PixelImage>()
         for (placement in plan.placements) {
             val tile = placement.tileIndex
             if (tile !in descriptors.indices || tile !in thumbnails.indices) continue
-            val source = thumbnails[tile]
+            val source = sourceFor(placement, tile, thumbnails, paper, stickers)
+            val base = if (placement.mask == null) source else bases.getOrPut(tile) { softBase(source) }
             val descriptor = descriptors[tile]
-            val draw = pieceDraw(placement, descriptor, source.width, source.height, width, height)
-            sprites.add(Sprite(descriptor, source, draw, placement.targetL, placement.targetA, placement.targetB))
+            val draw = if (placement.mask != null) {
+                maskSpan(placement.mask, width, height)
+            } else {
+                pieceDraw(placement, descriptor, source.width, source.height, width, height)
+            }
+            val tone = if (placement.mask != null) {
+                regionTone(source, descriptor, placement, target, width, height)
+            } else {
+                null
+            }
+            val outline = if (placement.mask != null) traceOutline(placement.mask) else null
+            sprites.add(Sprite(descriptor, source, base, draw, placement, tone, outline))
         }
         return sprites
     }
@@ -97,15 +163,25 @@ class CollageRenderer {
         useTarget: Boolean,
         mean: Int
     ) {
-        if (!useTarget || target == null) {
+        if (target == null) {
             row.fill(mean)
             return
         }
+        val hint = if (useTarget) 1f else GAP_HINT
         for (x in 0 until width) {
             val sx = (x + 0.5f) * target.width / width - 0.5f
             val sy = (y + 0.5f) * target.height / height - 0.5f
-            row[x] = target.sampleBilinear(sx, sy) or OPAQUE
+            val sample = target.sampleBilinear(sx, sy) or OPAQUE
+            row[x] = if (hint >= 1f) sample else mixOpaque(mean, sample, hint)
         }
+    }
+
+    private fun mixOpaque(base: Int, sample: Int, amount: Float): Int {
+        val keep = 1f - amount
+        val red = (((base ushr 16) and 255) * keep + ((sample ushr 16) and 255) * amount).toInt().coerceIn(0, 255)
+        val green = (((base ushr 8) and 255) * keep + ((sample ushr 8) and 255) * amount).toInt().coerceIn(0, 255)
+        val blue = ((base and 255) * keep + (sample and 255) * amount).toInt().coerceIn(0, 255)
+        return (0xFF shl 24) or (red shl 16) or (green shl 8) or blue
     }
 
     internal fun paintShadow(row: IntArray, y: Int, sprite: Sprite, width: Int) {
@@ -132,14 +208,20 @@ class CollageRenderer {
         if (alpha <= TileAnalyzer.ALPHA_THRESHOLD) return 0
         if (config.collage.outline && alpha < 220) return (alpha shl 24) or OUTLINE
         val withAlpha = (sampled and 0x00FFFFFF) or (alpha shl 24)
-        return recolor(withAlpha, sprite, config.renderMode, config.colorMatchWeight)
+        return recolor(withAlpha, sprite.placement, sprite.descriptor, config.renderMode, config.colorMatchWeight)
     }
 
     /**
      * Shifts chroma toward the covered target and moves luminance only part of the way,
      * so the cutout's own shading stays visible. Strength 0 leaves the pixel unchanged.
      */
-    private fun recolor(argb: Int, sprite: Sprite, mode: RenderMode, strength: Float): Int {
+    private fun recolor(
+        argb: Int,
+        placement: com.intrusivethots.mosaic.engine.match.CutoutPlacement,
+        descriptor: TileDescriptor,
+        mode: RenderMode,
+        strength: Float
+    ): Int {
         val alpha = argb and OPAQUE_MASK
         if (mode == RenderMode.ORIGINAL || strength <= 0f) return argb
         val lab = OkLab.fromArgb(argb)
@@ -147,12 +229,12 @@ class CollageRenderer {
         val shading = 1f - strength * 0.25f
         val shifted = OkLab.Lab(
             l = (
-                sprite.descriptor.labL +
-                    (sprite.targetL - sprite.descriptor.labL) * strength * 0.4f +
-                    (lab.l - sprite.descriptor.labL) * shading
+                descriptor.labL +
+                    (placement.targetL - descriptor.labL) * strength * 0.4f +
+                    (lab.l - descriptor.labL) * shading
                 ).coerceIn(0f, 1f),
-            a = (lab.a + (sprite.targetA - sprite.descriptor.labA) * chroma).coerceIn(-0.5f, 0.5f),
-            b = (lab.b + (sprite.targetB - sprite.descriptor.labB) * chroma).coerceIn(-0.5f, 0.5f)
+            a = (lab.a + (placement.targetA - descriptor.labA) * chroma).coerceIn(-0.5f, 0.5f),
+            b = (lab.b + (placement.targetB - descriptor.labB) * chroma).coerceIn(-0.5f, 0.5f)
         )
         return (OkLab.toArgb(shifted) and 0x00FFFFFF) or alpha
     }
@@ -176,18 +258,100 @@ class CollageRenderer {
         return argb((red / n).toInt(), (green / n).toInt(), (blue / n).toInt())
     }
 
+    /**
+     * The first cutout to reach a pixel always paints. A later cutout paints only when the
+     * blended color is closer to the target than what is already there.
+     */
+    internal class CloserGate(width: Int, height: Int) {
+        private val fieldWidth: Int
+        private val fieldHeight: Int
+        private val targetLab: FloatArray
+        private val currentLab: FloatArray
+        private val proposed = FloatArray(3)
+        private val touched: BooleanArray
+        private var imageWidth = width
+        private var imageHeight = height
+        private var rowStart = 0
+        private var active = false
+
+        init {
+            val fitted = fitToEdge(width, height, HeapBudget.EXACT_FIELD_EDGE)
+            fieldWidth = fitted.first
+            fieldHeight = fitted.second
+            targetLab = FloatArray(fieldWidth * fieldHeight * 3)
+            currentLab = FloatArray(fieldWidth * 3)
+            touched = BooleanArray(fieldWidth)
+        }
+
+        fun bind(target: PixelImage?, width: Int, height: Int) {
+            active = target != null
+            imageWidth = width
+            imageHeight = height
+            if (target == null) return
+            var cursor = 0
+            for (y in 0 until fieldHeight) {
+                val sy = (y + 0.5f) * target.height / fieldHeight - 0.5f
+                for (x in 0 until fieldWidth) {
+                    val sx = (x + 0.5f) * target.width / fieldWidth - 0.5f
+                    OkLab.writeLab(target.sampleBilinear(sx, sy), targetLab, cursor)
+                    cursor += 3
+                }
+            }
+        }
+
+        fun prepare(y: Int, width: Int) {
+            val sampleY = if (fieldHeight == imageHeight) y else (y * fieldHeight / imageHeight).coerceIn(0, fieldHeight - 1)
+            val limit = if (fieldWidth == imageWidth) width else fieldWidth
+            touched.fill(false, 0, limit.coerceIn(0, touched.size))
+            rowStart = sampleY * fieldWidth * 3
+        }
+
+        fun allows(x: Int, blended: Int): Boolean {
+            if (!active) return true
+            OkLab.writeLab(blended, proposed, 0)
+            val sampleX = if (fieldWidth == imageWidth) x else (x * fieldWidth / imageWidth).coerceIn(0, fieldWidth - 1)
+            val at = sampleX * 3
+            if (!touched[sampleX]) {
+                touched[sampleX] = true
+                currentLab[at] = proposed[0]
+                currentLab[at + 1] = proposed[1]
+                currentLab[at + 2] = proposed[2]
+                return true
+            }
+            val targetAt = rowStart + at
+            val next = squared(proposed[0], proposed[1], proposed[2], targetLab, targetAt)
+            val current = squared(currentLab[at], currentLab[at + 1], currentLab[at + 2], targetLab, targetAt)
+            val slack = ResidualField.CLOSER_SLACK
+            if (next + slack * slack + 2f * slack * kotlin.math.sqrt(current) >= current) return false
+            currentLab[at] = proposed[0]
+            currentLab[at + 1] = proposed[1]
+            currentLab[at + 2] = proposed[2]
+            return true
+        }
+
+        private fun squared(l: Float, a: Float, b: Float, reference: FloatArray, offset: Int): Float {
+            val dl = l - reference[offset]
+            val da = a - reference[offset + 1]
+            val db = b - reference[offset + 2]
+            return dl * dl + da * da + db * db
+        }
+    }
+
     internal class Sprite(
         val descriptor: TileDescriptor,
         val source: PixelImage,
+        val base: PixelImage,
         val draw: PieceDraw,
-        val targetL: Float,
-        val targetA: Float,
-        val targetB: Float
+        val placement: com.intrusivethots.mosaic.engine.match.CutoutPlacement,
+        val tone: RegionTone? = null,
+        val outline: PieceOutline? = null
     )
 
     companion object {
         private const val OPAQUE = 0xFF shl 24
         private const val OPAQUE_MASK = OPAQUE
+        /** Half the gap is the local picture color, so seams and sticker holes follow the subject. */
+        private const val GAP_HINT = 0.50f
         private const val SHADOW_SHIFT = 2
         private const val SHADOW_ALPHA = 70
         private const val OUTLINE = 0x1C140E

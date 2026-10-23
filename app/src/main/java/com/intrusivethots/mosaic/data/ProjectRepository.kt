@@ -1,13 +1,11 @@
 package com.intrusivethots.mosaic.data
 
-import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
 import androidx.room.Room
+import com.intrusivethots.mosaic.core.GalleryExport
+import com.intrusivethots.mosaic.core.SavedImage
 import com.intrusivethots.mosaic.core.contentLength
 import com.intrusivethots.mosaic.core.contentModifiedTime
 import com.intrusivethots.mosaic.core.decodeSampledBitmap
@@ -20,7 +18,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.io.File
-import java.io.OutputStream
 
 class ProjectRepository(context: Context) {
     private val appContext = context.applicationContext
@@ -109,17 +106,12 @@ class ProjectRepository(context: Context) {
 
     fun setApiKey(key: String): Boolean = keyStore.setApiKey(key)
 
-    suspend fun exportFileToGallery(file: File, title: String): Uri? = withContext(Dispatchers.IO) {
-        if (!file.exists()) return@withContext null
-        copyToGallery(title, file.extension.ifBlank { "png" }, mimeFor(file)) { stream ->
-            file.inputStream().use { input -> input.copyTo(stream) }
-        }
+    suspend fun exportFileToGallery(file: File, title: String): SavedImage? = withContext(Dispatchers.IO) {
+        GalleryExport.saveFileToGallery(appContext.contentResolver, file, title)
     }
 
-    suspend fun exportBitmapToGallery(bitmap: Bitmap, title: String): Uri? = withContext(Dispatchers.IO) {
-        copyToGallery(title, "jpg", "image/jpeg") { stream ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
-        }
+    suspend fun exportBitmapToGallery(bitmap: Bitmap, title: String): SavedImage? = withContext(Dispatchers.IO) {
+        GalleryExport.saveToGallery(appContext.contentResolver, bitmap, title)
     }
 
     fun loadPreview(path: String, maxEdge: Int = 1080): Bitmap? = decodeSampledFile(path, maxEdge)
@@ -174,51 +166,6 @@ class ProjectRepository(context: Context) {
         } catch (_: Exception) {
             // Leave the legacy file in place so a later launch can retry.
         }
-    }
-
-    private fun copyToGallery(
-        title: String,
-        extension: String,
-        mime: String,
-        write: (OutputStream) -> Unit
-    ): Uri? {
-        val resolver = appContext.contentResolver
-        var created: Uri? = null
-        return try {
-            val filename = "Mosaic_${System.currentTimeMillis()}.$extension"
-            val values = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, filename)
-                put(MediaStore.Images.Media.MIME_TYPE, mime)
-                put(MediaStore.Images.Media.TITLE, title)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Mosaic")
-                    put(MediaStore.Images.Media.IS_PENDING, 1)
-                }
-            }
-            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
-            created = uri
-            val stream = resolver.openOutputStream(uri)
-            if (stream == null) {
-                resolver.delete(uri, null, null)
-                return null
-            }
-            stream.use(write)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                values.clear()
-                values.put(MediaStore.Images.Media.IS_PENDING, 0)
-                resolver.update(uri, values, null, null)
-            }
-            uri
-        } catch (_: Exception) {
-            created?.let { runCatching { resolver.delete(it, null, null) } }
-            null
-        }
-    }
-
-    private fun mimeFor(file: File): String = when (file.extension.lowercase()) {
-        "jpg", "jpeg" -> "image/jpeg"
-        "webp" -> "image/webp"
-        else -> "image/png"
     }
 
     private fun MosaicProject.toEntity() = ProjectEntity(

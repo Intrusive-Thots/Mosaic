@@ -47,10 +47,11 @@ fun readCollageSession(input: InputStream): CollageSession? = try {
 
 private fun readSession(data: DataInputStream): CollageSession {
     require(data.readInt() == MAGIC)
-    require(data.readInt() == VERSION)
-    val current = readPlan(data)
-    val undo = readPlans(data)
-    val redo = readPlans(data)
+    val version = data.readInt()
+    require(version == 1 || version == VERSION)
+    val current = readPlan(data, version)
+    val undo = readPlans(data, version)
+    val redo = readPlans(data, version)
     val targetUri = readText(data)
     val uriCount = data.readInt()
     require(uriCount in 0..10_000)
@@ -73,10 +74,10 @@ private fun writePlans(data: DataOutputStream, plans: List<MosaicPlan>) {
     kept.forEach { writePlan(data, it) }
 }
 
-private fun readPlans(data: DataInputStream): List<MosaicPlan> {
+private fun readPlans(data: DataInputStream, version: Int): List<MosaicPlan> {
     val count = data.readInt()
     require(count in 0..PlanHistory.DEFAULT_LIMIT)
-    return List(count) { readPlan(data) }
+    return List(count) { readPlan(data, version) }
 }
 
 private fun writePlan(data: DataOutputStream, plan: MosaicPlan) {
@@ -103,11 +104,15 @@ private fun writePlan(data: DataOutputStream, plan: MosaicPlan) {
         data.writeFloat(placement.targetA)
         data.writeFloat(placement.targetB)
         data.writeByte(if (placement.pinned) 1 else 0)
+        data.writeFloat(placement.cropU)
+        data.writeFloat(placement.cropV)
+        data.writeFloat(placement.cropSpan)
+        writeMask(data, placement.mask)
     }
     data.writeFloat(plan.coverage)
 }
 
-private fun readPlan(data: DataInputStream): MosaicPlan {
+private fun readPlan(data: DataInputStream, version: Int): MosaicPlan {
     val columns = data.readInt()
     val rows = data.readInt()
     require(columns in 1..200 && rows in 1..200)
@@ -130,21 +135,59 @@ private fun readPlan(data: DataInputStream): MosaicPlan {
         anchors = readInts(data),
         spanX = readBytes(data),
         spanY = readBytes(data),
-        placements = List(readPlacementCount(data)) {
-            CutoutPlacement(
-                tileIndex = data.readInt(),
-                x = data.readFloat(),
-                y = data.readFloat(),
-                angleDegrees = data.readFloat(),
-                scale = data.readFloat(),
-                targetL = data.readFloat(),
-                targetA = data.readFloat(),
-                targetB = data.readFloat(),
-                pinned = data.readByte().toInt() != 0
-            )
-        },
+        placements = List(readPlacementCount(data)) { readPlacement(data, version) },
         coverage = data.readFloat()
     )
+}
+
+private fun readPlacement(data: DataInputStream, version: Int): CutoutPlacement {
+    val tileIndex = data.readInt()
+    val x = data.readFloat()
+    val y = data.readFloat()
+    val angle = data.readFloat()
+    val scale = data.readFloat()
+    val targetL = data.readFloat()
+    val targetA = data.readFloat()
+    val targetB = data.readFloat()
+    val pinned = data.readByte().toInt() != 0
+    if (version < VERSION) {
+        return CutoutPlacement(tileIndex, x, y, angle, scale, targetL, targetA, targetB, pinned)
+    }
+    val cropU = data.readFloat()
+    val cropV = data.readFloat()
+    val cropSpan = data.readFloat()
+    return CutoutPlacement(
+        tileIndex, x, y, angle, scale, targetL, targetA, targetB, pinned, readMask(data), cropU, cropV, cropSpan
+    )
+}
+
+private fun writeMask(data: DataOutputStream, mask: PieceMask?) {
+    if (mask == null) {
+        data.writeByte(0)
+        return
+    }
+    data.writeByte(1)
+    data.writeFloat(mask.left)
+    data.writeFloat(mask.top)
+    data.writeFloat(mask.right)
+    data.writeFloat(mask.bottom)
+    data.writeInt(mask.width)
+    data.writeInt(mask.height)
+    data.write(mask.alpha)
+}
+
+private fun readMask(data: DataInputStream): PieceMask? {
+    if (data.readByte().toInt() == 0) return null
+    val left = data.readFloat()
+    val top = data.readFloat()
+    val right = data.readFloat()
+    val bottom = data.readFloat()
+    val width = data.readInt()
+    val height = data.readInt()
+    require(width in 1..PieceMask.MAX_EDGE && height in 1..PieceMask.MAX_EDGE)
+    val alpha = ByteArray(width * height)
+    data.readFully(alpha)
+    return PieceMask(left, top, right, bottom, width, height, alpha)
 }
 
 private fun readPlacementCount(data: DataInputStream): Int {
@@ -192,6 +235,6 @@ private fun readText(data: DataInputStream): String {
 }
 
 private const val MAGIC = 0x4D504C4E
-private const val VERSION = 1
+private const val VERSION = 2
 private const val MAX_CELLS = 200 * 200
 private const val MAX_TEXT = 1_000_000

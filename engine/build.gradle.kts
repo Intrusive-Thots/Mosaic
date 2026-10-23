@@ -35,14 +35,49 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    filter {
+        excludeTestsMatching("com.intrusivethots.mosaic.engine.CollageMemoryTest")
+    }
+}
+
+tasks.register<Test>("collageMemory") {
+    group = "verification"
+    description = "Cutout collage of a 12 MP target and 150 sources under a 384 MB heap."
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform()
+    filter {
+        includeTestsMatching("com.intrusivethots.mosaic.engine.CollageMemoryTest")
+    }
+    maxHeapSize = "384m"
+    testLogging {
+        showStandardStreams = true
+        events("passed", "failed", "skipped")
+    }
 }
 
 tasks.register<JavaExec>("showcase") {
     group = "verification"
-    description = "Rebuild the Team 7 docs images from showcase-sources/"
+    description = "Rebuild showcase docs images. Pass -PshowcaseTheme=naruto, rick, tmnt, koth, or pokemon."
     classpath = sourceSets["test"].runtimeClasspath
     mainClass.set("com.intrusivethots.mosaic.engine.showcase.ShowcaseMainKt")
     workingDir = rootProject.projectDir
+    val theme = (project.findProperty("showcaseTheme") as String?) ?: "naruto"
+    val probeDir = project.findProperty("showcaseDir") as String?
+    args(if (probeDir == null) listOf(theme) else listOf(theme, probeDir))
+    dependsOn(tasks.named("testClasses"))
+}
+
+tasks.register<JavaExec>("tune") {
+    group = "verification"
+    description = "Score cutout collage readability. Args via -PtuneEdge -PtunePieces -PtuneTheme."
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.intrusivethots.mosaic.engine.showcase.TuneMainKt")
+    workingDir = rootProject.projectDir
+    val edge = (project.findProperty("tuneEdge") as String?) ?: "560"
+    val pieces = (project.findProperty("tunePieces") as String?) ?: "640"
+    val theme = (project.findProperty("tuneTheme") as String?) ?: "all"
+    args(edge, pieces, theme)
     dependsOn(tasks.named("testClasses"))
 }
 

@@ -2,121 +2,92 @@ package com.intrusivethots.mosaic.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.intrusivethots.mosaic.engine.config.CollageBackground
 import com.intrusivethots.mosaic.engine.config.CollageSettings
-import com.intrusivethots.mosaic.engine.config.MosaicConfig
-import com.intrusivethots.mosaic.engine.config.MosaicKind
-import com.intrusivethots.mosaic.ui.theme.AccentAmber
-import com.intrusivethots.mosaic.ui.theme.TextSecondary
+import com.intrusivethots.mosaic.ui.design.ChoiceGroup
+import com.intrusivethots.mosaic.ui.design.GroupLabel
+import com.intrusivethots.mosaic.ui.design.HintText
+import com.intrusivethots.mosaic.ui.design.SettingSlider
+import com.intrusivethots.mosaic.ui.design.SettingSwitch
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalLayoutApi::class)
+/** Freeform cutout collage settings. Only shown when the output uses a collage. */
 @Composable
-fun CollageControls(
-    config: MosaicConfig,
-    onKind: (MosaicKind) -> Unit,
-    onCollage: (CollageSettings) -> Unit
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Mosaic mode", fontSize = 13.sp, color = TextSecondary)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MosaicKind.entries.forEach { kind ->
-                FilterChip(
-                    selected = config.mosaicKind == kind,
-                    onClick = { onKind(kind) },
-                    label = { Text(kind.label, fontSize = 12.sp) }
-                )
-            }
-        }
-        if (config.mosaicKind == MosaicKind.COLLAGE) {
-            CollageSliders(config.collage, onCollage)
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun CollageSliders(settings: CollageSettings, onCollage: (CollageSettings) -> Unit) {
-        Text(
-            "Large pieces land first, then smaller ones on edges and features. " +
-                "Draft through Maximum set the budget, scale, and adjustment effort. " +
-                "The background is flat unless you choose the target photo.",
-            fontSize = 12.sp,
-            color = TextSecondary
+fun CollageControls(settings: CollageSettings, onCollage: (CollageSettings) -> Unit) {
+    Column(Modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        HintText("Large pieces land first, then smaller ones fill edges and features.")
+        SettingSlider(
+            label = "Pieces",
+            valueText = "${settings.pieceCount}",
+            value = settings.pieceCount.toFloat(),
+            range = 8f..4000f,
+            onChange = { onCollage(settings.copy(pieceCount = it.roundToInt())) },
+            description = PIECES_HELP
         )
-    LabeledSlider("Pieces: ${settings.pieceCount}", settings.pieceCount.toFloat(), 8f, 4000f, AccentAmber) {
-        onCollage(settings.copy(pieceCount = it.roundToInt()))
-    }
-    LabeledSlider("Smallest scale: ${(settings.minScale * 100).roundToInt()}%", settings.minScale, 0.015f, 0.4f, AccentAmber) {
-        onCollage(settings.copy(minScale = it))
-    }
-    LabeledSlider("Largest scale: ${(settings.maxScale * 100).roundToInt()}%", settings.maxScale, 0.12f, 0.7f, AccentAmber) {
-        onCollage(settings.copy(maxScale = it.coerceAtLeast(settings.minScale)))
-    }
-    LabeledSlider("Rotation: ±${settings.rotationRangeDegrees.roundToInt()}°", settings.rotationRangeDegrees, 0f, 180f, AccentAmber) {
-        onCollage(settings.copy(rotationRangeDegrees = it))
-    }
-    LabeledSlider("Overlap: ${(settings.overlap * 100).roundToInt()}%", settings.overlap, 0f, 1f, AccentAmber) {
-        onCollage(settings.copy(overlap = it))
-    }
-    Text("Background under the gaps", fontSize = 12.sp, color = TextSecondary)
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        CollageBackground.entries.forEach { background ->
-            FilterChip(
-                selected = settings.background == background,
-                onClick = { onCollage(settings.copy(background = background)) },
-                label = { Text(background.label, fontSize = 12.sp) }
-            )
-        }
-    }
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Text("Also use full photos", fontSize = 13.sp, color = TextSecondary)
-        Switch(
+        GroupLabel("Piece size")
+        SettingSlider(
+            label = "Smallest piece",
+            valueText = "${(settings.minScale * 100).roundToInt()}%",
+            value = settings.minScale,
+            range = 0.015f..0.4f,
+            onChange = { onCollage(settings.copy(minScale = it.coerceAtMost(settings.maxScale))) },
+            description = SMALLEST_PIECE_HELP
+        )
+        SettingSlider(
+            label = "Largest piece",
+            valueText = "${(settings.maxScale * 100).roundToInt()}%",
+            value = settings.maxScale,
+            range = 0.12f..0.7f,
+            onChange = { onCollage(settings.copy(maxScale = it.coerceAtLeast(settings.minScale))) },
+            description = LARGEST_PIECE_HELP
+        )
+        SettingSlider(
+            label = "Minimum piece",
+            valueText = "${(settings.minPiece * 100).roundToInt()}%",
+            value = settings.minPiece,
+            range = CollageSettings.MIN_PIECE_LOW..CollageSettings.MIN_PIECE_HIGH,
+            onChange = { onCollage(settings.copy(minPiece = it)) },
+            description = MINIMUM_PIECE_HELP
+        )
+        SettingSlider(
+            label = "Rotation range",
+            valueText = "±${settings.rotationRangeDegrees.roundToInt()}°",
+            value = settings.rotationRangeDegrees,
+            range = 0f..180f,
+            onChange = { onCollage(settings.copy(rotationRangeDegrees = it)) },
+            description = ROTATION_RANGE_HELP
+        )
+        SettingSlider(
+            label = "Overlap",
+            valueText = "${(settings.overlap * 100).roundToInt()}%",
+            value = settings.overlap,
+            range = 0f..1f,
+            onChange = { onCollage(settings.copy(overlap = it)) },
+            description = OVERLAP_HELP
+        )
+        GroupLabel("Background and sources")
+        ChoiceGroup(
+            title = "Background under the gaps",
+            options = CollageBackground.entries,
+            selected = settings.background,
+            label = { it.label },
+            onSelect = { onCollage(settings.copy(background = it)) },
+            description = backgroundHelp(settings.background)
+        )
+        SettingSwitch(
+            title = "Also use full photos",
             checked = settings.includeSourcePhotos,
-            onCheckedChange = { onCollage(settings.copy(includeSourcePhotos = it)) },
-            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AccentAmber)
+            onChange = { onCollage(settings.copy(includeSourcePhotos = it)) },
+            description = FULL_PHOTOS_HELP
         )
-    }
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Text("Separate pieces", fontSize = 13.sp, color = TextSecondary)
-        Switch(
+        SettingSwitch(
+            title = "Separate pieces",
             checked = settings.separatePieces,
-            onCheckedChange = { onCollage(settings.copy(separatePieces = it)) },
-            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AccentAmber)
+            onChange = { onCollage(settings.copy(separatePieces = it)) },
+            description = SEPARATE_PIECES_HELP
         )
     }
-}
-
-@Composable
-private fun LabeledSlider(
-    label: String,
-    value: Float,
-    start: Float,
-    end: Float,
-    color: Color,
-    onChange: (Float) -> Unit
-) {
-    Text(label, fontSize = 12.sp, color = TextSecondary)
-    Slider(
-        value = value.coerceIn(start, end),
-        onValueChange = onChange,
-        valueRange = start..end,
-        colors = SliderDefaults.colors(thumbColor = color, activeTrackColor = color)
-    )
 }
