@@ -38,7 +38,7 @@ class LoaderRobustnessTest {
     }
 
     @Test
-    fun oneUnreadablePhotoIsSkippedNotFatal() = runBlocking {
+    fun oneUnreadablePhotoIsSkippedNotFatal(): Unit = runBlocking {
         val good = writePng("good.png")
         val bad = File(context.cacheDir, "bad.jpg").apply { writeBytes(ByteArray(512) { 7 }) }
         val loaded = loader().load(snapshot(listOf(good, bad)), ArrayList()) { _, _ -> }
@@ -49,7 +49,7 @@ class LoaderRobustnessTest {
     }
 
     @Test
-    fun cancellingStopsTheLoadPartWay() = runBlocking {
+    fun cancellingStopsTheLoadPartWay(): Unit = runBlocking {
         val files = (0 until 6).map { writePng("photo-$it.png") }
         val job = Job()
         var calls = 0
