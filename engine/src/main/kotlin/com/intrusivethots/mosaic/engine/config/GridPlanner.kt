@@ -132,7 +132,8 @@ fun planCollageOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig,
             validated.customOutputHeight,
             validated.lockOutputAspect
         )
-        return OutputLayout(1, 1, sized.first, sized.second, false)
+        val (customWidth, customHeight) = fitPixelCap(sized.first, sized.second, MAX_OUTPUT_PIXELS)
+        return OutputLayout(1, 1, customWidth, customHeight, false)
     }
     if (preview) {
         val readable = (READABLE_PIECE_PX / validated.collage.minPiece).toInt()
@@ -152,14 +153,30 @@ fun planCollageOutput(targetWidth: Int, targetHeight: Int, config: MosaicConfig,
         width = (width * scale).roundToInt().coerceAtLeast(1)
         height = (height * scale).roundToInt().coerceAtLeast(1)
     }
-    val pixels = width.toLong() * height.toLong()
-    if (pixels > MAX_OUTPUT_PIXELS) {
-        val scale = kotlin.math.sqrt(MAX_OUTPUT_PIXELS.toDouble() / pixels.toDouble())
-        width = (width * scale).roundToInt().coerceAtLeast(1)
-        height = (height * scale).roundToInt().coerceAtLeast(1)
-    }
-    return OutputLayout(1, 1, width, height, false)
+    val (cappedWidth, cappedHeight) = fitPixelCap(width, height, MAX_OUTPUT_PIXELS)
+    return OutputLayout(1, 1, cappedWidth, cappedHeight, false)
 }
+
+/**
+ * Shrinks [width]×[height] uniformly, rounding down, until it holds at most [maxPixels].
+ * Rounding to nearest could land one row or column over the cap, which then failed the build.
+ */
+fun fitPixelCap(width: Int, height: Int, maxPixels: Long): Pair<Int, Int> {
+    val w = width.coerceAtLeast(1)
+    val h = height.coerceAtLeast(1)
+    if (w.toLong() * h.toLong() <= maxPixels) return w to h
+    var scale = kotlin.math.sqrt(maxPixels.toDouble() / (w.toLong() * h.toLong()).toDouble())
+    var outW = (w * scale).toInt().coerceAtLeast(1)
+    var outH = (h * scale).toInt().coerceAtLeast(1)
+    while (outW.toLong() * outH.toLong() > maxPixels && (outW > 1 || outH > 1)) {
+        scale *= PIXEL_CAP_STEP
+        outW = (w * scale).toInt().coerceAtLeast(1)
+        outH = (h * scale).toInt().coerceAtLeast(1)
+    }
+    return outW to outH
+}
+
+private const val PIXEL_CAP_STEP = 0.999
 
 /** Final collage long edge for each output preset. Preview and custom sizes do not use this. */
 fun collageLongEdge(mode: OutputMode): Int = when (mode) {

@@ -238,11 +238,57 @@ private fun cutPixel(
     cover = coverWithSource(cover, sampled)
     if (cover < 12) return 0
     val basePx = sourceColor(base, descriptor, frame, mask, nx, ny, outputWidth, outputHeight, turnCos, turnSin)
-    val painted = harmonize(
+    val graded = harmonize(
         sampled, basePx, field, tone, config, x, y, outputWidth, outputHeight, lab, low, gradeScale
     )
+    val painted = rimBlend(graded, field, mask, nx, ny, x, y, outputWidth, outputHeight)
     return (painted and 0x00FFFFFF) or (cover shl 24)
 }
+
+/**
+ * Mild rim harmonization (a cheap stand-in for Poisson blending, Pérez 2003): within
+ * [RIM_BLEND_PX] output pixels of the cut edge, mix a capped share of the local target color
+ * into the piece so its rim does not read as a pale seam. The interior stays untouched.
+ */
+private fun rimBlend(
+    color: Int,
+    field: PixelImage?,
+    mask: PieceMask,
+    nx: Float,
+    ny: Float,
+    x: Int,
+    y: Int,
+    outputWidth: Int,
+    outputHeight: Int
+): Int {
+    val strength = RimTuning.strength
+    if (strength <= 0f || field == null) return color
+    val dx = RIM_BLEND_PX / outputWidth.toFloat()
+    val dy = RIM_BLEND_PX / outputHeight.toFloat()
+    val rim = maskCoverage(mask, nx + dx, ny) < 128 || maskCoverage(mask, nx - dx, ny) < 128 ||
+        maskCoverage(mask, nx, ny + dy) < 128 || maskCoverage(mask, nx, ny - dy) < 128
+    if (!rim) return color
+    val fx = (x + 0.5f) * field.width / outputWidth - 0.5f
+    val fy = (y + 0.5f) * field.height / outputHeight - 0.5f
+    val local = field.sampleBilinear(fx, fy)
+    return mixRgb(color, local, strength)
+}
+
+internal fun mixRgb(a: Int, b: Int, t: Float): Int {
+    val r = ((a shr 16 and 255) * (1f - t) + (b shr 16 and 255) * t).roundToInt()
+    val g = ((a shr 8 and 255) * (1f - t) + (b shr 8 and 255) * t).roundToInt()
+    val bl = ((a and 255) * (1f - t) + (b and 255) * t).roundToInt()
+    return (a and -0x1000000) or (r shl 16) or (g shl 8) or bl
+}
+
+/** Rim blend strength. A system property lets the tuning harness A/B it. */
+internal object RimTuning {
+    val strength: Float = (System.getProperty("mosaic.rimBlend")?.toFloatOrNull() ?: RIM_BLEND_DEFAULT).coerceIn(0f, RIM_BLEND_CAP)
+}
+
+private const val RIM_BLEND_PX = 2f
+private const val RIM_BLEND_DEFAULT = 0.2f
+internal const val RIM_BLEND_CAP = 0.35f
 
 private fun besideMask(mask: PieceMask, nx: Float, ny: Float, outputWidth: Int, outputHeight: Int): Boolean {
     val dx = 1f / outputWidth.toFloat()

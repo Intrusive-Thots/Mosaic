@@ -75,7 +75,7 @@ import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.roundToInt
 
-class MainViewModel(application: Application) : AndroidViewModel(application) {
+class MainViewModel(application: Application) : AndroidViewModel(application), ConfigActions {
     private val repository = ProjectRepository(application)
     private val heapBudgetBytes = phoneHeapBytes(application)
     private val descriptorCache = FileDescriptorCache(File(application.filesDir, "descriptor-cache.bin"))
@@ -294,64 +294,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         extractJob?.cancel()
     }
 
-    fun applyQualityPreset(preset: QualityPreset) {
-        updateConfig { preset.applyTo(it) }
-    }
-
-    fun updateAspectRatio(preset: AspectRatioPreset) = updateConfig { it.copy(aspectRatio = preset) }
-
-    fun updateGridColumns(columns: Int) = updateConfig {
-        it.copy(gridColumns = columns.coerceIn(8, 120), qualityPreset = QualityPreset.CUSTOM)
-    }
-
-    fun updateGridRows(rows: Int) = updateConfig {
-        it.copy(gridRows = rows.coerceIn(8, 120), qualityPreset = QualityPreset.CUSTOM)
-    }
-
-    fun toggleLinkAspect(link: Boolean) = updateConfig { it.copy(linkAspectToGrid = link, qualityPreset = QualityPreset.CUSTOM) }
-
-    fun updateMosaicStyle(style: MosaicStyle) = updateConfig { it.copy(mosaicStyle = style) }
-
-    fun updateColorBlend(weight: Float) = updateConfig {
-        it.copy(colorMatchWeight = weight.coerceIn(0f, 1f), qualityPreset = QualityPreset.CUSTOM)
-    }
-
-    fun updateRenderMode(mode: RenderMode) = updateConfig { it.copy(renderMode = mode, qualityPreset = QualityPreset.CUSTOM) }
-
-    fun updateOutputMode(mode: OutputMode) = updateConfig { it.copy(outputMode = mode, qualityPreset = QualityPreset.CUSTOM) }
-
-    fun updateTileFit(fit: TileFit) = updateConfig { it.copy(tileFit = fit) }
-
-    fun editConfig(transform: (MosaicConfig) -> MosaicConfig) = updateConfig(transform)
-
-    fun updateCellAspect(aspect: CellAspect) = updateConfig {
-        it.copy(
-            cellAspect = aspect,
-            linkAspectToGrid = if (aspect == CellAspect.MATCH_GRID) it.linkAspectToGrid else true,
-            qualityPreset = QualityPreset.CUSTOM
-        )
-    }
-
-    fun updateLayoutMode(mode: LayoutMode) = updateConfig { it.copy(layoutMode = mode, qualityPreset = QualityPreset.CUSTOM) }
-
-    fun updateMosaicKind(kind: MosaicKind) = updateConfig { current ->
-        val stack = when {
-            kind == MosaicKind.GRID -> com.intrusivethots.mosaic.engine.config.HybridStack.GRID
-            current.collage.stack == com.intrusivethots.mosaic.engine.config.HybridStack.GRID ->
-                com.intrusivethots.mosaic.engine.config.HybridStack.CUTOUTS
-            else -> current.collage.stack
-        }
-        current.copy(mosaicKind = kind, collage = current.collage.copy(stack = stack))
-    }
-
-    fun updateCollage(settings: CollageSettings) = updateConfig { it.copy(collage = settings) }
-
-    fun applyCollageStyle(style: com.intrusivethots.mosaic.engine.config.CollageStyle) = updateConfig { style.restyle(it) }
-
-    fun applyStack(stack: com.intrusivethots.mosaic.engine.config.HybridStack) = updateConfig { current ->
-        val kind = if (stack == com.intrusivethots.mosaic.engine.config.HybridStack.GRID) MosaicKind.GRID else MosaicKind.COLLAGE
-        current.copy(mosaicKind = kind, collage = current.collage.copy(stack = stack))
-    }
+    override fun editConfig(transform: (MosaicConfig) -> MosaicConfig) = updateConfig(transform)
 
     fun onCollageEdit(edit: com.intrusivethots.mosaic.ui.state.CollageEdit) {
         when (edit) {
@@ -434,12 +377,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         persistStamps()
     }
 
-    fun updateRotationMode(mode: RotationMode) = updateConfig { it.copy(rotationMode = mode, qualityPreset = QualityPreset.CUSTOM) }
-
-    fun updateTargetScale(scale: Float) = updateConfig {
-        it.copy(targetScale = scale.coerceIn(0.25f, 1f), qualityPreset = QualityPreset.CUSTOM)
-    }
-
     fun updateCustomOutput(width: Int, height: Int, lock: Boolean) = updateConfig { current ->
         val bitmap = _state.value.targetBitmap
         if (!lock || bitmap == null || bitmap.width <= 0 || bitmap.height <= 0) {
@@ -462,16 +399,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             qualityPreset = QualityPreset.CUSTOM
         )
     }
-
-    fun updateRepetition(allow: Boolean, distance: Int) = updateConfig {
-        it.copy(allowTileRepetition = allow, maxRepetitionDistance = distance.coerceIn(0, 12), qualityPreset = QualityPreset.CUSTOM)
-    }
-
-    fun updateSeed(seed: Int) = updateConfig { it.copy(randomSeed = seed) }
-
-    fun toggleAiSegmentation(enable: Boolean) = updateConfig { it.copy(extractSubjectsWithAi = enable) }
-
-    fun updateSegmentation(settings: SegmentationSettings) = updateConfig { it.copy(segmentation = settings) }
 
     fun saveApiKey(key: String) {
         val saved = repository.setApiKey(key)

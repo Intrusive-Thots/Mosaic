@@ -67,7 +67,8 @@ fun capOutputLayout(layout: OutputLayout, maxLongEdge: Int): OutputLayout {
     val longEdge = maxOf(layout.width, layout.height)
     if (maxLongEdge <= 0 || longEdge <= maxLongEdge) return layout
     val scale = maxLongEdge.toFloat() / longEdge.toFloat()
-    val cellWidth = (layout.cellWidth * scale).roundToInt().coerceAtLeast(1)
-    val cellHeight = (layout.cellHeight * scale).roundToInt().coerceAtLeast(1)
+    // Round down so the capped long edge never lands above the cap.
+    val cellWidth = (layout.cellWidth * scale).toInt().coerceAtLeast(1)
+    val cellHeight = (layout.cellHeight * scale).toInt().coerceAtLeast(1)
     return layout.copy(cellWidth = cellWidth, cellHeight = cellHeight)
 }

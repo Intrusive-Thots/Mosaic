@@ -8,6 +8,7 @@ import com.intrusivethots.mosaic.engine.index.ProbeCounter
 import com.intrusivethots.mosaic.engine.index.TileIndex
 import com.intrusivethots.mosaic.engine.index.TopK
 import com.intrusivethots.mosaic.engine.tile.TileDescriptor
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -41,20 +42,20 @@ internal class ShapeFit(
     private val faces: List<List<FaceBox>> = emptyList(),
     private val requireFaces: Boolean = true,
     private val stickers: BooleanArray = BooleanArray(0)
-) {
+) : Placer {
     private val handful = HandfulPenalty()
     private val reserved = ArrayList<FaceBox>()
-    private val contact = SourceContact()
+    private val contact: ContactIndex = SourceContact(outputWidth, outputHeight)
     private val outside = ArrayList<CutoutPlacement>()
     var comparisons: Long = 0
 
-    fun choose(
+    override fun choose(
         cut: ShapeCut,
         ordinal: Int,
-        avoid: Int = -1,
-        commit: Boolean = true,
-        taken: Set<Int> = emptySet(),
-        stackFaces: Boolean = false
+        avoid: Int,
+        commit: Boolean,
+        taken: Set<Int>,
+        stackFaces: Boolean
     ): CutoutPlacement? {
         val placement = select(cut, ordinal, avoid, taken, stackFaces)
             ?: if (taken.isEmpty()) null else select(cut, ordinal, avoid, emptySet(), stackFaces)
@@ -248,7 +249,7 @@ internal class ShapeFit(
         return tracker.blocked(tile, 0, 0)
     }
 
-    fun keep(placement: CutoutPlacement) {
+    override fun keep(placement: CutoutPlacement) {
         val column = (placement.x * GRID).toInt().coerceIn(0, GRID - 1)
         val row = (placement.y * GRID).toInt().coerceIn(0, GRID - 1)
         tracker.record(placement.tileIndex, column, row)
@@ -257,13 +258,13 @@ internal class ShapeFit(
         hold(placement)
     }
 
-    fun release(placement: CutoutPlacement) {
+    override fun release(placement: CutoutPlacement) {
         contact.remove(placement)
         forgetFace(placement)
     }
 
     /** Puts a piece back after a swap that was not an improvement. */
-    fun restore(placement: CutoutPlacement) {
+    override fun restore(placement: CutoutPlacement) {
         contact.add(placement)
         hold(placement)
     }
@@ -279,10 +280,10 @@ internal class ShapeFit(
         contact.rebuild(outside + placements)
     }
 
-    fun clashes(tile: Int, mask: PieceMask?): Boolean = contact.clashes(tile, mask)
+    override fun clashes(tile: Int, mask: PieceMask?): Boolean = contact.clashes(tile, mask)
 
     /** Marks a piece that is already on the plan. Does not count another use. */
-    fun occupy(placement: CutoutPlacement) {
+    override fun occupy(placement: CutoutPlacement) {
         contact.add(placement)
     }
 
@@ -330,7 +331,7 @@ internal class ShapeFit(
     }
 }
 
-private class Scored(val score: Float, val angle: Float, val u: Float, val v: Float)
+internal class Scored(val score: Float, val angle: Float, val u: Float, val v: Float)
 
 private class Seated(val u: Float, val v: Float, val face: FaceBox, val drift: Float)
 
@@ -357,7 +358,8 @@ private fun scoreTile(
         val searched = searchAnchors(swatch, cut, angles, span, penalty, solve, shape)
         refineCrop(swatch, cut, searched, span, penalty, solve, shape)
     }
-    return phaseSlide(swatch, cut, coarse, span, penalty, solve, shape)
+    val slid = phaseSlide(swatch, cut, coarse, span, penalty, solve, shape)
+    return if (PoseTuning.hillClimb) hillClimb(swatch, cut, slid, span, penalty, solve, shape) else slid
 }
 
 private fun searchAnchors(
@@ -376,11 +378,11 @@ private fun searchAnchors(
         val turnSin = sin(radians).toFloat()
         for (anchorV in ANCHORS) {
             for (anchorU in ANCHORS) {
-                val score = anchorScore(swatch, cut, turnCos, turnSin, anchorU, anchorV, span, penalty, solve, shape)
+                val score = AnchorObjective.score(swatch, cut, turnCos, turnSin, anchorU, anchorV, span, penalty, solve, shape)
                 best = prefer(best, score, angle, anchorU, anchorV)
             }
         }
-        val face = anchorScore(swatch, cut, turnCos, turnSin, swatch.salientU, swatch.salientV, span, penalty, solve, shape)
+        val face = AnchorObjective.score(swatch, cut, turnCos, turnSin, swatch.salientU, swatch.salientV, span, penalty, solve, shape)
         best = prefer(best, face, angle, swatch.salientU, swatch.salientV)
     }
     return best
@@ -405,7 +407,7 @@ private fun refineCrop(
         for (shiftU in CROP_SHIFTS) {
             val u = best.u + shiftU
             val v = best.v + shiftV
-            val score = anchorScore(swatch, cut, turnCos, turnSin, u, v, span, penalty, solve, shape)
+            val score = AnchorObjective.score(swatch, cut, turnCos, turnSin, u, v, span, penalty, solve, shape)
             if (score < chosen.score) chosen = Scored(score, best.angle, u, v)
         }
     }
@@ -433,7 +435,7 @@ private fun phaseSlide(
     val radians = Math.toRadians(best.angle.toDouble())
     val turnCos = cos(radians).toFloat()
     val turnSin = sin(radians).toFloat()
-    val score = anchorScore(swatch, cut, turnCos, turnSin, u, v, span, penalty, solve, shape)
+    val score = AnchorObjective.score(swatch, cut, turnCos, turnSin, u, v, span, penalty, solve, shape)
     return if (score < best.score) Scored(score, best.angle, u, v) else best
 }
 
@@ -451,7 +453,7 @@ private fun sourcePatch(swatch: TileSwatch, anchorU: Float, anchorV: Float, span
     return patch
 }
 
-private fun anchorScore(
+internal fun anchorScore(
     swatch: TileSwatch,
     cut: ShapeCut,
     turnCos: Float,
@@ -467,7 +469,12 @@ private fun anchorScore(
     if (color == Float.POSITIVE_INFINITY) return color
     val subject = subjectCost(swatch.salientU, swatch.salientV, anchorU, anchorV, span, sourceBusy(swatch))
     val focus = if (coversSalient(swatch, anchorU, anchorV, span)) FOCUS_BONUS else FOCUS_MISS
-    return color + penalty + shape + subject + contentCost(swatch, anchorU, anchorV, span) + focus
+    val outline = if (PoseTuning.edgeWeight > 0f && cut.gridL.size >= PATCH_EDGE * PATCH_EDGE) {
+        PoseTuning.edgeWeight * edgeMisalignment(cut.gridL, sourcePatch(swatch, anchorU, anchorV, span), PATCH_EDGE)
+    } else {
+        0f
+    }
+    return color + penalty + shape + subject + contentCost(swatch, anchorU, anchorV, span) + focus + outline
 }
 
 private fun coversSalient(swatch: TileSwatch, anchorU: Float, anchorV: Float, span: Float): Boolean {

@@ -69,32 +69,7 @@ private fun gridViolations(plan: MosaicPlan): Int {
 
 private fun collageViolations(placements: List<CutoutPlacement>): Int {
     if (placements.size < 2) return 0
-    val grid = SourceContact.CONTACT_GRID
-    val owner = IntArray(grid * grid) { -1 }
-    placements.forEachIndexed { index, piece -> stampPlacement(owner, grid, index, piece) }
-    val seen = HashSet<Long>()
-    var violations = 0
-    for (y in 0 until grid) {
-        for (x in 0 until grid) {
-            val left = owner[y * grid + x]
-            if (left < 0) continue
-            for (ny in (y - 1)..(y + 1)) {
-                if (ny !in 0 until grid) continue
-                for (nx in (x - 1)..(x + 1)) {
-                    if (nx !in 0 until grid) continue
-                    val right = owner[ny * grid + nx]
-                    if (right <= left) continue
-                    if (placements[left].tileIndex != placements[right].tileIndex) continue
-                    val key = (left.toLong() shl 32) or right.toLong()
-                    if (seen.add(key)) violations++
-                }
-            }
-        }
-    }
-    return violations
-}
-
-private fun stampPlacement(owner: IntArray, grid: Int, index: Int, piece: CutoutPlacement) {
-    val mask = piece.mask ?: return
-    rasterizeMask(mask, grid) { cell -> owner[cell] = index }
+    val contact = SourceContact()
+    placements.forEach { contact.add(it) }
+    return contact.touchingPairs()
 }
