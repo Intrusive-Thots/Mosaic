@@ -12,7 +12,7 @@ import com.intrusivethots.mosaic.ui.theme.MosaicTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(androidx.activity.SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT))
         setContent {
             MosaicTheme {
                 val viewModel: MainViewModel = viewModel()

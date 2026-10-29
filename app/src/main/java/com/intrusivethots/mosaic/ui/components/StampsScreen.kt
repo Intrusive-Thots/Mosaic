@@ -99,13 +99,13 @@ fun StampsScreen(
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     if (extracting) {
-                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.Black)
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Extracting subjects...", color = Color.Black)
+                        Text("Extracting subjects...", color = Color.White)
                     } else {
-                        Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.Black)
+                        Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.White)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Add photos", color = Color.Black, fontWeight = FontWeight.Bold)
+                        Text("Add photos", color = Color.White, fontWeight = FontWeight.Bold)
                     }
                 }
                 if (extracting) {
@@ -160,7 +160,7 @@ private fun ColumnScope.CutoutPool(
                 Text("No cutouts yet", color = TextSecondary)
                 Spacer(modifier = Modifier.height(12.dp))
                 Button(onClick = onPick, modifier = Modifier.height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = AccentAmber)) {
-                    Text("Add photos", color = Color.Black)
+                    Text("Add photos", color = Color.White)
                 }
             }
         }

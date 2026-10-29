@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="bg">#0E0F13</color>
-    <color name="icon_bg">#16181D</color>
-    <style name="Theme.Mosaic" parent="android:Theme.Material.NoActionBar">
+    <color name="bg">#F6F8F8</color>
+    <color name="icon_bg">#FFFFFF</color>
+    <style name="Theme.Mosaic" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>

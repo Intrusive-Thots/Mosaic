@@ -105,9 +105,9 @@ fun ProjectLibraryScreen(projects: List<MosaicProject>, onDelete: (String) -> Un
             confirmButton = {
                 Row {
                     Button(onClick = { onExport(project.id) }, colors = ButtonDefaults.buttonColors(containerColor = AccentAmber)) {
-                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Black)
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Download", color = Color.Black)
+                        Text("Download", color = Color.White)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     TextButton(onClick = { selected = null }) { Text("Close", color = AccentPurple) }

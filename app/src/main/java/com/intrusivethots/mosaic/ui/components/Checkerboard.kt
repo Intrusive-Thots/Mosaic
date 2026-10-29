@@ -16,7 +16,7 @@ fun Checkerboard(modifier: Modifier = Modifier) {
         for (y in 0 until rows) {
             for (x in 0 until columns) {
                 drawRect(
-                    color = if ((x + y) % 2 == 0) Color(0xFF3A3A44) else Color(0xFF24242C),
+                    color = if ((x + y) % 2 == 0) Color(0xFFE3E8E8) else Color(0xFFF4F7F7),
                     topLeft = Offset(x * cell, y * cell),
                     size = Size(cell, cell)
                 )

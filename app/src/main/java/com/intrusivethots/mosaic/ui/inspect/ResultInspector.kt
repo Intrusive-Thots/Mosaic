@@ -190,7 +190,7 @@ private fun InspectorControls(
                 modifier = Modifier.fillMaxWidth().height(52.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = AccentAmber),
                 shape = RoundedCornerShape(14.dp)
-            ) { Text("Regenerate region", color = Color.Black) }
+            ) { Text("Regenerate region", color = Color.White) }
         }
         ModeRow(selecting, camera, canUndo, canRedo, actions)
     }

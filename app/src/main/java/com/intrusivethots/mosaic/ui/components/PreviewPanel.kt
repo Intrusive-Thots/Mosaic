@@ -77,9 +77,9 @@ fun PreviewPanel(
                 colors = ButtonDefaults.buttonColors(containerColor = AccentAmber),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.Black)
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.White)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Export to gallery", color = Color.Black, fontWeight = FontWeight.Bold)
+                Text("Export to gallery", color = Color.White, fontWeight = FontWeight.Bold)
             }
         }
     }
